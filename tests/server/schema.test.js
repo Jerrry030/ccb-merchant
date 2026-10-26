@@ -1,0 +1,47 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { DatabaseSync } from 'node:sqlite';
+import { mkdtemp,rm,realpath,cp } from 'node:fs/promises';
+import { join,relative,isAbsolute,basename } from 'node:path';
+import { tmpdir } from 'node:os';
+import { Store } from '../../src/store.js';
+
+test('fresh schema has the current ledger and local API tables, and reopen preserves data',async t=>{
+ const data=await mkdtemp(join(tmpdir(),'ccb-schema-'));
+ t.after(async()=>{const actual=await realpath(data),inside=relative(await realpath(tmpdir()),actual);if(inside.startsWith('..')||isAbsolute(inside)||!basename(actual).startsWith('ccb-schema-'))throw new Error('Unsafe fixture cleanup');await rm(actual,{recursive:true,force:true});});
+ const config={dataDir:data,siteName:'Schema fixture'};let store=new Store(config);
+ assert.equal(store.db.prepare('PRAGMA application_id').get().application_id,1128481357);assert.equal(store.db.prepare('PRAGMA user_version').get().user_version,2);
+ const tables=store.db.prepare("SELECT name FROM sqlite_schema WHERE type='table'").all().map(v=>v.name);
+ for(const name of ['users','ledger','rentals','plans','access_accounts','access_keys','access_grants','access_devices'])assert.ok(tables.includes(name),name);
+ assert.ok(store.db.prepare('PRAGMA table_info(access_keys)').all().some(column=>column.name==='token'));
+ assert.equal(tables.some(n=>/archived|retired|legacy|ledger_v1/.test(n)),false);
+ const user=store.createUser({email:'current@example.test',display_name:'Current',password_hash:'test-hash',role:'admin',status:'active'});
+ store.db.prepare("INSERT INTO settings VALUES('setup_complete','true')").run();const salt=store.db.prepare("SELECT value FROM settings WHERE key='runtime_salt'").get().value;
+ store.db.close();store=new Store(config);assert.equal(store.db.prepare('SELECT id FROM users').get().id,user.id);assert.equal(store.db.prepare("SELECT value FROM settings WHERE key='runtime_salt'").get().value,salt);assert.equal(store.db.prepare("SELECT 1 FROM settings WHERE key='setup_hash'").get(),undefined);store.db.close();
+});
+
+test('an unrelated nonempty SQLite database is refused without mutation',async t=>{
+ const data=await mkdtemp(join(tmpdir(),'ccb-schema-'));
+ t.after(async()=>{const actual=await realpath(data),inside=relative(await realpath(tmpdir()),actual);if(inside.startsWith('..')||isAbsolute(inside)||!basename(actual).startsWith('ccb-schema-'))throw new Error('Unsafe fixture cleanup');await rm(actual,{recursive:true,force:true});});
+ let db=new DatabaseSync(join(data,'merchant.sqlite'));db.exec("CREATE TABLE unrelated(id TEXT);INSERT INTO unrelated VALUES('keep');PRAGMA user_version=99");db.close();
+ assert.throws(()=>new Store({dataDir:data,siteName:'No adoption'}),/schema does not match/);
+ db=new DatabaseSync(join(data,'merchant.sqlite'));assert.equal(db.prepare('SELECT id FROM unrelated').get().id,'keep');assert.equal(db.prepare('PRAGMA user_version').get().user_version,99);assert.equal(db.prepare("SELECT count(*) AS n FROM sqlite_schema WHERE type='table'").get().n,1);db.close();
+});
+
+test('offline whole-directory backup restores identity, ledger and runtime pseudonym salt together',async t=>{
+ const root=await mkdtemp(join(tmpdir(),'ccb-migration-backup-'));
+ t.after(async()=>{const actual=await realpath(root),inside=relative(await realpath(tmpdir()),actual);if(inside.startsWith('..')||isAbsolute(inside)||!basename(actual).startsWith('ccb-migration-'))throw new Error('Unsafe fixture cleanup');await rm(actual,{recursive:true,force:true});});
+ const original=join(root,'original'),backup=join(root,'backup'),restored=join(root,'restored');
+ let store=new Store({dataDir:original,siteName:'Backup fixture'});
+ store.db.prepare('INSERT INTO settings VALUES(?,?)').run('setup_complete','true');
+ const user=store.createUser({email:'backup@example.test',display_name:'Backup',password_hash:'test-hash',role:'admin',status:'active'});
+ const salt=store.db.prepare("SELECT value FROM settings WHERE key='runtime_salt'").get().value;
+ store.db.prepare("INSERT INTO orders(id,user_id,amount_minor,currency,status,created_at,updated_at) VALUES('backup-order',?,100,'CNY','paid','2026-10-26','2026-10-26')").run(user.id);
+ store.db.prepare("INSERT INTO ledger(id,user_id,order_id,amount_minor,currency,kind,reference,created_at) VALUES('backup-ledger',?,'backup-order',100,'CNY','stripe_credit','cs_test_backup','2026-10-26')").run(user.id);
+ store.db.close(); // Never copy a live WAL database.
+ await cp(original,backup,{recursive:true,errorOnExist:true,force:false});await cp(backup,restored,{recursive:true,errorOnExist:true,force:false});
+ store=new Store({dataDir:restored,siteName:'Restored fixture'});
+ assert.equal(store.db.prepare('SELECT id FROM users').get().id,user.id);assert.equal(store.wallet(user.id).balance_minor,100);
+ assert.equal(store.db.prepare("SELECT value FROM settings WHERE key='runtime_salt'").get().value,salt);
+ store.db.close();
+});

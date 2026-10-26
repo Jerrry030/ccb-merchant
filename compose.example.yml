@@ -1,0 +1,41 @@
+# Deployment example only; not started or production-validated by the implementation.
+services:
+  merchant:
+    build: .
+    restart: unless-stopped
+    init: true
+    ports:
+      - "127.0.0.1:8787:8787"
+    environment:
+      HOST: 0.0.0.0
+      PORT: 8787
+      ALLOW_REMOTE: "true"
+      PUBLIC_ORIGIN: ${PUBLIC_ORIGIN:?Set an explicit HTTPS public origin}
+      DATA_DIR: /app/data
+      SITE_NAME: ${SITE_NAME:-CCB Merchant}
+      UPSTREAM_URL: ${UPSTREAM_URL:-}
+      UPSTREAM_API_KEY: ${UPSTREAM_API_KEY:-}
+      UPSTREAM_TIMEOUT_MS: ${UPSTREAM_TIMEOUT_MS:-15000}
+      RUNTIME_TIMEOUT_MS: ${RUNTIME_TIMEOUT_MS:-600000}
+      RUNTIME_BODY_LIMIT: ${RUNTIME_BODY_LIMIT:-33554432}
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_FROM: ${SMTP_FROM:-}
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+      STRIPE_SECRET_KEY: ${STRIPE_SECRET_KEY:-}
+      STRIPE_WEBHOOK_SECRET: ${STRIPE_WEBHOOK_SECRET:-}
+      PAYMENT_MIN_MINOR: ${PAYMENT_MIN_MINOR:-100}
+      PAYMENT_MAX_MINOR: ${PAYMENT_MAX_MINOR:-1000000}
+    volumes:
+      - merchant-data:/app/data
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m
+    stop_grace_period: 20s
+volumes:
+  merchant-data:
