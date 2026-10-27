@@ -50,6 +50,7 @@ CREATE TABLE rentals (
   plan_id TEXT NOT NULL REFERENCES plans(id), plan_revision INTEGER NOT NULL, name TEXT NOT NULL,
   resource_id TEXT NOT NULL, duration_days INTEGER NOT NULL, amount_minor INTEGER NOT NULL CHECK(amount_minor>0),
   currency TEXT NOT NULL CHECK(currency='CNY'), payment_method TEXT NOT NULL CHECK(payment_method IN ('wallet','stripe')),
+  platform TEXT NOT NULL DEFAULT '',
   status TEXT NOT NULL CHECK(status IN ('awaiting_payment','queued','review','fulfilled','refund_pending','refunded','cancelled')),
   customer_id TEXT, grant_id TEXT, expires_at TEXT, attempts INTEGER NOT NULL DEFAULT 0,
   next_attempt_at INTEGER NOT NULL DEFAULT 0, last_error TEXT, revision INTEGER NOT NULL DEFAULT 1,
@@ -123,7 +124,7 @@ CREATE TRIGGER order_rental_immutable BEFORE UPDATE OF rental_id ON orders BEGIN
 
 CREATE TRIGGER rental_no_delete BEFORE DELETE ON rentals BEGIN SELECT RAISE(ABORT,'immutable_rental'); END;
 
-CREATE TRIGGER rental_snapshot_immutable BEFORE UPDATE OF user_id,request_id,plan_id,plan_revision,name,resource_id,duration_days,amount_minor,currency,payment_method ON rentals BEGIN SELECT RAISE(ABORT,'immutable_rental'); END;
+CREATE TRIGGER rental_snapshot_immutable BEFORE UPDATE OF user_id,request_id,plan_id,plan_revision,name,resource_id,duration_days,amount_minor,currency,payment_method,platform ON rentals BEGIN SELECT RAISE(ABORT,'immutable_rental'); END;
 
 PRAGMA application_id=1128481357;
-PRAGMA user_version=2;
+PRAGMA user_version=4;

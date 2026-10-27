@@ -54,7 +54,7 @@ test('shipped UI works with real setup, sessions, customer CRUD and unconfigured
   await page.getByRole('button',{name:'确认初始化',exact:true}).click();
   await page.getByRole('heading',{name:'上游接入',exact:true}).waitFor();
   await page.getByRole('link',{name:'稍后配置，返回工作台',exact:true}).click();
-  await page.getByRole('heading',{name:'工作概览',exact:true}).waitFor();
+  await page.getByRole('heading',{name:'首页',exact:true}).waitFor();
   assert.equal(app.store.db.prepare("SELECT count(*) AS n FROM users WHERE role='admin'").get().n,1);
   assert.equal(await page.getByRole('link',{name:'客户管理',exact:true}).count(),1);
 
@@ -76,9 +76,9 @@ test('shipped UI works with real setup, sessions, customer CRUD and unconfigured
   await page.getByLabel('电子邮箱',{exact:true}).fill('member@example.test');
   await page.getByLabel('密码',{exact:true}).fill('Member-browser test password!');
   await page.getByRole('button',{name:'登录工作台',exact:true}).click();
-  await page.getByRole('heading',{name:'工作概览',exact:true}).waitFor();
+  await page.getByRole('heading',{name:'首页',exact:true}).waitFor();
   assert.equal(await page.getByRole('link',{name:'客户管理',exact:true}).count(),0);
-  await page.getByRole('link',{name:'我的钱包',exact:true}).click();
+  await page.goto(config.publicOrigin+'/wallet');
   await page.getByText('支付服务尚未配置',{exact:true}).waitFor();
   assert.equal(await page.getByRole('button',{name:'在线支付未启用',exact:true}).isDisabled(),true);
   assert.equal(app.store.db.prepare('SELECT count(*) AS n FROM orders').get().n,0);

@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { DatabaseSync } from 'node:sqlite';
-import { mkdtemp,rm,realpath,cp } from 'node:fs/promises';
+import { mkdtemp,rm,realpath,cp,readFile } from 'node:fs/promises';
 import { join,relative,isAbsolute,basename } from 'node:path';
 import { tmpdir } from 'node:os';
 import { Store } from '../../src/store.js';
@@ -10,7 +10,7 @@ test('fresh schema has the current ledger and local API tables, and reopen prese
  const data=await mkdtemp(join(tmpdir(),'ccb-schema-'));
  t.after(async()=>{const actual=await realpath(data),inside=relative(await realpath(tmpdir()),actual);if(inside.startsWith('..')||isAbsolute(inside)||!basename(actual).startsWith('ccb-schema-'))throw new Error('Unsafe fixture cleanup');await rm(actual,{recursive:true,force:true});});
  const config={dataDir:data,siteName:'Schema fixture'};let store=new Store(config);
- assert.equal(store.db.prepare('PRAGMA application_id').get().application_id,1128481357);assert.equal(store.db.prepare('PRAGMA user_version').get().user_version,2);
+ assert.equal(store.db.prepare('PRAGMA application_id').get().application_id,1128481357);assert.equal(store.db.prepare('PRAGMA user_version').get().user_version,4);
  const tables=store.db.prepare("SELECT name FROM sqlite_schema WHERE type='table'").all().map(v=>v.name);
  for(const name of ['users','ledger','rentals','plans','access_accounts','access_keys','access_grants','access_devices'])assert.ok(tables.includes(name),name);
  assert.ok(store.db.prepare('PRAGMA table_info(access_keys)').all().some(column=>column.name==='token'));
@@ -44,4 +44,14 @@ test('offline whole-directory backup restores identity, ledger and runtime pseud
  assert.equal(store.db.prepare('SELECT id FROM users').get().id,user.id);assert.equal(store.wallet(user.id).balance_minor,100);
  assert.equal(store.db.prepare("SELECT value FROM settings WHERE key='runtime_salt'").get().value,salt);
  store.db.close();
+});
+
+
+test('recognized version-2 preview data upgrades additively without changing users or wallet money',async t=>{
+ const data=await mkdtemp(join(tmpdir(),'ccb-schema-'));
+ t.after(async()=>{const actual=await realpath(data),inside=relative(await realpath(tmpdir()),actual);if(inside.startsWith('..')||isAbsolute(inside)||!basename(actual).startsWith('ccb-schema-'))throw new Error('Unsafe fixture cleanup');await rm(actual,{recursive:true,force:true});});
+ const db=new DatabaseSync(join(data,'merchant.sqlite'));
+ let schema=await readFile(new URL('../../src/schema.sql',import.meta.url),'utf8');schema=schema.replace("  platform TEXT NOT NULL DEFAULT '',\n",'').replace(',payment_method,platform ON rentals',',payment_method ON rentals').replace('PRAGMA user_version=4','PRAGMA user_version=2');
+ db.exec(schema);db.prepare("INSERT INTO users(id,email,display_name,password_hash,role,status,created_at) VALUES('kept','kept@example.test','Kept','fixture','admin','active','2026-10-26')").run();db.prepare("INSERT INTO settings VALUES('setup_complete','true')").run();db.prepare("INSERT INTO orders(id,user_id,amount_minor,currency,status,created_at,updated_at) VALUES('payment','kept',100,'CNY','paid','2026-10-26','2026-10-26')").run();db.prepare("INSERT INTO ledger(id,user_id,order_id,amount_minor,currency,kind,reference,created_at) VALUES('entry','kept','payment',100,'CNY','stripe_credit','test','2026-10-26')").run();db.close();
+ const store=new Store({dataDir:data,siteName:'Upgrade fixture'});assert.equal(store.wallet('kept').balance_minor,100);assert.equal(store.db.prepare('SELECT id FROM users').get().id,'kept');assert.equal(store.db.prepare('PRAGMA user_version').get().user_version,4);assert.ok(store.db.prepare('PRAGMA table_info(rentals)').all().some(c=>c.name==='account_lease_id'));store.db.close();
 });

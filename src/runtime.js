@@ -1,4 +1,4 @@
-import { upstreamFetch } from './upstream-network.js';
+import { upstreamFetch,readUpstreamJSON } from './upstream-network.js';
 import { createHmac } from 'node:crypto';
 import { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
@@ -67,7 +67,8 @@ export async function proxyRuntime(req, res, integration, store, url, access) {
     if(boundary.peer){access.authenticate(req,'runtime');if(boundary.selected&&!access.runtimeGrant(access.object('access_grants',boundary.selected.id,boundary.peer.account.id)))throw new HttpError(403,'grant_unavailable','Grant changed before admission.');}
     const upstream = await upstreamFetch(config,`${config.upstreamUrl}${boundary.path}${url.search}`, { method:req.method,headers,body:body?.length?body:undefined,signal:controller.signal,redirect:'error' });
     if (!upstream.ok) {
-      await upstream.body?.cancel();
+      let failure;try{failure=await readUpstreamJSON(upstream);}catch{}
+      if(upstream.status===409&&(failure?.code==='account_device_limit'||failure?.error?.code==='account_device_limit'))throw new HttpError(409,'account_device_limit','每个账号最多绑定 1 台设备，请先在我的设备中撤销旧设备，再连接新设备。');
       const status = [400,401,403,404,409,413,415,429].includes(upstream.status) ? upstream.status : 503;
       throw new HttpError(status,'runtime_rejected','Core rejected the runtime request. It was not retried.');
     }

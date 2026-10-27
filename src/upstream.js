@@ -8,10 +8,13 @@ import { HttpError, fields } from './security.js';
 const S = 'string', N = 'number', B = 'boolean';
 const tokenUsage = { input_tokens:N, output_tokens:N, cache_read_input_tokens:N, cache_creation_input_tokens:N, cache_creation_5m:N, cache_creation_1h:N };
 export const schemas = {
+  heldAccount: {grant_revision:N,customer_expires_at:S,id:S,resource_id:S,platform:S,grant_id:S,customer_id:S,assigned:B,status:S,expires_at:S,revision:N,created_at:S,device_limit:N,details:{id:S,name:S,plan:S,state:S,device_name:S,platform:S,expires_at:S,device_limit:N,surfaces:[S],quota:{status:S,updated_at:S,windows:[{key:S,label:S,used_percent:N,resets_at:S,reset:B}]}}},
+
   merchant: { id:S, slug:S, name:S, status:S, revision:N, created_at:S },
-  resource: { id:S, name:S, status:S, surfaces:[S], expires_at:S, revision:N, available:B },
+  resource: { allocatable:B,id:S, name:S, status:S, kind:S, surfaces:[S], expires_at:S, revision:N, available:B, plans:[{id:S,duration_days:N,amount_minor:N,currency:S,status:S,revision:N}], stock:[{platform:S,label:S,available:N}] },
+  account: { device_limit:N,platform:S,expires_at:S,id:S, name:S, plan:S, state:S, device_name:S, surfaces:[S], quota:{status:S,updated_at:S,windows:[{key:S,label:S,used_percent:N,resets_at:S,reset:B}]} },
   customer: { id:S, external_id:S, display_name:S, status:S, revision:N, created_at:S },
-  grant: { id:S, customer_id:S, resource_id:S, name:S, status:S, surfaces:[S], expires_at:S, revision:N, updated_at:S, pending:B },
+  grant: { account_lease_id:S,id:S, customer_id:S, resource_id:S, name:S, status:S, surfaces:[S], expires_at:S, revision:N, updated_at:S, pending:B },
   device: { id:S, name:S, platform:S, state:S, created_at:S, expires_at:S, last_seen:S, current_grant_id:S, account_name:S },
   preview: { name:S, platform:S, code:S, expires_at:S, renewal:B },
   usage: { requests:N, errors:N, ...tokenUsage, cost_usd:N, unknown_usage:N, average_duration_ms:N, average_first_token_ms:N },
@@ -113,7 +116,9 @@ export class Upstream {
    const headers={Authorization:`Bearer ${config.upstreamKey}`,Accept:'application/json',...(body?{'Content-Type':'application/json'}:{})};
    const response=await upstreamFetch(config,`${config.upstreamUrl}${path}`,{method,headers,body:body?JSON.stringify(body):undefined,signal:combined});
    if(!response.ok){
-    await response.body?.cancel();
+    const safeErrors={account_device_limit:'每个账号最多绑定 1 台设备，请先在我的设备中撤销旧设备。',account_out_of_stock:'没有符合平台和期限的账号，请联系平台管理员分配或延长有效期。'};
+    let code;try{const failure=await readUpstreamJSON(response);code=failure?.error?.code||failure?.code;}catch{}
+    if(response.status===409&&Object.hasOwn(safeErrors,code))throw new HttpError(409,code,safeErrors[code]);
     if(![400,401,403,404,409,429].includes(response.status))throw new HttpError(503,method==='GET'?'core_unavailable':'core_outcome_unknown',method==='GET'?'Upstream unavailable.':'Write result is unknown. Read/reconcile before another change.');
     const status=response.status;
     throw new HttpError(status===401?503:status,status===409?'core_conflict':'core_rejected','Upstream rejected the operation. No automatic retry was made.');

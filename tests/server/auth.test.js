@@ -24,6 +24,7 @@ test('bootstrap secret stays private, one-time setup rotates cookie and cannot b
   const f=await fixture(t,{withoutCore:true});
   const before=await f.request('GET','/api/public');
   assert.equal(before.data.setup_required,true);assert.equal(before.raw.includes(f.setupToken),false);
+  assert.equal(before.data.site.public_origin,f.config.publicOrigin);
   assert.deepEqual(before.data.features,{registration:false,email_verification:false,password_reset:false,payment:false,token_billing:false,term_rentals:false});
   assert.equal((await f.request('GET','/data/setup.secret')).status,404);
   assert.equal((await f.request('GET','/src/server.js')).status,404);

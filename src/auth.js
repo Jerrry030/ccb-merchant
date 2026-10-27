@@ -1,13 +1,15 @@
 import { unlinkSync } from 'node:fs';
 import { digest, randomToken, passwordHash, equalSecret, fields, text, email, HttpError, respond } from './security.js';
 import { publicUser } from './store.js';
+import { assertCanRegister } from './integrations.js';
 
 const dummyHash=`scrypt-v1$${'0'.repeat(32)}$${'0'.repeat(64)}`;
 export class Auth {
   constructor(config, store, mailer) {
-    this.config=config; this.store=store; this.mailer=mailer;
+    this.config=config; this.store=store; this._mailer=mailer;
     this.cookieName=config.secureCookies?'__Host-ccb_session':'ccb_session';
   }
+  get mailer() { return typeof this._mailer==='function' ? this._mailer() : this._mailer; }
   cookie(req) {
     const matches=(req.headers.cookie || '').split(';').map(p=>p.trim()).filter(p=>p.startsWith(`${this.cookieName}=`));
     if(matches.length!==1) return '';
@@ -88,17 +90,25 @@ export class Auth {
         respond(res,200,{ok:true}); break;
       }
       case 'POST /api/auth/register': {
-        if(!features.registration || !this.mailer) throw new HttpError(503,'registration_disabled','Registration requires configured email verification and administrator enablement.');
+        if(!features.registration) throw new HttpError(503,'registration_disabled','Registration requires administrator enablement.');
+        if(features.email_verification && !this.mailer) throw new HttpError(503,'registration_disabled','Registration requires configured email verification and administrator enablement.');
         fields(body,['email','password','display_name'],['email','password','display_name']);
         const address=email(body.email), name=text(body.display_name,'display_name',100), hashed=await passwordHash(body.password);
         this.store.throttle(`register:${digest(address)}`,3,3600000);
         let user=this.store.db.prepare('SELECT * FROM users WHERE email=?').get(address);
         if(!user) {
-          user=this.store.createUser({email:address,display_name:name,password_hash:hashed,role:'member',status:'pending_verification'});
-          this.store.audit(user.id,'auth.register',user.id);
+          const status=features.email_verification?'pending_verification':'active';
+          user=this.store.transaction(()=>{
+            const existing=this.store.db.prepare('SELECT * FROM users WHERE email=?').get(address);
+            if(existing) return existing;
+            assertCanRegister(this.store, address);
+            const added=this.store.createUser({email:address,display_name:name,password_hash:hashed,role:'member',status});
+            this.store.audit(added.id,'auth.register',added.id);
+            return added;
+          });
         }
         if(user.status==='pending_verification') await this.mailToken(user,'verify');
-        respond(res,200,{status:'verification_required'}); break;
+        respond(res,200,{status:user.status==='pending_verification'?'verification_required':'created'}); break;
       }
       case 'POST /api/auth/forgot-password': {
         fields(body,['email'],['email']);

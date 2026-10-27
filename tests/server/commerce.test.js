@@ -23,12 +23,12 @@ test('wallet purchase is immutable, idempotent and renews exactly once; member c
  const {f,admin,member,plan,user,planBody}=await shop(t);
  assert.equal((await f.request('GET','/api/admin/plans',undefined,member)).status,403);
  const catalog=await f.request('GET','/api/plans',undefined,member);assert.equal(catalog.raw.includes('resource_id'),false);
- const body={plan_id:plan.id,expected_revision:plan.revision,payment_method:'wallet',request_id:randomUUID()};
+ const body={plan_id:plan.id,expected_revision:plan.revision,payment_method:'wallet',platform:'MacOS/arm64',request_id:randomUUID()};
  const a=await f.request('POST','/api/me/rentals',body,member);assert.equal(a.status,201,a.raw);assert.equal(a.data.rental.status,'fulfilled');
  const end=a.data.rental.expires_at;
  const replay=await f.request('POST','/api/me/rentals',body,member);assert.equal(replay.status,200);assert.equal(replay.data.rental.expires_at,end);
  assert.equal(f.store.wallet(user.id).balance_minor,900);assert.equal(f.state.grants.length,1);
- const b=await f.request('POST','/api/me/rentals',{...body,request_id:randomUUID()},member);assert.equal(b.status,201,b.raw);
+ const b=await f.request('POST','/api/me/rentals',{...body,renew_grant_id:a.data.rental.grant_id,request_id:randomUUID()},member);assert.equal(b.status,201,b.raw);
  assert.equal(Date.parse(b.data.rental.expires_at)-Date.parse(end),7*86400000);
  assert.equal(f.store.wallet(user.id).balance_minor,600);
  const edit=await f.request('PATCH',`/api/admin/plans/${plan.id}`,{...planBody,amount_minor:500,duration_days:10,expected_revision:1},admin);assert.equal(edit.status,200);
@@ -43,7 +43,7 @@ test('wallet purchase is immutable, idempotent and renews exactly once; member c
 test('lost fulfillment acknowledgement survives restart without repeat renewal or refunding delivered supply',async t=>{
  let drop=true;
  const {f,member,admin,plan,user}=await shop(t,{afterFulfillment:({json})=>{if(drop){json({error:{}},500);return true;}}});
- const purchase=await f.request('POST','/api/me/rentals',{plan_id:plan.id,expected_revision:1,payment_method:'wallet',request_id:randomUUID()},member);
+ const purchase=await f.request('POST','/api/me/rentals',{plan_id:plan.id,expected_revision:1,payment_method:'wallet',platform:'MacOS/arm64',request_id:randomUUID()},member);
  assert.equal(purchase.status,201);assert.equal(purchase.data.rental.status,'review');assert.equal(f.state.grants.length,1);
  const end=f.state.grants[0].expires_at;drop=false;await f.restart();
  const row=purchase.data.rental;
@@ -56,7 +56,7 @@ test('lost fulfillment acknowledgement survives restart without repeat renewal o
 test('unfulfilled refunds are fenced in core, credit once, and reject stale retries',async t=>{
  let reject=true;
  const {f,admin,member,plan,user}=await shop(t,{onCore:({req,url,body,json})=>{if(reject&&req.method==='PUT'&&url.pathname.includes('/fulfillments/')&&body.action==='fulfill'){json({error:{}},409);return true;}}});
- const body={plan_id:plan.id,expected_revision:1,payment_method:'wallet',request_id:randomUUID()};
+ const body={plan_id:plan.id,expected_revision:1,payment_method:'wallet',platform:'MacOS/arm64',request_id:randomUUID()};
  const created=await f.request('POST','/api/me/rentals',body,member);assert.equal(created.data.rental.status,'review');
  const row=created.data.rental;
  assert.equal((await f.request('POST',`/api/admin/rentals/${row.id}/resolve`,{action:'refund',expected_revision:row.revision},member)).status,403);
@@ -71,7 +71,7 @@ test('unfulfilled refunds are fenced in core, credit once, and reject stale retr
 
 test('online purchase requires server-confirmed payment; repeated webhooks debit and deliver once',async t=>{
  const {f,stripe,member,plan,user}=await shop(t);
- const created=await f.request('POST','/api/me/rentals',{plan_id:plan.id,expected_revision:1,payment_method:'stripe',request_id:randomUUID()},member);
+ const created=await f.request('POST','/api/me/rentals',{plan_id:plan.id,expected_revision:1,payment_method:'stripe',platform:'MacOS/arm64',request_id:randomUUID()},member);
  assert.equal(created.status,201,created.raw);assert.equal(created.data.rental.status,'awaiting_payment');assert.equal(f.state.grants.length,0);
  const session=[...stripe.sessions.values()].at(-1);session.status='complete';session.payment_status='paid';
  const event=stripe.event(session.id);
@@ -85,7 +85,7 @@ test('online purchase requires server-confirmed payment; repeated webhooks debit
 
 test('expired checkout releases pending capacity; known-session reconciliation recovers a missing webhook',async t=>{
  const {f,stripe,member,plan}=await shop(t);
- const body={plan_id:plan.id,expected_revision:1,payment_method:'stripe',request_id:randomUUID()};
+ const body={plan_id:plan.id,expected_revision:1,payment_method:'stripe',platform:'MacOS/arm64',request_id:randomUUID()};
  const created=await f.request('POST','/api/me/rentals',body,member);assert.equal(created.status,201);
  assert.equal((await f.request('POST','/api/me/rentals',{...body,request_id:randomUUID()},member)).status,409);
  const session=[...stripe.sessions.values()].at(-1);session.status='expired';await f.reconciler.run();
@@ -98,7 +98,7 @@ test('expired checkout releases pending capacity; known-session reconciliation r
 test('insufficient funds, excessive term and concurrent purchases never create unbacked debits',async t=>{
  const {f,member,plan,admin,planBody,user}=await shop(t);
  const updated=await f.request('PATCH',`/api/admin/plans/${plan.id}`,{...planBody,amount_minor:900,expected_revision:1},admin);assert.equal(updated.status,200);
- const body={plan_id:plan.id,expected_revision:2,payment_method:'wallet',request_id:randomUUID()};
+ const body={plan_id:plan.id,expected_revision:2,payment_method:'wallet',platform:'MacOS/arm64',request_id:randomUUID()};
  const results=await Promise.all([f.request('POST','/api/me/rentals',body,member),f.request('POST','/api/me/rentals',{...body,request_id:randomUUID()},member)]);
  assert.equal(results.filter(r=>r.status===201).length,1);assert.equal(f.store.wallet(user.id).balance_minor,300);
  assert.equal((await f.request('POST','/api/me/rentals',{...body,request_id:randomUUID()},member)).status,409);
@@ -110,7 +110,7 @@ test('insufficient funds, excessive term and concurrent purchases never create u
 test('background customer synchronization restores a suspended site after restart and honors current intent',async t=>{
  let offline=false;
  const {f,admin,member,user,plan}=await shop(t,{onCore:({req,url,json})=>{if(offline&&req.method==='PATCH'&&url.pathname.startsWith('/merchant/v1/customers/')){json({error:{}},503);return true;}}});
- const purchase=await f.request('POST','/api/me/rentals',{plan_id:plan.id,expected_revision:1,payment_method:'wallet',request_id:randomUUID()},member);assert.equal(purchase.data.rental.status,'fulfilled');
+ const purchase=await f.request('POST','/api/me/rentals',{plan_id:plan.id,expected_revision:1,payment_method:'wallet',platform:'MacOS/arm64',request_id:randomUUID()},member);assert.equal(purchase.data.rental.status,'fulfilled');
  offline=true;const disabled=await f.request('PATCH',`/api/admin/users/${user.id}`,{status:'disabled'},admin);assert.equal(disabled.status,503);
  assert.ok(f.store.db.prepare('SELECT core_pending FROM users WHERE id=?').get(user.id).core_pending);
  assert.equal((await f.request('GET','/bridge/v1/models',undefined,{native:true})).status,503);
@@ -122,7 +122,7 @@ test('background customer synchronization restores a suspended site after restar
 
 test('late payment after a confirmed expired order is visible wallet credit, not a revived entitlement',async t=>{
  const {f,stripe,member,plan,user}=await shop(t);
- const purchase=await f.request('POST','/api/me/rentals',{plan_id:plan.id,expected_revision:1,payment_method:'stripe',request_id:randomUUID()},member);
+ const purchase=await f.request('POST','/api/me/rentals',{plan_id:plan.id,expected_revision:1,payment_method:'stripe',platform:'MacOS/arm64',request_id:randomUUID()},member);
  const session=[...stripe.sessions.values()].at(-1);session.status='expired';await f.reconciler.run();
  session.status='complete';session.payment_status='paid';const event=stripe.event(session.id);
  assert.equal((await f.request('POST','/api/webhooks/stripe',event.payload,{headers:{'Stripe-Signature':event.signature}})).status,200);

@@ -28,7 +28,7 @@ export async function startFixture(options = {}) {
     try {
       if (!path.startsWith('/api/')) {
         if (!['GET','HEAD'].includes(req.method)) return reply(405,'method_not_allowed','Method not allowed.');
-        const asset = {'/app.js':['app.js','text/javascript; charset=utf-8'],'/styles.css':['styles.css','text/css; charset=utf-8'],'/mark.svg':['mark.svg','image/svg+xml']}[path] || ['index.html','text/html; charset=utf-8'];
+        const asset = {'/app.js':['app.js','text/javascript; charset=utf-8'],'/payment-catalog.js':['payment-catalog.js','text/javascript; charset=utf-8'],'/usage-detail.js':['usage-detail.js','text/javascript; charset=utf-8'],'/registration-policy.js':['registration-policy.js','text/javascript; charset=utf-8'],'/styles.css':['styles.css','text/css; charset=utf-8'],'/mark.svg':['mark.svg','image/svg+xml']}[path] || ['index.html','text/html; charset=utf-8'];
         const body = await readFile(resolve(publicRoot,asset[0]));
         res.writeHead(200,{'Content-Type':asset[1],'Cache-Control':'no-store','Referrer-Policy':'no-referrer','Content-Security-Policy':"default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'"});
         return res.end(body);
@@ -84,6 +84,8 @@ export async function startFixture(options = {}) {
       if (path.startsWith('/api/me/devices/') && req.method === 'DELETE') { state.devices = state.devices.filter(d => d.id !== decodeURIComponent(path.split('/').pop())); return reply(200,{ok:true}); }
       if (path === '/api/me/usage') return reply(200,{usage:null,requests:[],total:0});
       if (path === '/api/me/wallet') return reply(200,{wallet:{balance_minor:0,currency:'CNY'},ledger:state.ledger,orders:state.orders});
+      if (path === '/api/plans' || path === '/api/admin/plans') return reply(200,{plans:[]});
+      if (path === '/api/me/accounts') return reply(200,{accounts:[]});
       if (path === '/api/me/payments' && req.method === 'POST') {
         if (!state.public.features.payment) return reply(503,'payment_disabled','Payments are not configured.');
         const order = {id:`order-${state.orders.length+1}`,status:'pending',amount_minor:body.amount_minor,currency:'CNY',created_at:now}; state.orders.push(order); return reply(201,{order,checkout_url:state.checkoutUrl});
@@ -91,6 +93,7 @@ export async function startFixture(options = {}) {
       if (path.startsWith('/api/me/payments/') && !write) { const order = state.orders.find(o => o.id === decodeURIComponent(path.split('/').pop())); return order ? reply(200,{order}) : reply(404,'not_found','Order not found.'); }
       if(path==='/api/admin/access-accounts'&&!write)return reply(200,{accounts:[]});
       if (path === '/api/admin/connection') return reply(200,state.connection);
+      if (path === '/api/admin/inventory') return reply(200,{accounts:state.grants.map(g=>({id:'held-'+g.id,resource_id:g.resource_id,platform:'Windows/x64',status:'active',revision:2,expires_at:new Date(Date.now()+90*86400000).toISOString(),grant_id:g.id,grant_revision:g.revision,customer_expires_at:g.expires_at,assigned:g.status==='active',user_id:'member-1',customer_name:'测试成员',details:{name:g.name,state:'available',device_name:''}}))});
       if (path === '/api/admin/resources') return reply(200,{resources:state.resources});
       if (path === '/api/admin/users' && !write) return reply(200,{users:state.users});
       if (path === '/api/admin/users' && req.method === 'POST') {
@@ -118,6 +121,7 @@ export async function startFixture(options = {}) {
 
       if (path === '/api/admin/orders') return reply(200,{orders:state.orders});
       if (path === '/api/admin/audit') return reply(200,{events:state.events});
+      if (path === '/api/admin/operations') return reply(200,{pending_customers:[],rentals:[],payments_pending:0,worker:{interval_ms:15000,max_attempts:8},readiness:{core_configured:Boolean(state.connection.configured),mail_configured:false,payment_configured:Boolean(state.public.features.payment),https:false,schema_version:3,runtime_limit:8}});
       if (path === '/api/admin/settings' && req.method === 'PATCH') {
         Object.assign(state.public.site,{name:body.name,description:body.description,support_email:body.support_email}); state.public.features.registration = body.registration_enabled; return reply(200,{site:state.public.site,features:state.public.features});
       }
@@ -127,6 +131,7 @@ export async function startFixture(options = {}) {
   });
   await new Promise((resolve,reject) => { server.once('error',reject); server.listen(options.port || 0,'127.0.0.1',resolve); });
   origin = `http://127.0.0.1:${server.address().port}`;
+  state.public.site.public_origin = origin;
   return {origin,state,close:() => new Promise((resolve,reject) => { server.closeAllConnections(); server.close(error => error ? reject(error) : resolve()); })};
 }
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

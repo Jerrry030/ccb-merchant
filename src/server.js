@@ -9,7 +9,9 @@ import { Store, publicUser, publicOrder, publicRental } from './store.js';
 import { Auth } from './auth.js';
 import { Upstream, project, schemas, scopes } from './upstream.js';
 import { Payments } from './payments.js';
-import { createMailer } from './mail.js';
+import { createMailer, verifyMail } from './mail.js';
+import { readSite, readServices, writeServices, publicSettings, effectiveMail, effectiveStripe, describeMail, describeStripe, applyMailUpdate, applyStripeUpdate, stripeSecretsDiffer, registrationView, strictEmailSuffixWhitelist } from './integrations.js';
+import { describePaymentCatalog, parsePaymentCatalog } from '../public/payment-catalog.js';
 import { proxyRuntime } from './runtime.js';
 import { HttpError, fields, text, email, opaqueId, expiry, passwordHash, readBody, respond, requestBoundary } from './security.js';
 
@@ -44,17 +46,17 @@ function collection(value,schema) {
 
 export function createMerchant(config, options={}) {
   const store=new Store(config), core=new Upstream(config,store);
-  const mailer=Object.hasOwn(options,'mailer')?options.mailer:createMailer(config);
-  const auth=new Auth(config,store,mailer), payments=new Payments(config,store,options.paymentTransport);
+  const mailNow=()=>effectiveMail(config,store);
+  const stripeNow=()=>effectiveStripe(config,store);
+  const mailerNow=()=>options.mailer || (mailNow() ? createMailer({...config, mail:mailNow()}) : null);
+  const auth=new Auth(config,store,mailerNow), payments=new Payments(config,store,options.paymentTransport,stripeNow);
   const access=new Access(store,core);
   const customers=new Customers(store,core), commerce=new Commerce(store,core,customers);
   const reconciler=new Reconciler(store,customers,payments,commerce,options.reconcileIntervalMs??config.reconcileIntervalMs);
   const lockedUsers=customers.locks;
   let runtimeInFlight=0;
-  const settings=()=>{
-    const saved=JSON.parse(store.db.prepare("SELECT value FROM settings WHERE key='site'").get().value);
-    return {site:{name:saved.name,description:saved.description,support_email:saved.support_email,currency:'CNY',logo_url:saved.logo_url||'',accent_color:saved.accent_color||'#7c5cff'},features:{registration:Boolean(saved.registration_enabled && config.mail),email_verification:Boolean(config.mail),password_reset:Boolean(config.mail),payment:Boolean(config.stripe),token_billing:false,term_rentals:Boolean(config.upstreamUrl)}};
-  };
+  const settings=()=>{ const value=publicSettings(readSite(store), mailNow(), stripeNow(), config.upstreamUrl); value.site.public_origin=config.publicOrigin; if(config.homePreviewSample) value.features.home_preview=true; return value; };
+  const adminSettings=()=>({...settings(), connection:{configured:Boolean(config.upstreamUrl)}, mail:describeMail(config,store), payment:{...describeStripe(config,store), catalog:describePaymentCatalog(readServices(store).payment_catalog)}, registration:registrationView(readSite(store))});
   async function connection() {
     if(!config.upstreamUrl) return {configured:false,available:false};
     try {
@@ -132,7 +134,7 @@ export function createMerchant(config, options={}) {
       const {user}=auth.require(req,path.startsWith('/api/admin/'));
       const memberPrefix=user.core_customer_id?`/merchant/v1/customers/${opaqueId(user.core_customer_id)}`:null;
       const customerReady=()=>{
-        if(!memberPrefix) throw new HttpError(409,'not_provisioned','Administrator must provision this account first.');
+        if(!memberPrefix) throw new HttpError(409,'not_provisioned','Contact the administrator to assign an account first.');
         if(user.core_pending) throw new HttpError(409,'core_sync_pending','Customer synchronization must be reconciled first.');
       };
       switch(route) {
@@ -159,7 +161,14 @@ export function createMerchant(config, options={}) {
           const data=await core.request('GET',`/merchant/v1/grants?customer_id=${opaqueId(user.core_customer_id)}`);
           respond(res,200,{grants:collection(data.grants,schemas.grant).filter(g=>g.customer_id===user.core_customer_id)}); return;
         }
+        case 'GET /api/me/accounts': {
+          if(!memberPrefix) {respond(res,200,{accounts:[]});return;}
+          customerReady();
+          const data=await core.request('GET',`${memberPrefix}/accounts`);
+          respond(res,200,{accounts:collection(data.accounts,schemas.account)}); return;
+        }
         case 'GET /api/me/devices': {
+          if(!memberPrefix) {respond(res,200,{devices:[]});return;}
           customerReady(); const data=await core.request('GET',`${memberPrefix}/devices`);
           respond(res,200,{devices:collection(data.devices,schemas.device)}); return;
         }
@@ -187,15 +196,21 @@ export function createMerchant(config, options={}) {
           respond(res,201,await payments.create(user.id,body.amount_minor)); return;
         }
         case 'GET /api/plans':
-        case 'GET /api/admin/plans': {
-          const admin=path.startsWith('/api/admin/');
-          const rows=store.db.prepare(admin?'SELECT * FROM plans ORDER BY created_at DESC':'SELECT * FROM plans WHERE status=\'active\' ORDER BY created_at DESC').all();
-          respond(res,200,{plans:rows.map(row=>publicPlan(row,admin))});return;
+        case 'GET /api/admin/plans': {respond(res,200,{plans:await commerce.catalog(path.startsWith('/api/admin/'),user.core_customer_id,url.searchParams.get('renew_grant_id'))});return;}
+        case 'GET /api/admin/inventory': {
+          const owned=await core.request('GET','/merchant/v1/accounts');
+          if(!Array.isArray(owned.accounts))throw new HttpError(503,'invalid_core_response','Upstream allocated accounts are unavailable.');
+          const users=new Map(store.db.prepare('SELECT id,display_name,email,core_customer_id FROM users WHERE core_customer_id IS NOT NULL').all().map(u=>[u.core_customer_id,u]));
+          const accounts=collection(owned.accounts,schemas.heldAccount).map(account=>{
+            const customer=account.assigned?users.get(account.customer_id):null;
+            return {...account,user_id:customer?.id??null,customer_name:customer?.display_name??null,customer_email:customer?.email??null};
+          });
+          respond(res,200,{accounts,device_limit:1});return;
         }
         case 'POST /api/admin/plans': respond(res,201,{plan:await commerce.savePlan(null,body,()=>auth.require(req,true))});return;
         case 'POST /api/me/rentals': {
           store.throttle(`rental:${user.id}`,10,60000);
-          if(body.payment_method==='stripe' && !config.stripe) throw new HttpError(503,'payment_disabled','Payments are not configured.');
+          if(body.payment_method==='stripe' && !stripeNow()) throw new HttpError(503,'payment_disabled','Payments are not configured.');
           if(body.payment_method==='stripe') {
             const plan=store.db.prepare('SELECT amount_minor FROM plans WHERE id=?').get(body.plan_id || '');
             if(plan&&(plan.amount_minor<config.paymentMin||plan.amount_minor>config.paymentMax)) throw new HttpError(409,'payment_amount_unavailable','This price is outside the configured online payment range; use wallet balance or contact support.');
@@ -221,17 +236,28 @@ export function createMerchant(config, options={}) {
           const pending=store.db.prepare("SELECT * FROM users WHERE core_pending IS NOT NULL OR (provision_name IS NOT NULL AND core_customer_id IS NULL) ORDER BY created_at LIMIT 100").all().map(publicUser);
           const totals=store.db.prepare('SELECT status,count(*) AS count FROM rentals GROUP BY status').all();
           const paymentsPending=store.db.prepare("SELECT count(*) AS n FROM orders WHERE status IN ('creating','pending','unknown')").get().n;
-          respond(res,200,{pending_customers:pending,rentals:totals,payments_pending:paymentsPending,worker:{interval_ms:config.reconcileIntervalMs,max_attempts:8},readiness:{core_configured:Boolean(config.upstreamUrl),mail_configured:Boolean(config.mail),payment_configured:Boolean(config.stripe),https:config.secureCookies,schema_version:store.db.prepare('PRAGMA user_version').get().user_version,runtime_limit:config.runtimeMaxInFlight}});return;
+          respond(res,200,{pending_customers:pending,rentals:totals,payments_pending:paymentsPending,worker:{interval_ms:config.reconcileIntervalMs,max_attempts:8},readiness:{core_configured:Boolean(config.upstreamUrl),mail_configured:Boolean(mailNow()),payment_configured:Boolean(stripeNow()),https:config.secureCookies,schema_version:store.db.prepare('PRAGMA user_version').get().user_version,runtime_limit:config.runtimeMaxInFlight}});return;
         }
         case 'GET /api/admin/connection': respond(res,200,{...await connection(),upstream_url:config.upstreamUrl,public_origin:config.publicOrigin,environment_managed:config.upstreamEnvironment,revision:core.revision}); return;
         case 'POST /api/admin/upstream': {
           store.throttle(`upstream-config:${user.id}`,10,60000);
           respond(res,200,await core.configure(body,()=>auth.require(req,true)));return;
         }
-        case 'GET /api/admin/settings': respond(res,200,{...settings(),connection:{configured:Boolean(config.upstreamUrl)},mail:{configured:Boolean(config.mail)},payment:{configured:Boolean(config.stripe)}}); return;
+        case 'POST /api/admin/mail/test': {
+          fields(body,[]);
+          const mail=mailNow();
+          if(!mail && !options.mailer) throw new HttpError(503,'mail_disabled','Email delivery is not configured.');
+          if(!options.mailer) {
+            try { await verifyMail(mail); }
+            catch { throw new HttpError(503,'mail_unavailable','The mail server rejected the connection or credentials.'); }
+          }
+          store.audit(user.id,'site.mail_test',null);
+          respond(res,200,{ok:true}); return;
+        }
+        case 'GET /api/admin/settings': respond(res,200,adminSettings()); return;
         case 'PATCH /api/admin/settings': {
-          fields(body,['name','description','support_email','registration_enabled','logo_url','accent_color']);
-          const saved=JSON.parse(store.db.prepare("SELECT value FROM settings WHERE key='site'").get().value);
+          fields(body,['name','description','support_email','registration_enabled','logo_url','accent_color','email_suffix_whitelist','email_verification_enabled','email_domain_quota_enabled','mail','payment','payment_catalog']);
+          const saved=readSite(store);
           if(body.name!==undefined) saved.name=text(body.name,'name',100);
           if(body.description!==undefined) saved.description=text(body.description,'description',1000,0);
           if(body.support_email!==undefined) saved.support_email=body.support_email===''?'':email(body.support_email);
@@ -242,8 +268,31 @@ export function createMerchant(config, options={}) {
           }
           if(body.accent_color!==undefined) {if(!/^#[0-9a-fA-F]{6}$/.test(body.accent_color))throw new HttpError(400,'invalid_brand','Invalid accent color.');saved.accent_color=body.accent_color;}
           if(body.registration_enabled!==undefined) { if(typeof body.registration_enabled!=='boolean') throw new HttpError(400,'invalid_input','registration_enabled must be boolean.'); saved.registration_enabled=body.registration_enabled; }
-          store.transaction(()=>{ store.db.prepare("UPDATE settings SET value=? WHERE key='site'").run(JSON.stringify(saved)); store.audit(user.id,'site.update',null); });
-          respond(res,200,settings()); return;
+          if(body.email_verification_enabled!==undefined) { if(typeof body.email_verification_enabled!=='boolean') throw new HttpError(400,'invalid_input','email_verification_enabled must be boolean.'); saved.email_verification_enabled=body.email_verification_enabled; }
+          if(body.email_domain_quota_enabled!==undefined) { if(typeof body.email_domain_quota_enabled!=='boolean') throw new HttpError(400,'invalid_input','email_domain_quota_enabled must be boolean.'); saved.email_domain_quota_enabled=body.email_domain_quota_enabled; }
+          if(body.email_suffix_whitelist!==undefined) saved.email_suffix_whitelist=strictEmailSuffixWhitelist(body.email_suffix_whitelist);
+          const services=readServices(store);
+          if(body.mail!==undefined) {
+            if(config.mail) throw new HttpError(409,'integration_environment_managed','Mail is managed by the server environment and cannot be changed here.');
+            services.mail=applyMailUpdate(services.mail, body.mail);
+          }
+          if(body.payment!==undefined) {
+            if(config.stripe) throw new HttpError(409,'integration_environment_managed','Payment is managed by the server environment and cannot be changed here.');
+            const next=applyStripeUpdate(services.stripe, body.payment);
+            if(stripeSecretsDiffer(services.stripe, next) && store.db.prepare("SELECT count(*) AS n FROM orders WHERE status IN ('creating','pending','unknown')").get().n) throw new HttpError(409,'payment_pending','Wait until in-progress payments finish before changing Stripe credentials.');
+            services.stripe=next;
+          }
+          if(body.payment_catalog!==undefined) {
+            const parsed=parsePaymentCatalog(services.payment_catalog, body.payment_catalog);
+            if(!parsed.ok) throw new HttpError(400,'invalid_input',parsed.message);
+            services.payment_catalog=parsed.value;
+          }
+          store.transaction(()=>{
+            store.db.prepare("UPDATE settings SET value=? WHERE key='site'").run(JSON.stringify(saved));
+            if(body.mail!==undefined || body.payment!==undefined || body.payment_catalog!==undefined) writeServices(store, services);
+            store.audit(user.id,'site.update',null);
+          });
+          respond(res,200,adminSettings()); return;
         }
         case 'GET /api/admin/users': {
  const page=listQuery(url.searchParams),needle='%'+page.q+'%';
@@ -273,19 +322,48 @@ export function createMerchant(config, options={}) {
           respond(res,200,{grants:collection(data.grants,schemas.grant),total:data.total,limit,offset}); return;
         }
         case 'POST /api/admin/grants': {
-          fields(body,['user_id','resource_id','expires_at'],['user_id','resource_id']);
-          const target=store.db.prepare('SELECT * FROM users WHERE id=?').get(text(body.user_id,'user_id',150));
-          if(!target?.core_customer_id || target.status!=='active' || target.core_pending) throw new HttpError(409,'customer_not_ready','Provision and reconcile an active user before assigning resources.');
-          const payload={customer_id:target.core_customer_id,resource_id:decodeURIComponent(opaqueId(body.resource_id))};
+          fields(body,['user_id','resource_id','expires_at','account_lease_id','expected_account_revision'],['user_id','resource_id']);
+          const targetId=text(body.user_id,'user_id',150);
+          const payload={resource_id:decodeURIComponent(opaqueId(body.resource_id))};
           if(body.expires_at!==undefined) payload.expires_at=expiry(body.expires_at);
-          const data=await core.request('POST','/merchant/v1/grants',payload), grant=project(data.grant,schemas.grant);
-          if(!grant?.id || grant.customer_id!==target.core_customer_id || grant.resource_id!==body.resource_id) throw new HttpError(503,'core_outcome_unknown','Grant outcome is unconfirmed. Refresh the unique customer/resource grant before retrying.');
-          store.audit(user.id,'grant.create',grant.id); respond(res,201,{grant}); return;
+          if(body.account_lease_id) {
+            payload.account_lease_id=decodeURIComponent(opaqueId(body.account_lease_id));
+            if(!Number.isSafeInteger(body.expected_account_revision)||body.expected_account_revision<1)throw new HttpError(400,'invalid_input','Refresh the account before delivery.');
+            payload.expected_account_revision=body.expected_account_revision;
+          }
+          if(lockedUsers.has(targetId))throw new HttpError(409,'user_busy','A customer change is in progress. Retry this delivery after it completes.');
+          lockedUsers.add(targetId);
+          try {
+            let target=store.db.prepare('SELECT * FROM users WHERE id=?').get(targetId);
+            if(!target||target.status!=='active'||target.core_pending)throw new HttpError(409,'customer_not_ready','Select an active customer with no pending changes.');
+            if(payload.account_lease_id) {
+              const owned=await core.request('GET','/merchant/v1/accounts');auth.require(req,true);
+              if(!Array.isArray(owned.accounts))throw new HttpError(503,'invalid_core_response','Account inventory is unavailable.');
+              const account=owned.accounts.find(a=>a.id===payload.account_lease_id);
+              if(!account||account.resource_id!==payload.resource_id||account.status!=='active'||!Number.isFinite(Date.parse(account.expires_at))||Date.parse(account.expires_at)<=Date.now())throw new HttpError(409,'account_unavailable','This account is no longer available. Refresh the inventory.');
+              payload.expires_at??=account.expires_at;
+              if(Date.parse(payload.expires_at)>Date.parse(account.expires_at)||Date.parse(payload.expires_at)<=Date.now())throw new HttpError(400,'invalid_expiry','Customer expiry must be in the future and within the account expiry.');
+              if(account.revision!==payload.expected_account_revision && !(account.revision===payload.expected_account_revision+1&&account.assigned&&account.customer_id===target.core_customer_id))throw new HttpError(409,'account_changed','The account changed. Refresh before assigning it.');
+              if(account.assigned&&account.customer_id!==target.core_customer_id)throw new HttpError(409,'account_assigned','Reclaim the current assignment before choosing another customer.');
+              if(!['available','limited'].includes(account.details?.state))throw new HttpError(409,'account_unavailable','This account is currently unavailable.');
+              if(store.db.prepare("SELECT 1 FROM rentals WHERE account_lease_id=? AND status IN ('awaiting_payment','queued','review','refund_pending')").get(account.id))throw new HttpError(409,'purchase_pending','Account is reserved by a customer checkout.');
+            }
+            if(!target.core_customer_id)await customers.synchronize(targetId,()=>auth.require(req,true));
+            auth.require(req,true);
+            target=store.db.prepare('SELECT * FROM users WHERE id=?').get(targetId);
+            if(!target?.core_customer_id||target.status!=='active'||target.core_pending)throw new HttpError(409,'customer_not_ready','Customer state changed. Refresh before delivery.');
+            payload.customer_id=target.core_customer_id;
+            const data=await core.request('POST','/merchant/v1/grants',payload), grant=project(data.grant,schemas.grant);
+            auth.require(req,true);
+            if(!grant?.id||grant.status!=='active'||grant.customer_id!==target.core_customer_id||grant.resource_id!==payload.resource_id||(payload.account_lease_id&&(grant.account_lease_id!==payload.account_lease_id||Date.parse(grant.expires_at)!==Date.parse(payload.expires_at))))throw new HttpError(503,'core_outcome_unknown','Delivery is unconfirmed. Check the account before retrying the same assignment.');
+            store.audit(user.id,'grant.create',grant.id);respond(res,201,{grant});return;
+          } finally {lockedUsers.delete(targetId);}
         }
         case 'GET /api/admin/orders': respond(res,200,{orders:store.db.prepare('SELECT * FROM orders ORDER BY created_at DESC LIMIT 1000').all().map(order=>({...publicOrder(order),user_id:order.user_id}))}); return;
         case 'GET /api/admin/audit': respond(res,200,{events:store.db.prepare('SELECT * FROM audit ORDER BY id DESC LIMIT 500').all()}); return;
       }
       let match;
+
       if(req.method==='PATCH' && (match=path.match(/^\/api\/admin\/plans\/([^/]+)$/))) {
         respond(res,200,{plan:await commerce.savePlan(decodeURIComponent(opaqueId(match[1])),body,()=>auth.require(req,true))});return;
       }

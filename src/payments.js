@@ -3,11 +3,12 @@ import { HttpError, digest, equalSecret } from './security.js';
 import { publicOrder } from './store.js';
 
 export class Payments {
-  constructor(config, store, transport=fetch) { this.config=config; this.store=store; this.transport=transport; }
+  constructor(config, store, transport=fetch, stripeOf=null) { this.config=config; this.store=store; this.transport=transport; this.stripeOf=stripeOf; }
+  get stripe() { return this.stripeOf ? this.stripeOf() : this.config.stripe; }
   async stripeRequest(method,path,form,key) {
-    if (!this.config.stripe) throw new HttpError(503,'payment_disabled','Payments are not configured.');
+    if (!this.stripe) throw new HttpError(503,'payment_disabled','Payments are not configured.');
     try {
-      const response=await this.transport(`https://api.stripe.com/v1${path}`, { method,headers:{ Authorization:`Bearer ${this.config.stripe.secret}`, ...(form ? {'Content-Type':'application/x-www-form-urlencoded'}:{}), ...(key?{'Idempotency-Key':key}:{}) },body:form?.toString(),signal:AbortSignal.timeout(15000),redirect:'error' });
+      const response=await this.transport(`https://api.stripe.com/v1${path}`, { method,headers:{ Authorization:`Bearer ${this.stripe.secret}`, ...(form ? {'Content-Type':'application/x-www-form-urlencoded'}:{}), ...(key?{'Idempotency-Key':key}:{}) },body:form?.toString(),signal:AbortSignal.timeout(15000),redirect:'error' });
       if (!response.ok) { await response.body?.cancel(); throw new Error('Stripe rejected'); }
       const chunks=[]; let size=0;
       for await (const chunk of response.body) { size+=chunk.length; if(size>1048576) throw new Error('Stripe response limit'); chunks.push(chunk); }
@@ -15,7 +16,7 @@ export class Payments {
     } catch { throw new HttpError(503,method==='GET'?'payment_verification_unavailable':'payment_outcome_unknown',method==='GET'?'Payment confirmation unavailable; webhook may retry safely.':'Checkout creation outcome is unknown. Check your orders; no automatic retry was made.'); }
   }
   async create(userId,amount,rentalId=null) {
-    if (!this.config.stripe) throw new HttpError(503,'payment_disabled','Payments are not configured.');
+    if (!this.stripe) throw new HttpError(503,'payment_disabled','Payments are not configured.');
     if (!Number.isSafeInteger(amount) || amount<this.config.paymentMin || amount>this.config.paymentMax) throw new HttpError(400,'invalid_amount',`Amount must be integer minor units between ${this.config.paymentMin} and ${this.config.paymentMax}.`);
     const rental=rentalId?this.store.db.prepare('SELECT * FROM rentals WHERE id=? AND user_id=?').get(rentalId,userId):null;
     if(rentalId && (!rental || rental.status!=='awaiting_payment' || rental.payment_method!=='stripe' || rental.amount_minor!==amount)) throw new HttpError(409,'order_state','Invalid rental checkout.');
@@ -42,15 +43,15 @@ export class Payments {
     }
   }
   async webhook(raw,signature) {
-    if (!this.config.stripe) throw new HttpError(503,'payment_disabled','Payments are not configured.');
+    if (!this.stripe) throw new HttpError(503,'payment_disabled','Payments are not configured.');
     if (typeof signature!=='string' || signature.length>2048) throw new HttpError(400,'invalid_signature','Invalid webhook signature.');
     const parts=signature.split(',').map(s=>s.trim().split('='));
     const timestamps=parts.filter(([k])=>k==='t'), signatures=parts.filter(([k])=>k==='v1').map(([,v])=>v);
     const timestamp=Number(timestamps[0]?.[1]);
-    const expected=createHmac('sha256',this.config.stripe.webhookSecret).update(`${timestamp}.`).update(raw).digest('hex');
+    const expected=createHmac('sha256',this.stripe.webhookSecret).update(`${timestamp}.`).update(raw).digest('hex');
     if(timestamps.length!==1 || !Number.isSafeInteger(timestamp) || Math.abs(Date.now()/1000-timestamp)>300 || !signatures.some(sig=>equalSecret(sig,expected))) throw new HttpError(400,'invalid_signature','Invalid or expired webhook signature.');
     let event; try { event=JSON.parse(raw.toString('utf8')); } catch { throw new HttpError(400,'invalid_event','Invalid webhook payload.'); }
-    if(typeof event.id!=='string' || !/^evt_[A-Za-z0-9_]{1,200}$/.test(event.id) || event.livemode!==this.config.stripe.live) throw new HttpError(400,'invalid_event','Invalid webhook environment.');
+    if(typeof event.id!=='string' || !/^evt_[A-Za-z0-9_]{1,200}$/.test(event.id) || event.livemode!==this.stripe.live) throw new HttpError(400,'invalid_event','Invalid webhook environment.');
     const bodyDigest=digest(raw);
     const previous=this.store.db.prepare('SELECT digest FROM webhook_events WHERE id=?').get(event.id);
     if(previous) { if(previous.digest!==bodyDigest) throw new HttpError(409,'event_conflict','Webhook event identity conflict.'); return {ok:true}; }
@@ -75,7 +76,7 @@ export class Payments {
   }
   confirm(session,event=null) {
     const order=this.store.db.prepare('SELECT * FROM orders WHERE id=?').get(session.metadata?.order_id || '');
-    if(!order || session.mode!=='payment' || session.livemode!==this.config.stripe.live || session.client_reference_id!==order.id || session.metadata?.user_id!==order.user_id || session.currency!=='cny' || session.amount_total!==order.amount_minor || (order.stripe_session_id && order.stripe_session_id!==session.id)) throw new HttpError(409,'payment_mismatch','Checkout session does not match the immutable order.');
+    if(!order || session.mode!=='payment' || session.livemode!==this.stripe.live || session.client_reference_id!==order.id || session.metadata?.user_id!==order.user_id || session.currency!=='cny' || session.amount_total!==order.amount_minor || (order.stripe_session_id && order.stripe_session_id!==session.id)) throw new HttpError(409,'payment_mismatch','Checkout session does not match the immutable order.');
     const now=new Date().toISOString();
     this.store.transaction(()=>{
       if(event) {

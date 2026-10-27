@@ -36,12 +36,13 @@ async function login({page,fixture},role = 'member',path = '/') {
 // All credentials, resources, keys and orders below are synthetic and confined to the fixture.
 test('member identity controls navigation; direct admin routes do not fetch privileged APIs',async t => {
   const h = await harness(t); await login(h);
-  await h.page.getByRole('heading',{name:'工作概览',exact:true}).waitFor();
+  await h.page.getByRole('heading',{name:'首页',exact:true}).waitFor();
   await h.page.getByText('工作空间尚未连接上游服务',{exact:true}).waitFor();
   assert.equal(await h.page.getByRole('link',{name:'客户管理',exact:true}).count(),0);
   assert.equal(await h.page.getByRole('link',{name:'API 接入',exact:true}).count(),0);
   assert.equal(await h.page.getByRole('combobox').count(),0,'No identity/role switch');
-  assert.equal(await h.page.getByText('—',{exact:true}).count(),3,'Unavailable upstream data must not be represented as zero');
+  assert.equal(await h.page.locator('.overview-page .is-unknown').count(),15,'Unavailable usage stays unknown');
+  assert.equal(await h.page.getByText('0',{exact:true}).count(),0,'Unavailable upstream data must not be represented as zero');
   await h.page.goto(h.fixture.origin + '/admin/access');
   await h.page.getByRole('heading',{name:'没有管理权限',exact:true}).waitFor();
   assert.equal(h.fixture.state.requests.filter(r => r.path.startsWith('/api/admin/')).length,0);
@@ -49,27 +50,38 @@ test('member identity controls navigation; direct admin routes do not fetch priv
 
 test('member empty and unavailable views have honest states; payment stays disabled',async t => {
   const h = await harness(t); await login(h);
-  for (const [link,text] of [['我的权益','尚未分配权益'],['设备管理','还没有连接设备'],['用量明细','此区间暂无请求'],['我的钱包','支付服务尚未配置']]) {
-    await h.page.getByRole('link',{name:link,exact:true}).click(); await h.page.getByText(text,{exact:true}).waitFor();
+  for (const [path,text] of [['/accounts','还没有账号'],['/devices','还没有连接设备'],['/usage','此区间暂无请求'],['/wallet','支付服务尚未配置']]) {
+    await h.page.goto(h.fixture.origin+path); await h.page.getByText(text,{exact:true}).waitFor();
   }
   assert.equal(await h.page.getByRole('button',{name:'在线支付未启用',exact:true}).isDisabled(),true);
   assert.equal(await h.page.getByLabel('充值金额（人民币元）').isDisabled(),true);
   assert.equal(h.fixture.state.requests.filter(r => r.path === '/api/me/payments').length,0);
-  await h.page.getByText('本页仅展示人民币余额、账本与支付订单。参考 USD 不是零售费用；本工作台不提供手动充值入口。',{exact:true}).waitFor();
   await h.page.getByRole('link',{name:'个人设置',exact:true}).click(); await h.page.getByRole('heading',{name:'登录安全',exact:true}).waitFor();
 });
 
 test('admin uses the same layout and sees only genuine empty data/configuration',async t => {
   const h = await harness(t); await login(h,'admin');
-  for (const title of ['客户管理','资源与授权','API 接入','支付订单','审计日志','站点设置']) assert.equal(await h.page.getByRole('link',{name:title,exact:true}).count(),1);
-  for (const [link,text] of [['资源与授权','尚无可分配资源'],['API 接入','暂无 API 客户'],['支付订单','暂无支付订单'],['审计日志','暂无审计记录'],['站点设置','上游服务连接']]) {
+  for (const title of ['客户管理','账号库存','审计日志','站点设置']) assert.equal(await h.page.getByRole('link',{name:title,exact:true}).count(),1);
+  for (const [link,text] of [['账号库存','暂无账号'],['审计日志','暂无审计记录'],['站点设置','公开站点信息']]) {
     await h.page.getByRole('link',{name:link,exact:true}).click(); await h.page.getByText(text,{exact:true}).waitFor();
   }
   if (process.env.CCB_BROWSER_CAPTURE === '1') { await mkdir(captureRoot,{recursive:true}); await h.page.screenshot({path:resolve(captureRoot,'admin-settings.png'),fullPage:true}); }
-  assert.equal(await h.page.locator('input[type=password]').count(),0,'Admin settings cannot edit upstream secrets');
+  assert.equal(await h.page.locator('#public input[type=password]').count(),0,'Public settings do not collect secrets');
   assert.equal(h.fixture.state.requests.some(r => r.method !== 'GET' && r.path.startsWith('/api/admin/')),false);
 });
 
+
+test('payment settings show configurable sources but not uncollectable checkout methods', async t => {
+  const h = await harness(t); await login(h,'admin');
+  await h.page.getByRole('link',{name:'站点设置',exact:true}).click();
+  await h.page.getByRole('tab',{name:'邮件与支付',exact:true}).click();
+  await h.page.getByText('不能创建支付单',{exact:false}).waitFor();
+  await h.page.getByLabel('支付宝来源',{exact:true}).waitFor();
+  await h.page.getByLabel('微信支付来源',{exact:true}).waitFor();
+  assert.equal(await h.page.getByRole('button',{name:'保存支付方式',exact:true}).count(),1);
+  assert.equal(await h.page.getByRole('checkbox',{name:'前台展示支付宝',exact:true}).isChecked(), false);
+  assert.equal(h.fixture.state.requests.some(r => r.method === 'PATCH' && r.path === '/api/admin/settings'), false);
+});
 test('unconfigured public features remain inaccessible, including direct URLs',async t => {
   const {page,fixture} = await harness(t); await page.goto(fixture.origin + '/login');
   await page.getByRole('heading',{name:'欢迎回来',exact:true}).waitFor();
@@ -105,19 +117,22 @@ test('one-time setup requires confirmation and establishes server administrator 
   await page.getByLabel('电子邮箱',{exact:true}).fill('owner@example.test'); await page.getByLabel('密码',{exact:true}).fill('fixture-setup-password-123'); await page.getByLabel('确认密码',{exact:true}).fill('fixture-setup-password-123');
   await page.getByRole('button',{name:'创建管理员',exact:true}).click(); await page.getByRole('dialog').waitFor();
   assert.equal(fixture.state.requests.filter(r => r.path === '/api/setup').length,0);
-  await page.getByRole('button',{name:'确认初始化',exact:true}).click(); await page.getByRole('heading',{name:'上游接入',exact:true}).waitFor(); await page.getByRole('link',{name:'稍后配置，返回工作台',exact:true}).click(); await page.getByRole('heading',{name:'工作概览',exact:true}).waitFor();
+  await page.getByRole('button',{name:'确认初始化',exact:true}).click(); await page.getByRole('heading',{name:'上游接入',exact:true}).waitFor(); await page.getByRole('link',{name:'稍后配置，返回工作台',exact:true}).click(); await page.getByRole('heading',{name:'首页',exact:true}).waitFor();
   assert.equal(await page.getByRole('link',{name:'客户管理',exact:true}).count(),1);
 });
 
 test('connect query survives login without auto-approval; writes use cookie and CSRF',async t => {
   const h = await harness(t,{connected:true}); await login(h,'member','/connect?code=TEST-CONNECT');
-  await h.page.getByRole('heading',{name:'连接设备',exact:true}).waitFor(); assert.equal(new URL(h.page.url()).pathname,'/connect'); assert.equal(new URL(h.page.url()).search,'');
+  await h.page.getByRole('heading',{name:'开始使用',exact:true}).waitFor(); assert.equal(new URL(h.page.url()).pathname,'/connect'); assert.equal(new URL(h.page.url()).search,'');
   assert.equal(await h.page.getByLabel('CCB 连接码',{exact:true}).inputValue(),'TEST-CONNECT');
+  assert.equal(await h.page.getByLabel('网关地址',{exact:true}).count(),0);
+  assert.equal(await h.page.getByText(`ccb login --gateway ${h.fixture.origin}`,{exact:true}).count(),1);
+  assert.equal(await h.page.getByText('npm install -g @rimuruchan/ccb',{exact:true}).count(),1);
   assert.equal(h.fixture.state.requests.filter(r => r.path.includes('/devices/approve')).length,0);
   await h.page.getByRole('button',{name:'查看设备信息',exact:true}).click(); await h.page.getByText('我的测试笔记本',{exact:true}).waitFor();
   await h.page.getByRole('button',{name:'确认授权此设备',exact:true}).click(); await h.page.getByRole('dialog').waitFor();
   assert.equal(h.fixture.state.requests.filter(r => r.path.includes('/devices/approve')).length,0);
-  await h.page.getByRole('button',{name:'确认授权',exact:true}).click(); await h.page.getByRole('heading',{name:'设备管理',exact:true}).waitFor();
+  await h.page.getByRole('button',{name:'确认授权',exact:true}).click(); await h.page.getByRole('heading',{name:'我的设备',exact:true}).waitFor();
   const writes = h.fixture.state.requests.filter(r => ['/api/me/devices/preview','/api/me/devices/approve'].includes(r.path));
   assert.equal(writes.length,2); for (const req of writes) { assert.equal(req.authenticated,true); assert.match(req.csrf,/^fixture-csrf-/); assert.equal(req.origin,h.fixture.origin); assert.equal(req.body.code,'TEST-CONNECT'); }
   await h.page.getByRole('button',{name:'撤销连接',exact:true}).click(); await h.page.getByRole('dialog').getByRole('button',{name:'取消',exact:true}).click();
@@ -128,12 +143,12 @@ test('grant revoke carries exact revision, rejects 409, then requires fresh expl
   const resource = {id:'resource-1',name:'测试 Code 资源',status:'active',capacity:5,allocated:1,revision:2,surfaces:['code'],expires_at:null};
   const grant = {id:'grant-1',resource_id:resource.id,name:resource.name,status:'active',revision:7,surfaces:['code'],expires_at:null};
   const h = await harness(t,{connected:true,resources:[resource],grants:[grant]}); await login(h,'admin'); h.fixture.state.grantConflict = true;
-  await h.page.goto(h.fixture.origin+'/admin/resources?user_id=member-1'); await h.page.getByRole('button',{name:'撤销授权',exact:true}).waitFor();
-  await h.page.getByRole('button',{name:'撤销授权',exact:true}).click(); await h.page.getByRole('dialog').getByRole('button',{name:'撤销授权',exact:true}).click();
+  await h.page.goto(h.fixture.origin+'/admin/inventory?user_id=member-1'); await h.page.getByRole('button',{name:'收回账号',exact:true}).waitFor();
+  await h.page.getByRole('button',{name:'收回账号',exact:true}).click(); await h.page.getByRole('dialog').getByRole('button',{name:'确认收回',exact:true}).click();
   await h.page.getByText('状态冲突，未覆盖新版本',{exact:true}).waitFor();
   let writes = h.fixture.state.requests.filter(r => r.method === 'PATCH' && r.path === '/api/admin/grants/grant-1'); assert.equal(writes.length,1); assert.equal(writes[0].body.expected_revision,7); assert.equal(h.fixture.state.grants[0].status,'active');
-  await h.page.getByRole('button',{name:'刷新最新状态',exact:true}).click(); await h.page.getByRole('button',{name:'撤销授权',exact:true}).click(); await h.page.getByRole('dialog').getByRole('button',{name:'撤销授权',exact:true}).click();
-  await h.page.getByRole('button',{name:'恢复授权',exact:true}).waitFor(); writes = h.fixture.state.requests.filter(r => r.method === 'PATCH' && r.path === '/api/admin/grants/grant-1'); assert.equal(writes.length,2); assert.equal(writes[1].body.expected_revision,8);
+  await h.page.getByRole('button',{name:'刷新最新状态',exact:true}).click(); await h.page.getByRole('button',{name:'收回账号',exact:true}).click(); await h.page.getByRole('dialog').getByRole('button',{name:'确认收回',exact:true}).click();
+  await h.page.getByRole('button',{name:'分配客户',exact:true}).waitFor(); writes = h.fixture.state.requests.filter(r => r.method === 'PATCH' && r.path === '/api/admin/grants/grant-1'); assert.equal(writes.length,2); assert.equal(writes[1].body.expected_revision,8);
 });
 
 test('last-admin error is actionable and never locally changes the current role',async t => {
@@ -145,7 +160,7 @@ test('last-admin error is actionable and never locally changes the current role'
 
 
 test('ambiguous write is not retried or reported successful',async t => {
-  const h = await harness(t,{features:{payment:true}}); await login(h); await h.page.getByRole('link',{name:'我的钱包',exact:true}).click();
+  const h = await harness(t,{features:{payment:true}}); await login(h); await h.page.goto(h.fixture.origin+'/wallet');
   h.fixture.state.disconnected.add('/api/me/payments'); await h.page.getByLabel('充值金额（人民币元）').fill('12.34');
   await h.page.getByRole('button',{name:'创建 Stripe 支付订单',exact:true}).click(); await h.page.getByRole('button',{name:'创建订单',exact:true}).click();
   await h.page.getByText('操作结果尚未确认',{exact:true}).waitFor(); assert.equal(await h.page.getByRole('button',{name:'创建 Stripe 支付订单',exact:true}).isDisabled(),true);
@@ -153,7 +168,7 @@ test('ambiguous write is not retried or reported successful',async t => {
 });
 
 test('unsafe checkout URL is inert and amount is sent as integer minor units',async t => {
-  const h = await harness(t,{features:{payment:true},checkoutUrl:'javascript:globalThis.checkoutLeak=true'}); await login(h); await h.page.getByRole('link',{name:'我的钱包',exact:true}).click();
+  const h = await harness(t,{features:{payment:true},checkoutUrl:'javascript:globalThis.checkoutLeak=true'}); await login(h); await h.page.goto(h.fixture.origin+'/wallet');
   await h.page.getByLabel('充值金额（人民币元）').fill('12.34'); await h.page.getByRole('button',{name:'创建 Stripe 支付订单',exact:true}).click(); await h.page.getByRole('button',{name:'创建订单',exact:true}).click();
   await h.page.getByText('订单已记录，但支付链接不可安全使用',{exact:true}).waitFor(); assert.equal(await h.page.locator('a[href^="javascript:"]').count(),0);
   assert.equal(h.fixture.state.requests.find(r => r.path === '/api/me/payments').body.amount_minor,1234); assert.equal(await h.page.evaluate(() => globalThis.checkoutLeak),undefined);
@@ -161,7 +176,7 @@ test('unsafe checkout URL is inert and amount is sent as integer minor units',as
 });
 
 test('valid checkout is an explicit external link, never an automatic redirect or charge',async t => {
-  const h = await harness(t,{features:{payment:true}}); await login(h); await h.page.getByRole('link',{name:'我的钱包',exact:true}).click();
+  const h = await harness(t,{features:{payment:true}}); await login(h); await h.page.goto(h.fixture.origin+'/wallet');
   await h.page.getByLabel('充值金额（人民币元）').fill('20.00'); await h.page.getByRole('button',{name:'创建 Stripe 支付订单',exact:true}).click(); await h.page.getByRole('button',{name:'创建订单',exact:true}).click();
   const link = h.page.getByRole('link',{name:'打开 Stripe 收银台 ↗',exact:true}); await link.waitFor(); assert.equal(await link.getAttribute('target'),'_blank'); assert.equal(await link.getAttribute('rel'),'noopener noreferrer'); assert.equal(new URL(h.page.url()).origin,h.fixture.origin);
 });
@@ -170,43 +185,35 @@ test('API failures are not converted into empty success and malicious display te
   const h = await harness(t,{displayName:'<img src=x onerror="globalThis.injected=true">'}); await login(h);
   assert.equal(await h.page.locator('.user-info img').count(),0); assert.equal(await h.page.evaluate(() => globalThis.injected),undefined);
   h.fixture.state.failures.set('/api/me/usage',{status:503,code:'core_unavailable',message:'核心服务不可用。'});
-  await h.page.getByRole('link',{name:'用量明细',exact:true}).click(); await h.page.getByRole('heading',{name:'数据暂不可用',exact:true}).waitFor(); assert.equal(await h.page.getByText('此区间暂无请求',{exact:true}).count(),0);
+  await h.page.getByRole('link',{name:'使用记录',exact:true}).click(); await h.page.getByRole('heading',{name:'数据暂不可用',exact:true}).waitFor(); assert.equal(await h.page.getByText('此区间暂无请求',{exact:true}).count(),0);
   await h.page.getByRole('button',{name:'重试读取',exact:true}).click(); await h.page.getByText('此区间暂无请求',{exact:true}).waitFor();
 });
 
 test('responsive light/dark layout has no page overflow and preference persists',async t => {
-  const h = await harness(t); await login(h); await h.page.getByRole('heading',{name:'我的资源',exact:true}).waitFor();
+  const h = await harness(t); await login(h); await h.page.getByRole('heading',{name:'用量',exact:true}).waitFor();
   if (process.env.CCB_BROWSER_CAPTURE === '1') { await mkdir(captureRoot,{recursive:true}); await h.page.screenshot({path:resolve(captureRoot,'overview-light.png'),fullPage:true}); }
   await h.page.getByRole('button',{name:'切换深色主题',exact:true}).click(); assert.equal(await h.page.locator('html').getAttribute('data-theme'),'dark');
   if (process.env.CCB_BROWSER_CAPTURE === '1') await h.page.screenshot({path:resolve(captureRoot,'overview-dark.png'),fullPage:true});
-  await h.page.reload(); await h.page.getByRole('heading',{name:'我的资源',exact:true}).waitFor(); assert.equal(await h.page.locator('html').getAttribute('data-theme'),'dark');
+  await h.page.reload(); await h.page.getByRole('heading',{name:'用量',exact:true}).waitFor(); assert.equal(await h.page.locator('html').getAttribute('data-theme'),'dark');
   await h.page.setViewportSize({width:390,height:844}); assert.equal(await h.page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth),true);
   if (process.env.CCB_BROWSER_CAPTURE === '1') await h.page.screenshot({path:resolve(captureRoot,'overview-mobile.png'),fullPage:true});
-  await h.page.getByRole('button',{name:'打开导航',exact:true}).click(); await h.page.getByRole('link',{name:'我的权益',exact:true}).click(); await h.page.getByText('尚未分配权益',{exact:true}).waitFor();
+  await h.page.getByRole('button',{name:'打开导航',exact:true}).click(); await h.page.getByRole('link',{name:'我的账号',exact:true}).click(); await h.page.getByText('还没有账号',{exact:true}).waitFor();
   assert.equal(await h.page.getByRole('button',{name:'打开导航',exact:true}).getAttribute('aria-expanded'),'false');
 });
 
 test('partial overview failures preserve unknown counters even when core itself is available',async t => {
   const h = await harness(t,{connected:true,pending:['grants_unavailable','devices_unavailable','usage_unavailable']}); await login(h);
   await h.page.getByText('权益数据暂不可用 · 设备数据暂不可用 · 用量统计暂不可用',{exact:true}).waitFor();
-  assert.equal(await h.page.getByText('—',{exact:true}).count(),3);
-  await h.page.getByText('等待资源连接',{exact:true}).waitFor(); assert.equal(await h.page.getByText('还没有可用权益',{exact:true}).count(),0);
+  assert.equal(await h.page.locator('.overview-page .is-unknown').count(),15);
+  assert.equal(await h.page.getByText('0',{exact:true}).count(),0);
+  await h.page.getByText('用量汇总尚未返回。缺失项保持未知，不会显示为 0。',{exact:true}).waitFor(); assert.equal(await h.page.getByText('还没有可用权益',{exact:true}).count(),0); assert.equal(await h.page.getByText('累计还没有模型请求。',{exact:true}).count(),0);
 });
 
-test('customer create/provision and resource assignment are distinct confirmed writes',async t => {
-  const resource = {id:'resource-1',name:'仅供回归的 Code 资源',status:'active',capacity:3,allocated:0,revision:1,surfaces:['code'],expires_at:null};
-  const h = await harness(t,{connected:true,resources:[resource]}); await login(h,'admin'); await h.page.getByRole('link',{name:'客户管理',exact:true}).click();
-  await h.page.getByRole('button',{name:'创建客户',exact:true}).click(); await h.page.getByLabel('电子邮箱',{exact:true}).fill('new-customer@example.test');
-  await h.page.getByLabel('初始密码',{exact:true}).fill('fixture-only-new-password'); await h.page.getByLabel('显示名称',{exact:true}).fill('回归测试客户');
-  await h.page.getByRole('button',{name:'创建客户账户',exact:true}).click(); assert.equal(h.fixture.state.users.length,2);
-  await h.page.getByRole('dialog').filter({hasText:'确认创建客户'}).getByRole('button',{name:'确认保存',exact:true}).click();
-  const row = h.page.getByRole('row').filter({hasText:'new-customer@example.test'}); await row.waitFor(); assert.equal(h.fixture.state.users[2].core_customer_id,undefined);
-  await row.getByRole('button',{name:'开通映射',exact:true}).click(); await h.page.getByRole('button',{name:'确认开通',exact:true}).click();
-  await row.getByRole('link',{name:'管理授权',exact:true}).click(); await h.page.getByRole('button',{name:'分配资源',exact:true}).click();
-  await h.page.getByRole('combobox',{name:'分配资源',exact:true}).selectOption('resource-1'); await h.page.getByRole('dialog').getByRole('button',{name:'分配资源',exact:true}).click();
-  await h.page.getByRole('button',{name:'确认授权',exact:true}).click(); await h.page.getByRole('button',{name:'撤销授权',exact:true}).waitFor();
-  const grant = h.fixture.state.requests.find(r => r.method === 'POST' && r.path === '/api/admin/grants'); assert.deepEqual(grant.body,{user_id:'user-3',resource_id:'resource-1',expires_at:null});
-  assert.equal(h.fixture.state.requests.filter(r => r.path === '/api/admin/users/user-3/provision').length,1);
+test('customer management creates local accounts without exposing a provisioning or resource editor',async t=>{
+ const h=await harness(t,{connected:true});await login(h,'admin');await h.page.getByRole('link',{name:'客户管理',exact:true}).click();
+ await h.page.getByRole('button',{name:'创建客户',exact:true}).click();
+ const dialog=h.page.getByRole('dialog',{name:'创建客户账户'});await dialog.getByLabel('电子邮箱',{exact:true}).fill('new@example.test');await dialog.getByLabel('初始密码',{exact:true}).fill('fixture-password-123');await dialog.getByLabel('显示名称',{exact:true}).fill('新客户');await dialog.getByRole('button',{name:'创建客户账户',exact:true}).click();await h.page.getByRole('dialog').filter({hasText:'确认创建客户'}).getByRole('button',{name:'确认保存',exact:true}).click();
+ await dialog.waitFor({state:'hidden'});const row=h.page.getByRole('row').filter({hasText:'new@example.test'});await row.waitFor();assert.equal(await row.getByRole('button',{name:'开通映射',exact:true}).count(),0);await row.getByRole('link',{name:'查看账号',exact:true}).click();await h.page.getByRole('heading',{name:'账号库存',exact:true}).first().waitFor();assert.ok(!h.fixture.state.requests.some(r=>r.path.endsWith('/provision')));
 });
 
 test('settings save only public fields; profile password update returns to authentication',async t => {
@@ -223,15 +230,15 @@ test('settings save only public fields; profile password update returns to authe
 
 test('loading is visible and expired sessions explicitly request fresh login',async t => {
   const h = await harness(t); await login(h); h.fixture.state.delays.set('/api/me/grants',600);
-  await h.page.getByRole('link',{name:'我的权益',exact:true}).click(); await h.page.getByText('正在读取最新数据…',{exact:true}).waitFor(); await h.page.getByText('尚未分配权益',{exact:true}).waitFor();
-  h.fixture.state.sessions.clear(); await h.page.getByRole('link',{name:'设备管理',exact:true}).click(); await h.page.getByText('登录已失效',{exact:true}).waitFor();
+  await h.page.getByRole('link',{name:'我的账号',exact:true}).click(); await h.page.getByText('正在读取最新数据…',{exact:true}).waitFor(); await h.page.getByText('还没有账号',{exact:true}).waitFor();
+  h.fixture.state.sessions.clear(); await h.page.getByRole('link',{name:'我的账号',exact:true}).click(); await h.page.getByText('登录已失效',{exact:true}).waitFor();
   await h.page.getByRole('button',{name:'重新登录',exact:true}).click(); await h.page.getByRole('heading',{name:'欢迎回来',exact:true}).waitFor();
-  await h.page.getByLabel('电子邮箱',{exact:true}).fill(fixtureAccounts.member.email); await h.page.getByLabel('密码',{exact:true}).fill(fixtureAccounts.member.password); await h.page.getByRole('button',{name:'登录工作台',exact:true}).click(); await h.page.getByRole('heading',{name:'设备管理',exact:true}).waitFor();
+  await h.page.getByLabel('电子邮箱',{exact:true}).fill(fixtureAccounts.member.email); await h.page.getByLabel('密码',{exact:true}).fill(fixtureAccounts.member.password); await h.page.getByRole('button',{name:'登录工作台',exact:true}).click(); await h.page.getByRole('heading',{name:'我的账号',exact:true}).first().waitFor();
 });
 
 test('unsafe return targets and non-Stripe HTTPS checkout origins are never navigated',async t => {
   const h = await harness(t,{features:{payment:true},checkoutUrl:'https://untrusted.invalid/checkout'}); await login(h,'member','/login?next=https%3A%2F%2Funtrusted.invalid%2Fsteal');
-  assert.equal(new URL(h.page.url()).pathname,'/'); await h.page.getByRole('link',{name:'我的钱包',exact:true}).click(); await h.page.getByLabel('充值金额（人民币元）').fill('20.00');
+  assert.equal(new URL(h.page.url()).pathname,'/'); await h.page.goto(h.fixture.origin+'/wallet'); await h.page.getByLabel('充值金额（人民币元）').fill('20.00');
   await h.page.getByRole('button',{name:'创建 Stripe 支付订单',exact:true}).click(); await h.page.getByRole('button',{name:'创建订单',exact:true}).click(); await h.page.getByText('订单已记录，但支付链接不可安全使用',{exact:true}).waitFor();
   assert.equal(await h.page.getByRole('link',{name:'打开 Stripe 收银台 ↗',exact:true}).count(),0);
 });

@@ -49,6 +49,7 @@ export function loadConfig(env = process.env, root = process.cwd()) {
     runtimeBodyLimit: integer('RUNTIME_BODY_LIMIT', 33554432, 4096, 33554432),
     jsonBodyLimit: 65536, sessionMs: 12 * 60 * 60 * 1000,
     siteName: env.SITE_NAME || 'CCB Merchant',
+    homePreviewSample: env.HOME_PREVIEW_SAMPLE === 'true',
     mail: mailConfigured ? {
       host: env.SMTP_HOST, port: smtpPort, secure: smtpPort === 465,
       requireTLS: true, from: env.SMTP_FROM,

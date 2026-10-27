@@ -12,7 +12,7 @@ export class Store {
     chmodSync(path, 0o600);
     try {
       const tables=this.db.prepare("SELECT count(*) AS n FROM sqlite_schema WHERE type='table' AND name NOT LIKE 'sqlite_%'").get().n;
-      if(tables && (this.db.prepare('PRAGMA application_id').get().application_id!==1128481357 || this.db.prepare('PRAGMA user_version').get().user_version!==2)) throw new Error('Database schema does not match this build; use a matching or empty data directory');
+      if(tables && (this.db.prepare('PRAGMA application_id').get().application_id!==1128481357 || ![2,3,4].includes(this.db.prepare('PRAGMA user_version').get().user_version))) throw new Error('Database schema does not match this build; use a matching or empty data directory');
       this.db.exec('PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000;');
       if(!tables) {
         this.db.exec('BEGIN IMMEDIATE');
@@ -22,6 +22,17 @@ export class Store {
         this.db.exec('ALTER TABLE access_keys ADD COLUMN token TEXT');
       }
     } catch(error) { this.db.close(); throw error; }
+    // Additive local schema changes preserve existing users, wallets and receipts.
+    this.db.exec('BEGIN IMMEDIATE');
+    try {
+      for (const [table, columns] of Object.entries({rentals:{platform:"TEXT NOT NULL DEFAULT ''",account_lease_id:"TEXT NOT NULL DEFAULT ''",renew_grant_id:"TEXT NOT NULL DEFAULT ''"},plans:{source_plan_id:'TEXT',source_revision:'INTEGER',cost_minor:'INTEGER'}})) {
+        const existing=new Set(this.db.prepare(`PRAGMA table_info(${table})`).all().map(c=>c.name));
+        for(const [name,type] of Object.entries(columns)) if(!existing.has(name)) this.db.exec(`ALTER TABLE ${table} ADD COLUMN ${name} ${type}`);
+      }
+      this.db.exec(readFileSync(new URL('./inventory-schema.sql',import.meta.url),'utf8'));
+      this.db.exec('PRAGMA user_version=4');
+      this.db.exec('COMMIT');
+    } catch(error) {this.db.exec('ROLLBACK');this.db.close();throw error;}
     this.db.prepare('INSERT OR IGNORE INTO settings VALUES (?,?)').run('site', JSON.stringify({ name: config.siteName, description: '', support_email: '', currency: 'CNY', registration_enabled: false }));
     this.db.prepare('INSERT OR IGNORE INTO settings VALUES (?,?)').run('runtime_salt', randomToken());
     this.setupFile = join(config.dataDir, 'setup.secret');
@@ -86,5 +97,5 @@ export function publicOrder(order) {
 
 
 export function publicRental(row) {
- return {id:row.id,user_id:row.user_id,plan_id:row.plan_id,plan_revision:row.plan_revision,name:row.name,duration_days:row.duration_days,amount_minor:row.amount_minor,currency:row.currency,payment_method:row.payment_method,status:row.status,grant_id:row.grant_id,expires_at:row.expires_at,attempts:row.attempts,last_error:row.last_error,revision:row.revision,created_at:row.created_at,updated_at:row.updated_at};
+ return {id:row.id,user_id:row.user_id,plan_id:row.plan_id,plan_revision:row.plan_revision,name:row.name,duration_days:row.duration_days,amount_minor:row.amount_minor,currency:row.currency,payment_method:row.payment_method,platform:row.platform||'',renew_grant_id:row.renew_grant_id||'',status:row.status,grant_id:row.grant_id,expires_at:row.expires_at,attempts:row.attempts,last_error:row.last_error,revision:row.revision,created_at:row.created_at,updated_at:row.updated_at};
 }

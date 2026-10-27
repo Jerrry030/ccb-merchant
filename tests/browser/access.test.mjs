@@ -23,7 +23,7 @@ test('actual wizard and local API account UI isolate credentials, manage resourc
  await page.getByLabel('上游商户密钥',{exact:true}).fill(upstreamKey);await page.getByLabel('接入操作',{exact:true}).selectOption('save');await page.getByRole('button',{name:'执行接入检查',exact:true}).click();await page.getByRole('dialog').getByRole('button',{name:'确认保存',exact:true}).click();
  await page.getByText('上游连接已保存',{exact:true}).waitFor();assert.equal(await page.getByLabel('上游商户密钥',{exact:true}).inputValue(),'');
  const artifacts=resolve(project,'tests/browser/artifacts');await mkdir(artifacts,{recursive:true});await page.screenshot({path:resolve(artifacts,'direct-upstream.png'),fullPage:true});
- await page.getByRole('link',{name:'API 接入',exact:true}).click();await page.getByRole('button',{name:'创建 API 客户',exact:true}).click();
+ await page.goto(f.config.publicOrigin+'/admin/access');await page.getByRole('button',{name:'创建 API 客户',exact:true}).click();
  await page.getByLabel('接入标识',{exact:true}).fill('client-c');await page.getByLabel('客户名称',{exact:true}).fill('直接客户 C');assert.equal(await page.getByLabel('客户站点地址',{exact:true}).count(),0);
  await page.getByRole('button',{name:'保存接入账户',exact:true}).click();await page.getByRole('dialog').getByRole('button',{name:'确认保存',exact:true}).click();
  await page.getByRole('row').filter({hasText:'直接客户 C'}).getByRole('link',{name:'资源与密钥',exact:true}).click();await page.getByRole('button',{name:'分配资源',exact:true}).click();
@@ -34,6 +34,7 @@ test('actual wizard and local API account UI isolate credentials, manage resourc
  await page.getByRole('dialog',{name:'接入密钥'}).waitFor();const token=await page.locator('.secret').textContent();assert.match(token,/^ccbm_[a-f0-9]{64}$/);
  assert.equal(await page.evaluate(()=>JSON.stringify({...localStorage,...sessionStorage})).then(v=>v.includes(token)),false);
  await page.getByRole('button',{name:'关闭',exact:true}).click();assert.equal((await page.content()).includes(token),false);
+ await page.getByRole('button',{name:'刷新',exact:true}).click();await page.getByRole('row').filter({hasText:'C 生产接入'}).waitFor();
  await page.getByRole('button',{name:'查看',exact:true}).click();await page.getByRole('dialog',{name:'接入密钥'}).waitFor();
  assert.equal(await page.locator('.secret').textContent(),token);await page.getByRole('button',{name:'关闭',exact:true}).click();
  assert.equal((await page.content()).includes(token),false);

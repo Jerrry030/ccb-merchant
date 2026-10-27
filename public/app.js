@@ -1,28 +1,30 @@
+import { normalizeRegistrationEmailSuffixDomain, isRegistrationEmailSuffixDomainValid, parseRegistrationEmailSuffixWhitelistInput } from './registration-policy.js';
+import { describePaymentCatalog, emptyPaymentCatalog } from './payment-catalog.js';
+import { usageDetail } from './usage-detail.js';
 /* Standalone merchant client. Only /api on this origin; no stored credentials or demo data. */
 const app = document.getElementById('app');
 const state = { public: null, user: null, csrf: null, returnTo: '/', code: '', token: '', view: 0 };
 const CANCEL = Symbol('cancel');
 const authRoutes = new Set(['/login', '/setup', '/register', '/verify', '/forgot', '/reset']);
 const navigation = [
-  { path: '/', title: '工作概览', icon: 'overview', description: '您的权益、设备与使用情况，一目了然。' },
-  { path: '/plans', title:'套餐与续期', icon:'layers', description:'按期限购买 Code 使用权，价格在下单时锁定。' },
-  { path: '/orders', title:'我的订单', icon:'receipt', description:'核对套餐支付、开通、续期及退回余额。' },
-  { path: '/rights', title: '我的权益', icon: 'layers', description: '查看商户已为您分配的 Code 资源与有效期。' },
-  { path: '/devices', title: '设备管理', icon: 'monitor', description: '查看、核对和撤销已连接的 CCB 客户端。' },
-  { path: '/usage', title: '用量明细', icon: 'chart', description: '查看请求与 Token。参考成本只供核对，不会从钱包扣费。' },
-  { path: '/wallet', title: '我的钱包', icon: 'wallet', description: '查看人民币余额、支付订单和资金记录。与参考用量成本分开。' },
+  { path: '/', title: '首页', icon: 'overview', description: '查看账单与用量。参考费用只供核对，不会从钱包扣费。' },
+  { path: '/connect',hidden:true, title: '开始使用', icon: 'terminal', description: '安装 CCB、登录本站并确认设备，然后在项目目录开始工作。' },
+  { path: '/accounts', title: '我的账号', icon: 'layers', description: '查看已分配或订阅交付的账号、额度和正在使用的设备。' },
+  { path: '/devices',hidden:true, title: '我的设备', icon: 'monitor', description: '每个账号最多绑定 1 台设备。换机请先撤销旧设备，再连接新设备。' },
+  { path: '/usage', title: '使用记录', icon: 'chart', description: '查看请求与 Token。参考成本只供核对，不会从钱包扣费。' },
+  { path: '/wallet',hidden:true, title: '充值/订阅', icon: 'wallet', description: '充值人民币余额，或购买固定期限订阅。购买时选择一个登录平台，并查看是否有货。' },
   { path: '/profile', title: '个人设置', icon: 'user', description: '查看账户信息，维护您的登录安全。' },
+  { path: '/orders', title:'我的订单', icon:'receipt', description:'核对套餐支付、开通、续期及退回余额。' },
   { path:'/admin/upstream',title:'上游接入',icon:'link',admin:true,hidden:true,description:'连接直接上级，核对本站账户与可用资源。' },
-  { path:'/admin/access',title:'API 接入',icon:'key',admin:true,description:'管理直接接入本站的客户、密钥和资源范围。' },
-  { path: '/admin/customers', title: '客户管理', icon: 'users', admin: true, description: '管理本站成员，并为需要使用资源的成员开通上游客户。' },
-  { path: '/admin/resources', title: '资源与授权', icon: 'grid', admin: true, description: '查看可分配资源，管理每位客户的访问权益。' },
-  { path:'/admin/plans',title:'套餐管理',icon:'layers',admin:true,description:'选择已分配的 Code 供给，设置明确的租期和销售价。' },
-  { path:'/admin/rentals',title:'销售与交付',icon:'receipt',admin:true,description:'核对销售订单和交付结果，处理尚未交付的订单。' },
+  { path:'/admin/access',hidden:true,title:'API 接入',icon:'key',admin:true,description:'管理直接接入本站的客户、密钥和资源范围。' },
+  { path: '/admin/customers', title: '客户管理', icon: 'users', admin: true, description: '管理客户资料，在账号库存中为客户分配账号。' },
+  { path:'/admin/inventory',title:'账号库存',icon:'layers',admin:true,description:'查看平台管理员分配的账号、有效期和客户分配状态。每个账号最多绑定 1 台设备。' },
+  { path:'/admin/plans',hidden:true,title:'套餐管理',icon:'layers',admin:true,description:'只为订阅分组设置有效期和金额。普通分组不在这里出售。' },
+  { path:'/admin/rentals',hidden:true,title:'销售与交付',icon:'receipt',admin:true,description:'核对销售订单和交付结果，处理尚未交付的订单。' },
   { path:'/admin/operations',title:'运营待办',icon:'overview',admin:true,description:'处理客户同步、支付核对和交付异常。' },
-  { path: '/admin/orders', title: '支付订单', icon: 'receipt', admin: true, description: '核对服务端记录的支付状态，不以回跳参数判定到账。' },
+  { path: '/admin/orders',hidden:true, title: '支付订单', icon: 'receipt', admin: true, description: '核对服务端记录的支付状态，不以回跳参数判定到账。' },
   { path: '/admin/audit', title: '审计日志', icon: 'shield', admin: true, description: '查看管理操作记录，追溯变更与授权。' },
-  { path: '/admin/settings', title: '站点设置', icon: 'settings', admin: true, description: '管理公开信息、注册和上游连接，并查看邮件与支付的配置状态。' },
-  { path: '/connect', title: '连接设备', icon: 'link', hidden: true, description: '核对 CCB 客户端的连接请求，仅授权您正在使用的设备。' },
+  { path: '/admin/settings', title: '站点设置', icon: 'settings', admin: true, description: '管理公开信息、注册策略、上游连接，以及邮件和支付服务。' },
 ];
 const paths = {
   overview: ['M3 3h7v7H3zM14 3h7v7h-7zM3 14h7v7H3zM14 14h7v7h-7z'],
@@ -47,9 +49,14 @@ const paths = {
   info: ['M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0ZM12 11v6M12 7h.1'],
   clock: ['M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0ZM12 7v5l3 2'],
   code: ['m8 5-7 7 7 7M16 5l7 7-7 7M14 3l-4 18'],
+  terminal: ['M4 5h16v14H4z','m7 9 3 3-3 3','M13 15h5'],
   menu: ['M4 6h16M4 12h16M4 18h16'],
   close: ['m6 6 12 12M6 18 18 6'],
   check: ['m5 12 4 4L19 6'],
+  down: ['M12 4v16M6 14l6 6 6-6'],
+  up: ['M12 20V4M6 10l6-6 6 6'],
+  cache: ['M4 7h16M4 7a2 2 0 0 1 0-4h16a2 2 0 0 1 0 4M4 7v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7M9 12h6'],
+  edit: ['M12 20h8M16.5 3.5a2.1 2.1 0 0 1 3 3L8 18l-4 1 1-4Z'],
 };
 
 function el(tag, props = {}, ...children) {
@@ -128,7 +135,7 @@ async function api(path, {method = 'GET', body} = {}) {
     catch { throw Object.assign(new Error(write ? '服务器未返回可确认的结果。' : '服务器响应格式异常。'),{uncertain:write,status:response.status}); }
     if (!response.ok) {
       const code = data.error?.code;
-      const messages = {upstream_target_blocked:'此上游目标被服务器网络策略拒绝。私网或 HTTP 地址需由部署者设置 UPSTREAM_ALLOWED_ORIGINS。',upstream_identity_mismatch:'已有业务数据绑定了另一个上游身份，不能在这里直接切换。',upstream_protocol_mismatch:'上游协议不兼容或接入账户已失效。',upstream_verification_failed:'上游未能验证本站凭据，请检查地址、密钥及上级状态。',upstream_changed:'接入配置已变化，请刷新后重新核对。',upstream_environment_managed:'本站上游由服务端环境配置管理，网页不能覆盖。',insufficient_balance:'钱包余额不足，请先充值或选择在线支付。',plan_changed:'套餐价格或状态已更新，请刷新并重新确认。',plan_conflict:'套餐版本已变化，请刷新后再编辑。',supply_unavailable:'供给不可用或期限不足，暂时无法购买此套餐。',purchase_pending:'此资源已有待完成订单，请先在我的订单中核对。',purchase_conflict:'该请求编号已用于另一笔购买，请核对已有订单。',customer_not_ready:'客户正在停用或同步中，暂时不能开通使用权。',order_state:'订单状态已变化，请刷新核对；已交付订单不能在这里自动退款。',payment_amount_unavailable:'此价格超出当前在线支付范围，请使用余额或联系商户。',payment_outcome_unknown:'支付结果尚未确认，请查看已有订单，勿重复付款。',invalid_credentials:'邮箱或密码不正确，或此账户暂不可用。',invalid_csrf:'会话安全令牌已失效，请重新验证会话。',core_not_configured:'上游连接尚未配置，请联系管理员。',core_unavailable:'上游服务暂不可用，请稍后重试。',core_unavailable:'上游服务暂不可用，请稍后重试。',payment_disabled:'支付服务尚未配置，当前无法创建订单。',mail_disabled:'邮件服务尚未配置，当前无法验证邮箱或重置密码。',registration_disabled:'站点当前未开放自助注册。',invalid_password:'密码不符合要求，或当前密码不正确。',not_provisioned:'账户尚未开通上游客户，请联系管理员。',core_sync_pending:'客户信息尚未与上游同步完成，请联系管理员核对。',invalid_code:'连接码无效或已过期，请在客户端重新发起连接。',not_copyable:'这把密钥创建时未保留原文，请撤销后重新签发。',admin_required:'此操作需要商户管理员权限。',account_changed:'账户已发生变化，请重新登录。',rate_limited:'请求过于频繁，请稍后再试。'};
+      const messages = {upstream_target_blocked:'此上游目标被服务器网络策略拒绝。私网或 HTTP 地址需由部署者设置 UPSTREAM_ALLOWED_ORIGINS。',upstream_identity_mismatch:'已有业务数据绑定了另一个上游身份，不能在这里直接切换。',upstream_protocol_mismatch:'上游协议不兼容或接入账户已失效。',upstream_verification_failed:'上游未能验证本站凭据，请检查地址、密钥及上级状态。',upstream_changed:'接入配置已变化，请刷新后重新核对。',upstream_environment_managed:'本站上游由服务端环境配置管理，网页不能覆盖。',insufficient_balance:'钱包余额不足，请先充值或选择在线支付。',plan_changed:'套餐价格或状态已更新，请刷新并重新确认。',plan_conflict:'套餐版本已变化，请刷新后再编辑。',supply_unavailable:'供给不可用或期限不足，暂时无法购买此套餐。',purchase_pending:'此资源已有待完成订单，请先在我的订单中核对。',purchase_conflict:'该请求编号已用于另一笔购买，请核对已有订单。',customer_not_ready:'客户正在停用或同步中，暂时不能开通使用权。',order_state:'订单状态已变化，请刷新核对；已交付订单不能在这里自动退款。',payment_amount_unavailable:'此价格超出当前在线支付范围，请使用余额或联系商户。',payment_outcome_unknown:'支付结果尚未确认，请查看已有订单，勿重复付款。',invalid_credentials:'邮箱或密码不正确，或此账户暂不可用。',invalid_csrf:'会话安全令牌已失效，请重新验证会话。',core_not_configured:'上游连接尚未配置，请联系管理员。',core_unavailable:'上游服务暂不可用，请稍后重试。',core_unavailable:'上游服务暂不可用，请稍后重试。',payment_disabled:'支付服务尚未配置，当前无法创建订单。',mail_disabled:'邮件服务尚未配置，当前无法验证邮箱或重置密码。',registration_disabled:'站点当前未开放自助注册。',email_suffix_not_allowed:'该邮箱域名不在允许注册范围内。',email_domain_registration_limit:'该邮箱域名不能再注册新账户。',integration_environment_managed:'这项服务由服务器环境配置管理，不能在页面里覆盖。',mail_unavailable:'邮件服务器拒绝了连接或认证。请核对主机、端口和凭据。',payment_pending:'仍有未完成的支付订单，暂不能更换支付凭据。',invalid_password:'密码不符合要求，或当前密码不正确。',not_provisioned:'尚未分配账号，请联系管理员。',core_sync_pending:'客户信息尚未与上游同步完成，请联系管理员核对。',invalid_code:'连接码无效或已过期，请在客户端重新发起连接。',not_copyable:'这把密钥创建时未保留原文，请撤销后重新签发。',admin_required:'此操作需要商户管理员权限。',account_changed:'账号状态已变化，请刷新后重新核对。',account_unavailable:'账号暂不可用，请刷新库存或联系平台管理员。',account_assigned:'该账号已分配，请先收回原客户授权。',invalid_expiry:'客户到期时间不能超过账号到期时间。',customer_not_ready:'请选择状态正常、没有待确认变更的客户。',user_busy:'客户变更正在处理中，请稍后核对。',rate_limited:'请求过于频繁，请稍后再试。'};
       const rejected = ['core_not_configured','payment_disabled','mail_disabled','registration_disabled'].includes(code);
       throw Object.assign(new Error(messages[code] || (typeof data.error?.message === 'string' ? data.error.message : '请求未完成，请稍后再试。')),
         {status:response.status,code,uncertain:write && !rejected && (response.status >= 500 || /unknown|uncertain|timeout/i.test(code || ''))});
@@ -170,6 +177,7 @@ function safeRoute(value) {
   catch { return '/'; }
 }
 function navigate(path, replace = false) {
+  closeMetricPopover();
   for (const dialog of document.querySelectorAll('dialog')) { if (dialog.open) dialog.close(); dialog.remove(); }
   const url = new URL(path,location.origin); if (url.origin !== location.origin) return;
   history[replace ? 'replaceState' : 'pushState']({},'',url.pathname + url.search + url.hash); render();
@@ -193,7 +201,6 @@ function badge(status) {
 function date(value) { if (!value) return '—'; const d = new Date(value); return Number.isNaN(d.getTime()) ? '—' : d.toLocaleString('zh-CN',{hour12:false}); }
 function number(value) { return typeof value === 'number' && Number.isFinite(value) ? new Intl.NumberFormat('zh-CN',{maximumFractionDigits:2}).format(value) : '—'; }
 function money(value, currency = 'CNY') { return Number.isSafeInteger(value) && currency === 'CNY' ? new Intl.NumberFormat('zh-CN',{style:'currency',currency:'CNY'}).format(value/100) : '—'; }
-function usd(value) { return typeof value === 'number' && Number.isFinite(value) ? `$${value.toFixed(4)}` : '未提供'; }
 function notice(title, text, tone = '', action) {
   return el('div',{class:`notice ${tone}`,role:tone === 'error' ? 'alert' : 'status'},icon(tone === 'success' ? 'check' : 'info'),el('div',{},el('strong',{text:title}),text ? el('p',{text}) : null,action));
 }
@@ -222,7 +229,7 @@ function field(label, name, options = {}) {
 function errorNotice(error, refresh = () => render()) {
   if (error.uncertain) return notice('操作结果尚未确认','请先刷新列表或检查服务器状态，不要立即重复提交。关闭此提示不代表操作未执行。','warn',el('button',{class:'btn small',type:'button',onclick:refresh,text:'重新读取状态'}));
   if (/last.?admin|self.?disable/i.test(error.code || '')) return notice('需要保留可用的管理员','不能停用自己或移除最后一位管理员。请先确保其他管理员可正常登录。','error');
-  if (error.code === 'not_provisioned' || error.code === 'core_sync_pending') return notice('账户开通尚未完成',error.message,'warn');
+  if (error.code === 'not_provisioned' || error.code === 'core_sync_pending') return notice('账号暂不可用',error.message,'warn');
   if (error.code === 'invalid_csrf') return notice('请重新验证会话',error.message,'warn',el('button',{class:'btn small',type:'button',text:'重新验证会话',onclick:() => bootstrap()}));
   if (error.status === 409) return notice('状态冲突，未覆盖新版本',`${error.message} 请重新读取最新状态，再确认是否需要操作。`,'warn',el('button',{class:'btn small',type:'button',onclick:refresh,text:'刷新最新状态'}));
   if (error.status === 401 && state.user) return notice('登录已失效','请重新登录后继续；刚才的操作未被确认。','warn',el('button',{class:'btn small',type:'button',text:'重新登录',onclick:() => { state.returnTo = safeRoute(location.pathname + location.search); state.user = null; state.csrf = null; navigate('/login'); }}));
@@ -293,7 +300,7 @@ async function bootstrap() {
 }
 function shell(route) {
   const root = el('div',{class:'shell'});
-  const nav = el('nav',{'aria-label':'主导航'},el('div',{class:'nav-group',text:'工作空间'}));
+  const nav = el('nav',{'aria-label':'主导航'});
   for (const item of navigation.filter(v => !v.hidden && !v.admin)) nav.append(el('a',{class:'nav-link',href:item.path,'aria-current':route.path === item.path ? 'page' : null},icon(item.icon),item.title));
   if (state.user.role === 'admin') {
     nav.append(el('div',{class:'nav-group',text:'商户管理'}));
@@ -307,7 +314,6 @@ function shell(route) {
     catch (error) { document.getElementById('page-feedback')?.replaceChildren(errorNotice(error)); logout.disabled = false; }
   }},icon('logout'));
   root.append(el('aside',{class:'sidebar',id:'sidebar'},brand(),nav,el('div',{class:'sidebar-foot'},
-    el('div',{class:'side-note'},el('strong',{},icon('shield'),' 安全连接 · 独立工作台'),'您的身份与权益由本站验证。上游密钥只保存在服务端。'),
     el('div',{class:'user-card'},el('span',{class:'avatar',text:(state.user.display_name || state.user.email || '?').slice(0,1).toUpperCase()}),el('div',{class:'user-info'},el('strong',{text:state.user.display_name || state.user.email}),el('small',{text:state.user.role === 'admin' ? '商户管理员' : '工作空间成员'})),logout))));
   const menu = el('button',{class:'icon-button mobile-menu',type:'button','aria-label':'打开导航','aria-controls':'sidebar','aria-expanded':'false',onclick:() => {
     const open = root.classList.toggle('menu-open'); menu.setAttribute('aria-expanded',String(open));
@@ -319,11 +325,12 @@ function shell(route) {
   root.append(el('div',{class:'workspace'},el('header',{class:'topbar'},menu,
     el('div',{class:'breadcrumb'},el('span',{text:'工作台'}),el('span',{'aria-hidden':'true',text:'/'}),el('strong',{text:route.title})),
     el('div',{class:'top-actions'},el('span',{class:'top-label',text:'本站独立运营'}),themeButton(),badge(state.user.role))),
-    el('main',{id:'main',class:'main',tabindex:'-1'},el('div',{class:'page-heading'},el('div',{},el('span',{class:'eyebrow',text:route.admin ? '商户管理' : '工作空间'}),el('h1',{text:route.title}),el('p',{text:route.description})),el('button',{class:'btn',type:'button',onclick:() => render()},icon('refresh'),'刷新')),
+    el('main',{id:'main',class:'main',tabindex:'-1'},el('div',{class:'page-heading'},el('div',{},el('span',{class:'eyebrow',text:route.admin ? '商户管理' : '工作空间'}),el('h1',{text:route.title})),el('button',{class:'btn',type:'button',onclick:() => render()},icon('refresh'),'刷新')),
       el('div',{id:'page-feedback'}),content,el('footer',{class:'page-footer'},el('span',{text:`${state.public.site.name} · 独立商户工作台`}),el('span',{text:'用量可核对 · 密钥留在服务端'})))));
   app.replaceChildren(root); return content;
 }
 async function render() {
+  closeMetricPopover();
   const ticket = ++state.view;
   if (location.pathname === '/admin/upstream') history.replaceState({}, '', '/admin/settings#upstream');
   const path = location.pathname;
@@ -338,7 +345,7 @@ async function render() {
   const content = shell(route);
   try {
     let result;
-    if (route.admin && state.user.role !== 'admin') result = emptyState('没有管理权限','此页面仅供服务端确认的商户管理员访问。','shield',el('a',{class:'btn primary',href:'/',text:'返回工作概览'}));
+    if (route.admin && state.user.role !== 'admin') result = emptyState('没有管理权限','此页面仅供服务端确认的商户管理员访问。','shield',el('a',{class:'btn primary',href:'/',text:'返回首页'}));
     else if (!views[path]) result = emptyState('没有找到此页面','请使用侧栏导航访问工作台。','info',el('a',{class:'btn',href:'/',text:'返回首页'}));
     else result = await views[path]();
     if (ticket !== state.view) return;
@@ -372,6 +379,7 @@ function renderAuth(path) {
     if (path === '/setup') form.append(field('初始化令牌','setup_token',{type:'password',required:true,autocomplete:'off',hint:'仅在服务器终端或受保护文件中提供，不会保存在浏览器。'}));
     if (['/setup','/register'].includes(path)) form.append(field('显示名称','display_name',{required:true,maxlength:100,autocomplete:'name',placeholder:'您希望如何被称呼'}));
     if (['/login','/setup','/register','/forgot'].includes(path)) form.append(field('电子邮箱','email',{type:'email',required:true,autocomplete:'email',maxlength:254,placeholder:'you@example.com'}));
+    if (path === '/register' && Array.isArray(state.public.site?.registration_email_suffix_whitelist) && state.public.site.registration_email_suffix_whitelist.length) form.append(el('p',{class:'inline-info',text:'仅允许这些邮箱域名：' + state.public.site.registration_email_suffix_whitelist.slice(0,5).join('、') + (state.public.site.registration_email_suffix_whitelist.length > 5 ? ' 等' : '')}));
     if (['/verify','/reset'].includes(path)) form.append(field(path === '/verify' ? '验证令牌' : '重置令牌','token',{type:'password',required:true,autocomplete:'off',value:state.token,spellcheck:'false',hint:'邮件链接中的令牌已从地址栏移除，请勿分享。'}));
     if (['/login','/setup','/register','/reset'].includes(path)) form.append(field(path === '/reset' ? '新密码' : '密码','password',{type:'password',required:true,autocomplete:path === '/login' ? 'current-password' : 'new-password',...(path === '/login' ? {} : {minlength:7}),maxlength:256,placeholder:path === '/login' ? '请输入您的密码' : '至少 7 个字符'}));
     if (['/setup','/register','/reset'].includes(path)) form.append(field('确认密码','confirmation',{type:'password',required:true,autocomplete:'new-password',minlength:7,maxlength:256}));
@@ -404,48 +412,395 @@ function renderAuth(path) {
     } else links.append(el('a',{href:'/login',text:'← 返回登录'}));
     inner.append(links);
   }
-  if (path === '/login' && state.returnTo.startsWith('/connect')) inner.append(notice('登录后继续连接设备','我们会在登录后返回设备确认页面。登录本身不会授权设备。'));
+  if (path === '/login' && state.returnTo.startsWith('/connect')) inner.append(notice('登录后继续开始使用','我们会在登录后返回开始使用页面。登录本身不会授权设备。'));
   inner.append(el('p',{class:'auth-footer',text:'会话由服务端验证 · 上游密钥不会出现在此页'}));
   app.replaceChildren(el('main',{class:'auth-page',id:'main'},el('aside',{class:'auth-art'},brand(),el('div',{class:'auth-art-copy'},el('span',{class:'eyebrow',text:'独立工作台'}),el('h1',{},'管理权益、设备与用量。'),el('p',{text:state.public.site.description || '集中查看 Code 权益、已连接的设备和用量。'}),artwork()),el('p',{class:'auth-bottom',text:'由本站独立提供服务'})),el('section',{class:'auth-form-side'},themeButton('auth-theme'),inner)));
 }
 
+function homePreview() {
+  return {
+    usage: {requests:128},
+    wallet: {balance_minor:26800,currency:'CNY'},
+  };
+}
+function finite(value) { return typeof value === 'number' && Number.isFinite(value) ? value : null; }
+function formatTokens(value) {
+  const n = finite(value); if (n === null) return '—';
+  const abs = Math.abs(n);
+  if (abs >= 1000000) return (n / 1000000).toFixed(2) + 'M';
+  if (abs >= 1000) return (n / 1000).toFixed(1) + 'k';
+  return new Intl.NumberFormat('zh-CN',{maximumFractionDigits:0}).format(n);
+}
+function formatUSD(value) {
+  const n = finite(value); if (n === null) return '—';
+  const sign = n < 0 ? '-' : ''; const abs = Math.abs(n);
+  if (abs === 0) return '$0';
+  if (abs < 0.01) return sign + '$' + abs.toFixed(4);
+  return sign + '$' + abs.toFixed(2);
+}
+function localDay(value) {
+  const d = new Date(value);
+  if (!value || Number.isNaN(d.getTime())) return '';
+  const pad = n => String(n).padStart(2,'0');
+  return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`;
+}
+function formatDuration(value) {
+  const n = finite(value); if (n === null) return '—';
+  const whole = Math.round(n);
+  if (whole < 1000) return whole + ' ms';
+  if (whole < 10000) return (whole / 1000).toFixed(1) + ' s';
+  return Math.round(whole / 1000) + ' s';
+}
+function formatHit(usage) {
+  if (!usage) return '—';
+  const input = finite(usage.input_tokens), read = finite(usage.cache_read_input_tokens), write = finite(usage.cache_creation_input_tokens);
+  if (input === null || read === null || write === null) return '—';
+  const denom = input + read + write;
+  return denom > 0 ? (read / denom * 100).toFixed(1) + '%' : '—';
+}
+function tokenParts(usage) {
+  const specs = [['输入',usage?.input_tokens,'var(--record-input)'],['输出',usage?.output_tokens,'var(--record-output)'],['缓存读',usage?.cache_read_input_tokens,'var(--record-read)'],['缓存写',usage?.cache_creation_input_tokens,'var(--record-write)']];
+  const values = specs.map(([,value]) => finite(value));
+  const total = values.every(value => value !== null) ? values.reduce((sum,value) => sum + value,0) : null;
+  return {total,parts:specs.map(([key,,color],index) => ({key,value:values[index],color,percent:total ? values[index] / total * 100 : 0}))};
+}
+function shown(value) {
+  const text = value == null || value === '' ? '—' : String(value);
+  return {text,className:text === '—' ? 'is-unknown' : ''};
+}
+function metricPair(label, value) {
+  const item = shown(value);
+  return el('div',{},el('dt',{text:label}),el('dd',{class:item.className,text:item.text}));
+}
+function metricValue(value) {
+  const item = shown(value);
+  return el('span',{class:`v ${item.className}`.trim(),text:item.text});
+}
+function tokenBar(usage) {
+  const {total,parts} = tokenParts(usage);
+  if (!total) return null;
+  return el('div',{class:'token-bar',role:'img','aria-label':parts.map(part => `${part.key} ${formatTokens(part.value)}`).join('，')},parts.map(part => el('i',{style:`width:${part.percent}%;background:${part.color}`})));
+}
+function tokenLegend(usage) {
+  return el('span',{class:'s token-parts'},tokenParts(usage).parts.map(part => el('span',{},el('i',{style:`background:${part.color}`}),`${part.key} ${part.value === null ? '—' : formatTokens(part.value)}`)));
+}
+function recordStats(usage, label) {
+  const known = !!usage;
+  const parts = tokenParts(known ? usage : null);
+  const errors = known ? finite(usage.errors) : null;
+  return el('section',{class:'stat-strip','aria-label':'当前筛选范围的统计'},
+    el('div',{class:'stat-cell'},el('span',{class:'k',text:'费用'}),metricValue(known ? formatUSD(usage.cost_usd) : null),el('span',{class:'s',text:`${label ? label + ' · ' : ''}按价格表估算，不从钱包扣费`})),
+    el('div',{class:'stat-cell'},el('span',{class:'k',text:'请求'}),metricValue(known ? number(usage.requests) : null),el('span',{class:errors ? 's warn' : 's',text:`失败 ${errors === null ? '—' : number(errors)} 次`})),
+    el('div',{class:'stat-cell'},el('span',{class:'k',text:'Token'}),metricValue(parts.total === null ? null : formatTokens(parts.total)),tokenBar(known ? usage : null),tokenLegend(known ? usage : null),finite(usage?.unknown_usage) ? el('span',{class:'s',text:`${number(usage.unknown_usage)} 次用量未知，未计入 Token`}) : null),
+    el('div',{class:'stat-cell'},el('span',{class:'k',text:'平均耗时'}),metricValue(known ? formatDuration(usage.average_duration_ms) : null),el('span',{class:'s',text:`首 Token ${known && finite(usage.average_first_token_ms) !== null ? formatDuration(usage.average_first_token_ms) : '未记录'}`})));
+}
+async function usageSummary(from, to) {
+  try {
+    const query = new URLSearchParams({limit:'1',from:from.toISOString(),to:to.toISOString()});
+    const data = await api(`/api/me/usage?${query}`);
+    return data.usage ?? null;
+  } catch { return null; }
+}
+const chartState = {range:'1d', metric:'requests', gran:'hour', mode:'bar', model:'', from:'', to:'', loaded:null};
+const chartColors = ['#7856e8','#7d8798','#c4a15a','#2a9d8f','#d4766a','#3d5a80','#81b29a'];
+function chartWindow() {
+  const now = new Date();
+  if (chartState.range === 'custom') {
+    if (!chartState.from || !chartState.to || chartState.from > chartState.to) return null;
+    return {from:new Date(`${chartState.from}T00:00:00`), to:new Date(`${chartState.to}T23:59:59.999`)};
+  }
+  const ms = {'1d':86400000,'7d':7*86400000,'14d':14*86400000,'30d':30*86400000}[chartState.range] || 86400000;
+  return {from:new Date(now.getTime() - ms), to:now};
+}
+function chartScope() {
+  if (chartState.range === 'custom') return chartState.from && chartState.to ? `${chartState.from} 至 ${chartState.to} · 按本机时区显示` : '选择自定义时间 · 按本机时区显示';
+  return `最近 ${{'1d':'1 天','7d':'7 天','14d':'14 天','30d':'30 天'}[chartState.range] || '1 天'} · 按本机时区显示`;
+}
+function chartRangeControl() {
+  return el('div',{class:'seg',role:'group','aria-label':'时间范围'},[['1d','1天'],['7d','7天'],['14d','14天'],['30d','30天'],['custom','自定义']].map(([id,label]) => el('button',{type:'button',class:chartState.range === id ? 'on' : '','aria-pressed':chartState.range === id ? 'true' : 'false',text:label,onclick:() => { chartState.range = id; if (id !== 'custom') { chartState.gran = id === '1d' || id === '7d' ? 'hour' : 'day'; chartState.loaded = null; } render(); }})));
+}
+function chartFilters(chart) {
+  const models = [...new Set((chart?.rows || []).map(row => row.model || '未提供模型'))];
+  const modelSelect = el('select',{'aria-label':'筛选模型',onchange:event => { chartState.model = event.target.value; render(); }},el('option',{value:'',text:'全部模型'}),models.map(name => el('option',{value:name,text:name})));
+  modelSelect.value = models.includes(chartState.model) ? chartState.model : '';
+  const metricSelect = el('select',{'aria-label':'图表指标',onchange:event => { chartState.metric = event.target.value; render(); }},[['requests','请求数'],['input','输入'],['cache_read','缓存命中'],['cache_write','缓存写入'],['output','输出'],['tokens','综合 token'],['hit_rate','缓存命中率']].map(([id,label]) => el('option',{value:id,text:label})));
+  metricSelect.value = chartState.metric;
+  const granSelect = el('select',{'aria-label':'统计粒度',onchange:event => { chartState.gran = event.target.value; render(); }},[['hour','小时'],['day','天'],['week','周']].map(([id,label]) => el('option',{value:id,text:label})));
+  granSelect.value = chartState.gran;
+  const modes = el('div',{class:'seg modes',role:'group','aria-label':'图表类型'},[['bar','柱状'],['area','面积']].map(([id,label]) => el('button',{type:'button',class:chartState.mode === id ? 'on' : '','aria-pressed':chartState.mode === id ? 'true' : 'false',text:label,onclick:() => { chartState.mode = id; render(); }})));
+  const custom = chartState.range === 'custom' ? el('div',{class:'chart-custom'},field('开始日期','chart_from',{type:'date',value:chartState.from,onchange:event => { chartState.from = event.target.value; chartState.loaded = null; render(); }}),field('结束日期','chart_to',{type:'date',value:chartState.to,onchange:event => { chartState.to = event.target.value; chartState.loaded = null; render(); }})) : null;
+  return el('div',{class:'chart-filters'},modelSelect,metricSelect,granSelect,modes,custom);
+}
+async function loadChartRows(from, to) {
+  const key = `${from.toISOString()}|${to.toISOString()}`;
+  if (chartState.loaded?.key === key) return chartState.loaded;
+  const rows = [];
+  let offset = 0, total = 0, summary = null;
+  do {
+    const query = new URLSearchParams({limit:'100',offset:String(offset),from:from.toISOString(),to:to.toISOString()});
+    const data = await api(`/api/me/usage?${query}`);
+    summary = data.usage ?? summary;
+    total = Number.isSafeInteger(data.total) ? data.total : rows.length;
+    const page = collection(data,'requests');
+    rows.push(...page);
+    offset += page.length;
+    if (!page.length) break;
+  } while (rows.length < total && rows.length < 800);
+  chartState.loaded = {key,rows,summary,total,truncated:rows.length < total};
+  return chartState.loaded;
+}
+function bucketStart(value, gran) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return null;
+  if (gran === 'week') { const day = (date.getDay() + 6) % 7; date.setDate(date.getDate() - day); date.setHours(0,0,0,0); }
+  else if (gran === 'day') date.setHours(0,0,0,0);
+  else date.setMinutes(0,0,0);
+  return date.getTime();
+}
+function bucketText(value, gran, spanDays) {
+  const date = new Date(value);
+  const pad = n => String(n).padStart(2,'0');
+  if (gran === 'hour' && spanDays <= 1) return `${pad(date.getHours())}:00`;
+  if (gran === 'hour') return `${pad(date.getMonth()+1)}-${pad(date.getDate())} ${pad(date.getHours())}:00`;
+  return `${pad(date.getMonth()+1)}-${pad(date.getDate())}`;
+}
+function rowMetric(row, metric) {
+  const usage = row.usage || {};
+  const input = finite(usage.input_tokens) || 0, output = finite(usage.output_tokens) || 0, read = finite(usage.cache_read_input_tokens) || 0, write = finite(usage.cache_creation_input_tokens) || 0;
+  if (metric === 'input') return input;
+  if (metric === 'output') return output;
+  if (metric === 'cache_read') return read;
+  if (metric === 'cache_write') return write;
+  if (metric === 'tokens') return input + output + read + write;
+  return 1;
+}
+function svgEl(tag, props = {}, ...children) {
+  const node = document.createElementNS('http://www.w3.org/2000/svg', tag);
+  for (const [key,value] of Object.entries(props)) if (value != null && value !== false) node.setAttribute(key, value === true ? '' : String(value));
+  for (const child of children.flat(Infinity)) if (child != null && child !== false) node.append(child instanceof Node ? child : document.createTextNode(String(child)));
+  return node;
+}
+function usagePlot(chart) {
+  const rows = (chart?.rows || []).filter(row => !chartState.model || (row.model || '未提供模型') === chartState.model);
+  if (!rows.length) return null;
+  const metric = chartState.metric, gran = chartState.gran, buckets = new Map(), names = [];
+  for (const row of rows) {
+    const start = bucketStart(row.time, gran);
+    if (start == null) continue;
+    const name = row.model || '未提供模型';
+    if (!names.includes(name)) names.push(name);
+    if (!buckets.has(start)) buckets.set(start, new Map());
+    const slot = buckets.get(start);
+    if (metric === 'hit_rate') {
+      const acc = slot.get('__rate') || {read:0,denom:0};
+      const usage = row.usage || {};
+      const input = finite(usage.input_tokens) || 0, read = finite(usage.cache_read_input_tokens) || 0, write = finite(usage.cache_creation_input_tokens) || 0;
+      acc.read += read; acc.denom += input + read + write;
+      slot.set('__rate', acc);
+    } else slot.set(name,(slot.get(name) || 0) + rowMetric(row, metric));
+  }
+  const keys = [...buckets.keys()].sort((a,b) => a - b);
+  if (!keys.length) return null;
+  const seriesNames = metric === 'hit_rate' ? ['命中率'] : names;
+  const series = seriesNames.map(name => keys.map(key => {
+    const slot = buckets.get(key);
+    if (metric === 'hit_rate') { const acc = slot.get('__rate'); return acc?.denom ? acc.read / acc.denom * 100 : 0; }
+    return slot.get(name) || 0;
+  }));
+  const totals = keys.map((_,index) => series.reduce((sum,item) => sum + item[index],0));
+  const max = Math.max(metric === 'hit_rate' ? 100 : 1, ...totals);
+  const width = 760, height = 230, x0 = 46, y0 = 16, plotW = 690, plotH = 168;
+  const step = plotW / keys.length, barW = Math.max(2, step * 0.62);
+  const colors = seriesNames.map((_,index) => chartColors[index % chartColors.length]);
+  const shapes = [];
+  if (chartState.mode === 'area') {
+    let base = keys.map(() => y0 + plotH);
+    series.forEach((values,index) => {
+      const top = values.map((value,item) => base[item] - value / max * plotH);
+      const points = [...top.map((y,item) => `${x0 + item * step + step / 2},${y}`), ...[...base].reverse().map((y,item) => `${x0 + (keys.length - 1 - item) * step + step / 2},${y}`)];
+      shapes.push(svgEl('polygon',{points:points.join(' '),fill:colors[index],'fill-opacity':'0.88'}));
+      base = top;
+    });
+  } else {
+    keys.forEach((_,index) => {
+      let y = y0 + plotH;
+      series.forEach((values,seriesIndex) => {
+        const h = values[index] / max * plotH;
+        y -= h;
+        if (h > 0) shapes.push(svgEl('rect',{x:x0 + index * step + (step - barW) / 2,y,width:barW,height:Math.max(h,1),rx:2,fill:colors[seriesIndex]}));
+      });
+    });
+  }
+  const labelStep = Math.max(1, Math.ceil(keys.length / 8));
+  const spanDays = keys.length > 1 ? (keys[keys.length - 1] - keys[0]) / 86400000 : 0;
+  const labels = keys.flatMap((key,index) => index % labelStep ? [] : [svgEl('text',{x:x0 + index * step + step / 2,y:height - 8,'text-anchor':'middle',class:'chart-label'},bucketText(key,gran,spanDays))]);
+  const axis = [svgEl('text',{x:x0 - 8,y:y0 + 10,'text-anchor':'end',class:'chart-label'},metric === 'hit_rate' ? '100%' : formatTokens(max)),svgEl('text',{x:x0 - 8,y:y0 + plotH,'text-anchor':'end',class:'chart-label'},metric === 'hit_rate' ? '0%' : '0'),svgEl('line',{x1:x0,x2:x0 + plotW,y1:y0 + plotH,y2:y0 + plotH,class:'chart-axis'})];
+  return el('div',{class:'usage-plot'},svgEl('svg',{viewBox:`0 0 ${width} ${height}`,role:'img','aria-label':chartScope()},axis,shapes,labels),el('div',{class:'chart-legend'},seriesNames.map((name,index) => el('span',{},el('i',{style:`background:${colors[index]}`}),name))));
+}
+
 async function overviewView() {
-  const data = await api('/api/me/overview'); const grants = collection(data,'grants'); const devices = collection(data,'devices');
-  const configured = data.connection?.configured === true; const available = data.connection?.available === true;
-  const active = grants.filter(g => g.status === 'active' && (!g.expires_at || new Date(g.expires_at).getTime() > Date.now()));
-  const hero = el('section',{class:'hero'},el('div',{class:'hero-copy'},el('span',{class:'eyebrow',text:'工作概览'}),el('h2',{text:'查看权益、连接设备、核对用量。'}),el('p',{text:'在这里查看已分配的资源和有效期，并连接您自己的 CCB 客户端。'}),el('a',{class:'btn',href:'/connect'},icon('plus'),'连接新设备',icon('arrow'))),artwork());
-  const root = el('div',{class:'page-content'},hero);
-  if (!configured || !available) root.append(notice(configured ? '上游连接暂不可用' : '工作空间尚未连接上游服务',configured ? '当前无法确认上游资源的实时状态；请稍后重试或联系管理员。' : '请联系管理员完成服务端连接配置。权益、设备与用量不会用示例数据替代。','warn'));
+  const data = await api('/api/me/overview');
+  const grants = collection(data,'grants'), devices = collection(data,'devices');
+  let usage = data.usage, wallet = data.wallet;
+  const previewing = state.public.features.home_preview === true && !grants.length && !devices.length && usage == null && !(wallet?.balance_minor > 0);
+  if (previewing) ({usage,wallet} = homePreview());
+  const configured = data.connection?.configured === true, available = data.connection?.available === true;
   const pending = new Set(Array.isArray(data.pending) ? data.pending : []);
-  const pendingLabels = {customer_not_provisioned:'上游账户尚未开通',customer_sync_pending:'客户信息同步待确认',grants_unavailable:'权益数据暂不可用',devices_unavailable:'设备数据暂不可用',usage_unavailable:'用量统计暂不可用',core_unavailable:'上游连接暂不可用'};
-  if (pending.size) root.append(notice('还有待完成的事项',[...pending].map(item => pendingLabels[item] || item).join(' · '),'warn'));
+  const pendingLabels = {customer_not_provisioned:'尚未分配账号，请联系管理员',customer_sync_pending:'客户信息同步待确认',grants_unavailable:'权益数据暂不可用',devices_unavailable:'设备数据暂不可用',usage_unavailable:'用量统计暂不可用',core_unavailable:'上游连接暂不可用',runtime_suspension_sync_pending:'停用状态仍在同步'};
   const reliable = configured && available && !pending.has('customer_not_provisioned') && !pending.has('customer_sync_pending');
-  const grantsReady = reliable && !pending.has('grants_unavailable');
-  const devicesReady = reliable && !pending.has('devices_unavailable');
-  root.append(el('div',{class:'stats-grid'},stat('可用权益',grantsReady ? number(active.length) : '—',grantsReady ? '当前有效的 Code 资源' : '等待上游连接确认','layers'),stat('已连接设备',devicesReady ? number(devices.length) : '—','仅显示服务端已记录的设备','monitor'),stat('累计请求',number(data.usage?.requests),'服务端返回的统计范围','chart'),stat('钱包余额',money(data.wallet?.balance_minor,data.wallet?.currency),'人民币余额 · 不按参考 USD 扣费','wallet')));
-  const grantContent = grants.length ? el('div',{class:'card-body'},el('ul',{class:'section-list'},grants.slice(0,4).map(g => el('li',{},el('span',{class:'stat-icon'},icon('code')),el('div',{class:'list-copy'},el('strong',{text:g.name || 'Code 资源'}),el('p',{text:g.expires_at ? `有效期至 ${date(g.expires_at)}` : '未设置到期时间'})),badge(g.status)))))
-    : emptyState(grantsReady ? '还没有可用权益' : '等待资源连接',grantsReady ? '联系商户管理员为您开通资源。获得授权后，即可开始连接设备。' : '上游连接恢复或配置完成后，才能确认您的权益。','layers');
-  const guide = el('div',{class:'card-body'},el('ul',{class:'section-list'},[
-    ['01','确认我的权益','先确认已获授权的资源与有效期。','/rights'],['02','连接 CCB 客户端','从客户端取得连接码，在本站核对设备。','/connect'],['03','查看用量','请求与参考成本都可以查看，参考成本不会从钱包扣费。','/usage'],
-  ].map(([n,title,text,href]) => el('li',{},el('span',{class:'step-num',text:n}),el('div',{class:'list-copy'},el('strong',{text:title}),el('p',{text})),el('a',{href,'aria-label':title},icon('arrow'))))),el('p',{class:'inline-info',text:'本站仅支持已授权的 Code 通道；其他产品不可据此推定可用。'}));
-  root.append(el('div',{class:'two-col'},panel('我的资源','仅展示管理员已授予的访问权益',grantContent,el('a',{href:'/rights',class:'muted',text:'查看全部 →'})),panel('开始使用','先确认权益，再连接设备。',guide)));
+  const usageKnown = previewing || (reliable && !pending.has('usage_unavailable') && usage != null);
+  const now = new Date();
+  const todayStart = new Date(now.getFullYear(),now.getMonth(),now.getDate());
+  const dayAgo = new Date(now.getTime() - 86400000);
+  let today = null, recent = null;
+  if (!previewing && reliable && !pending.has('usage_unavailable')) [today,recent] = await Promise.all([usageSummary(todayStart,now),usageSummary(dayAgo,now)]);
+  const root = el('div',{class:'page-content overview-page'});
+  if (previewing) root.append(notice('预览数据','这一组用量和余额只用来看首页效果，不是当前账户的真实记录。','warn'));
+  else if (!configured || !available) root.append(notice(configured ? '上游连接暂不可用' : '工作空间尚未连接上游服务',configured ? '当前无法确认用量的实时状态；请稍后重试或联系管理员。' : '请联系管理员完成服务端连接配置。账单与用量不会用示例数据替代。','warn'));
+  if (!previewing && pending.size) root.append(notice('还有待完成的事项',[...pending].map(item => pendingLabels[item] || item).join(' · '),'warn'));
+  const cumulativeCost = usageKnown ? formatUSD(usage.cost_usd) : null;
+  const cumulativeRequests = usageKnown ? number(usage.requests) : null;
+  root.append(el('section',{class:'stat-strip','aria-label':'账单与用量'},
+    el('a',{class:'stat-cell',href:'/usage?range=today'},el('span',{class:'k',text:'今日参考费用 · USD'}),metricValue(today ? formatUSD(today.cost_usd) : null),el('span',{class:'s',text:`累计 ${cumulativeCost || '—'} · 不从钱包扣费`})),
+    el('a',{class:'stat-cell',href:'/usage?range=1d'},el('span',{class:'k',text:'近 24 小时请求'}),metricValue(recent ? number(recent.requests) : null),el('span',{class:recent && finite(recent.errors) ? 's warn' : 's',text:`失败 ${recent ? number(recent.errors) : '—'} · 累计 ${cumulativeRequests || '—'}`})),
+    el('a',{class:'stat-cell',href:'/usage?range=1d'},el('span',{class:'k',text:'缓存命中率'}),metricValue(formatHit(recent)),el('span',{class:'s',text:`近 24 小时 · 命中 ${recent ? formatTokens(recent.cache_read_input_tokens) : '—'}`})),
+    el('a',{class:'stat-cell',href:'/wallet'},el('span',{class:'k',text:'钱包余额'}),metricValue(money(wallet?.balance_minor,wallet?.currency)),el('span',{class:'s',text:'人民币余额 · 不按参考 USD 扣费'}))));
+  const bounds = chartWindow();
+  let chart = null;
+  if (!previewing && reliable && !pending.has('usage_unavailable') && bounds) {
+    try { chart = await loadChartRows(bounds.from, bounds.to); }
+    catch (error) { chart = {error: error.message || '用量图表读取失败'}; }
+  }
+  const figureUsage = chart?.summary || (usageKnown ? usage : null);
+  const figureKnown = !!figureUsage;
+  const parts = tokenParts(figureKnown ? figureUsage : null);
+  const usageCard = el('section',{class:'card usage-chart-card'},
+    el('div',{class:'card-head'},el('div',{},el('h2',{text:'用量'}),el('p',{text:previewing ? '预览汇总，不是当前账户记录' : chartScope()})), figureKnown && !previewing ? chartRangeControl() : null),
+    el('div',{class:'card-body'},
+      figureKnown && !previewing ? chartFilters(chart) : null,
+      el('dl',{class:'figures'},metricPair('请求',figureKnown ? number(figureUsage.requests) : null),metricPair('输入',figureKnown ? formatTokens(figureUsage.input_tokens) : null),metricPair('缓存命中',figureKnown ? formatTokens(figureUsage.cache_read_input_tokens) : null),metricPair('缓存写入',figureKnown ? formatTokens(figureUsage.cache_creation_input_tokens) : null),metricPair('输出',figureKnown ? formatTokens(figureUsage.output_tokens) : null),metricPair('综合 Token',parts.total === null ? null : formatTokens(parts.total))),
+      chart?.error ? el('p',{class:'inline-info',text:chart.error}) : null,
+      figureKnown && !previewing ? usagePlot(chart) : null,
+      chart?.truncated ? el('p',{class:'inline-info',text:`图表基于已读取的 ${number(chart.rows.length)} / ${number(chart.total)} 条请求。上方数字仍是该范围的服务端汇总。`}) : null,
+      !figureKnown ? el('p',{class:'inline-info',text:'用量汇总尚未返回。缺失项保持未知，不会显示为 0。'}) : (finite(figureUsage.requests) === 0 ? el('p',{class:'inline-info',text:'这个范围没有请求，试试调整时间或模型筛选。'}) : null)));
+  const billCard = el('section',{class:'card'},el('div',{class:'card-head'},el('div',{},el('h2',{text:'账单'}),el('p',{text:'钱包与参考费用分开计算'})),el('a',{href:'/wallet',class:'muted',text:'钱包 →'})),el('div',{class:'card-body'},el('dl',{class:'facts'},metricPair('钱包余额',money(wallet?.balance_minor,wallet?.currency)),metricPair('累计参考费用',cumulativeCost),metricPair('今日参考费用',today ? formatUSD(today.cost_usd) : null)),el('p',{class:'inline-info',text:'参考费用按价格表估算，不会从人民币钱包扣费。'})));
+  const qualityCard = el('section',{class:'card'},el('div',{class:'card-head'},el('div',{},el('h2',{text:'请求质量'}),el('p',{text:'失败、未知用量和耗时'}))),el('div',{class:'card-body'},el('dl',{class:'facts'},metricPair('失败请求',usageKnown ? number(usage.errors) : null),metricPair('未知用量',usageKnown ? number(usage.unknown_usage) : null),metricPair('平均耗时',usageKnown ? formatDuration(usage.average_duration_ms) : null),metricPair('首 Token',usageKnown ? (finite(usage.average_first_token_ms) === null ? '未记录' : formatDuration(usage.average_first_token_ms)) : null))));
+  root.append(el('div',{class:'usage-board'},usageCard,el('div',{class:'usage-rail'},billCard,qualityCard)));
   return root;
 }
-async function rightsView() {
-  const grants = collection(await api('/api/me/grants'),'grants');
-  if (!grants.length) return panel('我的授权资源','所有权益以服务器状态为准',emptyState('尚未分配权益','可在「套餐与续期」购买使用权，或联系管理员分配。充值本身不代表已经购买套餐。','layers'));
-  return el('div',{class:'page-content'},notice('以实际使用权为准','购买订单完成交付后才会开通或续期；请求仍受当前授权、期限和设备状态约束。'),el('div',{class:'resource-grid'},grants.map(g => el('article',{class:'card resource-card'},
-    el('div',{class:'resource-title'},el('span',{class:'brand-mark'},icon('code')),el('div',{},el('h3',{text:g.name || 'Code 资源'}),badge(g.expires_at&&Date.parse(g.expires_at)<=Date.now()?'expired':g.status))),
-    el('dl',{class:'detail-list'},el('dt',{text:'产品通道'}),el('dd',{text:Array.isArray(g.surfaces) ? g.surfaces.join(' · ') : '—'}),el('dt',{text:'有效期至'}),el('dd',{text:g.expires_at ? date(g.expires_at) : '未设置到期时间'}),el('dt',{text:'最近更新'}),el('dd',{text:date(g.updated_at)})),
-    el('hr',{class:'form-divider'}),el('a',{class:'btn',href:'/connect',text:'前往设备确认 →'})))));
+function inventoryStatus(account) {
+ if(account.status==='expired'||Date.parse(account.expires_at)<=Date.now())return '已到期';
+ if(account.status!=='active'||!account.details||!['available','limited'].includes(account.details.state))return '不可用';
+ return account.assigned?'已分配':'可分配';
+}
+async function inventoryView() {
+ const data=await api('/api/admin/inventory'),accounts=collection(data,'accounts');
+ const customerId=new URLSearchParams(location.search).get('user_id');
+ const shown=customerId?accounts.filter(a=>a.user_id===customerId):accounts;
+ const inventory=table([
+  {label:'账号',render:a=>el('div',{},el('strong',{text:a.details?.name||a.id}),el('span',{class:'table-sub',text:a.platform}))},
+  {label:'规格',render:a=>a.details?.plan||'Claude'},
+  {label:'账号到期',render:a=>date(a.expires_at)},
+  {label:'状态',render:a=>el('div',{},el('span',{class:'badge',text:inventoryStatus(a)}),inventoryStatus(a)==='不可用'?el('span',{class:'table-sub',text:a.status!=='active'?'账号已释放':'上游状态未就绪，请联系平台管理员'}):null)},
+  {label:'使用客户',render:a=>a.assigned?el('div',{},el('strong',{text:a.customer_name||'已分配客户'}),el('span',{class:'table-sub',text:a.customer_email||''}),el('span',{class:'table-sub',text:'客户到期：'+date(a.customer_expires_at)})):'—'},
+  {label:'设备',render:a=>a.details?.device_name||'未绑定'},
+  {label:'操作',render:a=>el('div',{class:'button-row'},
+   el('button',{class:'btn small',text:'账号详情',onclick:()=>editorDialog('账号详情',accountCard({...a.details,id:a.id,platform:a.platform,expires_at:a.expires_at,device_limit:1},true))}),
+   !a.assigned?el('button',{class:'btn small',text:'分配客户',disabled:inventoryStatus(a)!=='可分配',onclick:()=>assignInventoryAccount(a)}):[
+    el('button',{class:'btn small',text:'延长客户有效期',disabled:a.status!=='active'||!a.grant_revision||Date.parse(a.customer_expires_at)>=Date.parse(a.expires_at),onclick:()=>extendCustomerAccount(a)}),
+    actionButton('收回账号',async()=>await confirmAction('收回账号',`收回「${a.details?.name||'此账号'}」对「${a.customer_name||'当前客户'}」的授权。原客户和设备将不能继续使用，确认成功后才可重新分配。`,'确认收回',true)?api('/api/admin/grants/'+encodeURIComponent(a.grant_id),{method:'PATCH',body:{expected_revision:a.grant_revision,status:'revoked'}}):CANCEL,{danger:true,disabled:!a.grant_id||!a.grant_revision})])}
+ ],shown,'暂无账号',customerId?'这位客户尚未获得账号，请返回全部库存选择可分配账号。':'请联系平台管理员分配账号。账号进入库存后，直接选择客户即可交付。');
+ inventory.classList.add('rental-table');
+ return el('div',{class:'page-content inventory-page'},customerId?el('a',{href:'/admin/inventory',class:'btn',text:'查看全部库存'}):null,
+  el('div',{class:'stats-grid'},stat('可分配',number(accounts.filter(a=>inventoryStatus(a)==='可分配').length),'选择账号后分配客户','layers'),stat('已分配',number(accounts.filter(a=>a.assigned).length),'一份账号交付给一位客户','users')),
+  panel('账号库存','选账号 → 选客户 → 确认分配。每个账号最多绑定 1 台设备。',inventory));
+}
+async function assignInventoryAccount(account){
+ try {
+  let users=collection(await api('/api/admin/users?limit=200'),'users').filter(u=>u.status==='active'),pending=null,busy=false,searchVersion=0;
+  const feedback=el('div',{class:'form-message'}),search=field('搜索客户','search',{placeholder:'姓名或邮箱'});
+  const picker=field('客户','user_id',{type:'select',required:true,choices:[{value:'',label:'请选择客户'},...users.map(u=>({value:u.id,label:`${u.display_name||u.email} · ${u.email}`}))]});
+  const expires=field('客户到期时间','expires_at',{type:'datetime-local',hint:'留空沿用账号到期时间；只能缩短，不能超过上游期限。'});
+  const submit=el('button',{class:'btn primary',type:'submit',text:'确认分配'});
+  const reconcile=el('button',{class:'btn',type:'button',text:'核对分配结果',hidden:true});
+  const form=el('form',{},notice(account.details?.name||'账号分配',`${account.platform} · 到期 ${date(account.expires_at)} · 单设备`),feedback,search,picker,expires,el('div',{class:'button-row'},submit,reconcile));
+  const dialog=editorDialog('分配客户',form);
+  search.querySelector('input').addEventListener('input',async event=>{
+   const version=++searchVersion;
+   try{const data=await api('/api/admin/users?limit=200&q='+encodeURIComponent(event.target.value));if(version!==searchVersion||!form.isConnected||pending)return;users=collection(data,'users').filter(u=>u.status==='active');picker.querySelector('select').replaceChildren(el('option',{value:'',text:'请选择客户'}),...users.map(u=>el('option',{value:u.id,text:`${u.display_name||u.email} · ${u.email}`})));}catch(error){if(version===searchVersion&&form.isConnected)feedback.replaceChildren(errorNotice(error));}
+  });
+  async function deliver(checkOnly){
+   if(busy)return;
+   if(!pending){
+    const values=new FormData(form),selected=users.find(u=>u.id===values.get('user_id'));if(!selected)return;
+    const stamp=values.get('expires_at')?Date.parse(values.get('expires_at')):Date.parse(account.expires_at);
+    const end=Number.isFinite(stamp)?new Date(stamp).toISOString():null;
+    if(!end||Date.parse(end)<=Date.now()||Date.parse(end)>Date.parse(account.expires_at)){feedback.replaceChildren(notice('到期时间不正确','请选择未来时间，且不能超过账号到期时间。','warn'));return;}
+    pending={user_id:selected.id,resource_id:account.resource_id,account_lease_id:account.id,expected_account_revision:account.revision,expires_at:end};
+   }
+   busy=true;form.dataset.busy='true';form.querySelectorAll('input,select,button').forEach(n=>n.disabled=true);feedback.replaceChildren();
+   try{
+    if(checkOnly){
+     const data=await api('/api/admin/inventory'),a=collection(data,'accounts').find(a=>a.id===account.id);
+     if(!a||a.revision!==pending.expected_account_revision+1||!a.assigned||a.user_id!==pending.user_id||Date.parse(a.customer_expires_at)!==Date.parse(pending.expires_at)){
+      feedback.replaceChildren(notice('尚未确认交付','可以按原信息重试；系统会核对同一账号版本，不会重复交付。若账号已变化，请关闭后刷新库存。','warn'));return;
+     }
+    }else await api('/api/admin/grants',{method:'POST',body:pending});
+    if(!dialog.isConnected)return;dialog.close();toast('账号已分配给客户');await render();
+   }catch(error){if(form.isConnected)feedback.replaceChildren(errorNotice(error,()=>deliver(true)));}
+   finally{busy=false;form.dataset.busy='false';submit.disabled=false;submit.textContent='重试原分配';reconcile.hidden=false;reconcile.disabled=false;}
+  }
+  form.addEventListener('submit',event=>{event.preventDefault();void deliver(false);});reconcile.addEventListener('click',()=>deliver(true));
+  dialog.addEventListener('cancel',event=>{if(busy)event.preventDefault();});
+  dialog.querySelector('[aria-label="关闭对话框"]').addEventListener('click',event=>{if(busy){event.preventDefault();event.stopImmediatePropagation();}},true);
+ }catch(error){document.getElementById('page-feedback')?.replaceChildren(errorNotice(error));}
+}
+function extendCustomerAccount(account){
+ const form=el('form',{},notice(account.details?.name||'账号',`当前客户到期 ${date(account.customer_expires_at)}；最多可延长至 ${date(account.expires_at)}。`),field('新的客户到期时间','expires_at',{type:'datetime-local',required:true}),el('button',{class:'btn primary',type:'submit',text:'确认延长'}));
+ const dialog=editorDialog('延长客户有效期',form);
+ bindForm(form,values=>{const end=new Date(values.get('expires_at')).toISOString();if(Date.parse(end)<=Math.max(Date.now(),Date.parse(account.customer_expires_at))||Date.parse(end)>Date.parse(account.expires_at))throw new Error('新的到期时间必须晚于原期限，且不能超过账号到期时间。');return api('/api/admin/grants/'+encodeURIComponent(account.grant_id),{method:'PATCH',body:{expected_revision:account.grant_revision,expires_at:end}});},()=>{dialog.close();render();});
+}
+async function accountsView() {
+  const accounts = collection(await api('/api/me/accounts'),'accounts');
+  if (!accounts.length) return panel('我的账号','管理员分配后，账号会自动出现在这里。',emptyState('还没有账号','请联系管理员分配账号，无需充值或另行开通。','layers'));
+  return el('div',{class:'page-content'},el('a',{href:'/devices',class:'btn small',text:'查看全部设备'}),el('div',{class:'account-grid'},accounts.map(account=>accountCard(account))),el('p',{class:'inline-info',text:'\u6362\u8d26\u53f7\uff1a\u5728\u9879\u76ee\u76ee\u5f55\u8fd0\u884c ccb account\u3002\u989d\u5ea6\u7528\u5b8c\u4f1a\u5728\u7a97\u53e3\u91cd\u7f6e\u540e\u81ea\u52a8\u6062\u590d\uff0c\u4e0d\u4ece\u94b1\u5305\u6263\u8d39\u3002'}));
+}
+function accountCard(account, inventory = false) {
+  const windows = Array.isArray(account.quota?.windows) ? account.quota.windows : [];
+  const limited = account.state === 'limited' || windows.some(item => Number(item.used_percent) >= 100);
+  const surfaces = (account.surfaces || []).map(item => item === 'desktop' ? 'Desktop' : item === 'code' ? 'Claude Code' : item).join('\u3001') || 'Claude Code';
+  return el('article',{class:limited ? 'account-card limited' : 'account-card'},
+    el('div',{class:'account-top'},el('div',{},el('h2',{text:account.name || '\u672a\u547d\u540d\u8d26\u53f7'}),el('p',{text:`${account.plan || 'Claude'} \u00b7 ${surfaces}`})), limited ? el('span',{class:'limit-pill',text:'\u989d\u5ea6\u53d7\u9650'}) : null),
+    windows.length ? el('div',{class:'quota-list'},windows.slice(0,2).map(item => quotaRow(item, limited))) : el('p',{class:'quota-empty',text:account.quota?.status === 'error' ? '\u989d\u5ea6\u6682\u65f6\u8bfb\u4e0d\u5230\u3002' : '\u4e0a\u6e38\u8fd8\u6ca1\u6709\u8fd4\u56de\u989d\u5ea6\uff0c\u4e0d\u4ee3\u8868\u5df2\u7ecf\u7528\u5b8c\u3002'}),
+    limited ? el('p',{class:'quota-empty',text:'\u989d\u5ea6\u6682\u65f6\u7528\u5b8c\uff0c\u7a97\u53e3\u91cd\u7f6e\u540e\u81ea\u52a8\u6062\u590d\u3002'}) : null,
+    el('p',{class:'inline-info',text:`${account.platform||'平台未提供'} · 有效期至 ${date(account.expires_at)} · 设备上限 1 台`}),
+    inventory ? null : el('div',{class:'button-row'},['available','limited'].includes(account.state)?el('a',{class:'btn primary small',href:'/connect',text:'开始使用'}):el('span',{class:'badge',text:account.state==='expired'?'已到期，请联系管理员':'暂不可用，请联系管理员'}),account.device_name?el('a',{class:'btn small',href:'/devices?account_id='+encodeURIComponent(account.id),text:'更换设备'}):null),
+    el('div',{class:'account-foot',text:account.device_name ? `${account.device_name} \u5728\u7528` : '\u6ca1\u6709\u8bbe\u5907\u5728\u7528'}));
+}
+function quotaRow(item, limited) {
+  const percent = Number.isFinite(item.used_percent) ? Math.max(0, Math.min(100, item.used_percent)) : 0;
+  const full = percent >= 100;
+  return el('div',{class:'quota-row'},el('div',{class:'quota-label'},el('span',{text:item.label || item.key || '\u989d\u5ea6'}),el('strong',{class:full ? 'full' : '',text:`${Math.round(percent)}%`})),el('div',{class:'quota-track'},el('span',{class:full ? 'full' : '',style:`width:${percent}%`})),el('p',{text:resetLabel(item, limited || full)}));
+}
+function resetLabel(item, recover) {
+  const at = Date.parse(item.resets_at || '');
+  if (!Number.isFinite(at)) return '\u91cd\u7f6e\u65f6\u95f4\u672a\u77e5';
+  const mins = Math.round((at - Date.now()) / 60000);
+  if (mins <= 0) return recover ? '\u5373\u5c06\u6062\u590d' : '\u5373\u5c06\u91cd\u7f6e';
+  if (mins < 60) return recover ? `${mins} \u5206\u949f\u540e\u6062\u590d` : `${mins} \u5206\u949f\u540e\u91cd\u7f6e`;
+  const hours = Math.floor(mins / 60), rem = mins % 60;
+  if (hours < 48) { const text = rem ? `${hours} \u5c0f\u65f6 ${rem} \u5206` : `${hours} \u5c0f\u65f6`; return recover ? `${text}\u540e\u6062\u590d` : `${text}\u540e\u91cd\u7f6e`; }
+  const d = new Date(at), hh = String(d.getHours()).padStart(2,'0'), mm = String(d.getMinutes()).padStart(2,'0');
+  return `\u5468${'\u65e5\u4e00\u4e8c\u4e09\u56db\u4e94\u516d'[d.getDay()]} ${hh}:${mm} \u91cd\u7f6e`;
 }
 async function devicesView() {
-  const devices = collection(await api('/api/me/devices'),'devices');
-  return el('div',{class:'page-content'},notice('只授权您自己的设备','撤销后，该设备的新执行请求将被拒绝；已经受理的执行可能按既有策略完成。'),panel('连接的设备','从 CCB 客户端获取连接码后，在本站确认设备',table([
+  const accountId=new URLSearchParams(location.search).get('account_id');
+  const devices = collection(await api('/api/me/devices'),'devices').filter(d=>!accountId||d.current_grant_id===accountId);
+  return el('div',{class:'page-content'},panel(accountId?'更换设备':'连接的设备',accountId?'先撤销旧设备连接，确认成功后再连接新设备。不会自动抢占或踢掉旧设备。':'从 CCB 客户端获取连接码后，在本站确认设备',table([
     {label:'设备',render:d => el('div',{},el('strong',{text:d.name || '未命名设备'}),el('span',{class:'table-sub',text:d.platform || '未知平台'}))},
     {label:'状态',render:d => badge(d.state)}, {label:'最近活动',render:d => date(d.last_seen)}, {label:'到期时间',render:d => date(d.expires_at)},
     {label:'操作',render:d => actionButton('撤销连接',async () => await confirmAction('撤销设备连接',`确认撤销「${d.name || '此设备'}」？此操作会阻止新的执行请求。`,'撤销连接',true) ? api(`/api/me/devices/${encodeURIComponent(d.id)}`,{method:'DELETE'}) : CANCEL,{danger:true})},
-  ],devices,'还没有连接设备','在 CCB 客户端发起连接，并使用连接码确认。不会自动授权任何设备。'),el('a',{class:'btn primary',href:'/connect'},icon('plus'),'连接设备')));
+  ],devices,'还没有连接设备','在 CCB 客户端发起连接，并使用连接码确认。不会自动授权任何设备。'),el('a',{class:'btn primary',href:'/connect'},icon('terminal'),'开始使用')));
 }
 async function connectView() {
   const query = new URLSearchParams(location.search);
@@ -468,39 +823,257 @@ async function connectView() {
     },{disabled:!valid,onSuccess:() => { state.code = ''; currentPreview = null; navigate('/devices'); }});
     preview.replaceChildren(el('hr',{class:'form-divider'}),el('div',{class:'connection-box'},el('h2',{text:'请核对连接请求'}),el('dl',{class:'detail-list'},el('dt',{text:'设备名称'}),el('dd',{text:device.name || '未命名设备'}),el('dt',{text:'运行平台'}),el('dd',{text:device.platform || '未提供'}),el('dt',{text:'确认有效期'}),el('dd',{text:date(device.expires_at)}),el('dt',{text:'请求类型'}),el('dd',{text:device.renewal ? '设备续期' : '新设备连接'}))),valid ? approve : notice('连接码不可确认','连接码已过期或有效期不可验证，请在客户端重新发起连接。','warn'));
   });
-  return el('div',{class:'equal-col'},panel('连接到您的工作空间','当前登录账户决定可使用的权益',el('div',{class:'card-body'},form,preview)),panel('确认之前，请检查',null,el('div',{class:'card-body'},el('ul',{class:'section-list'},[
+  const checks = el('div',{class:'confirm-checks'},el('h3',{text:'确认之前，请检查'}),el('ul',{class:'section-list'},[
     ['01','请求是您本人发起的','不要批准别人发送的连接码。'],['02','客户端指向当前商户','客户端应连接当前商户的公开地址，而不是其他商户或平台后台。'],['03','账户有可用权益','没有有效授权时，设备确认不会绕过资源限制。'],
-  ].map(([n,title,text]) => el('li',{},el('span',{class:'step-num',text:n}),el('div',{class:'list-copy'},el('strong',{text:title}),el('p',{text}))))),notice('无需粘贴 API 密钥','连接设备不需要提供上游账号、商户密钥或管理员凭据。'))));
+  ].map(([n,title,text]) => el('li',{},el('span',{class:'step-num',text:n}),el('div',{class:'list-copy'},el('strong',{text:title}),el('p',{text}))))),notice('无需粘贴 API 密钥','连接设备不需要提供上游账号、商户密钥或管理员凭据。'));
+  const approval = panel('确认终端设备码','当前登录账户决定可使用的权益。先核对设备，再单独确认。',el('div',{class:'card-body'},form,preview,checks));
+  const steps = el('ol',{class:'connection-steps'},
+    el('li',{},el('h3',{text:'安装 ccb'}),el('p',{text:'需要 Node.js 18 或更新版本。Windows、macOS 和 Linux 使用同一条命令。'}),commandBlock('安装命令','npm install -g @rimuruchan/ccb'),el('p',{class:'instruction-note'},'首次启动时 ccb 会下载官方 Claude Code；电脑上已有 ',el('code',{text:'claude'}),' 时直接使用。以后用同一条命令更新。')),
+    el('li',{},el('h3',{text:'登录这台电脑'}),el('p',{text:'在需要接入的电脑上运行登录命令。浏览器会打开本页，让你确认设备。'}),commandBlock('登录命令',loginCommand()),el('p',{class:'instruction-note',text:'浏览器没有自动打开时，在本页「确认终端设备码」中输入终端显示的连接码。'})),
+    el('li',{},el('h3',{text:'选择账号，开始项目'}),el('p',{},'在项目目录运行 ccb。还没选账号时会列出账号供你选择，之后用 ',el('code',{text:'ccb account'}),' 切换。'),commandBlock('启动命令','ccb')));
+  const reference = el('dl',{class:'connection-reference','aria-label':'常用命令'});
+  for (const [name, command] of [['继续上次会话','ccb -c'],['切换账号','ccb account'],['检查连接','ccb status'],['设备续期','ccb login --renew'],['更新 Claude Code','ccb update']]) reference.append(el('div',{},el('dt',{text:name}),el('dd',{},el('code',{text:command}))));
+  const guide = panel('安装与登录','安装客户端、登录本站、确认设备，然后在项目目录开始。',el('div',{class:'card-body'},steps,reference));
+  const pairing = Boolean(state.code);
+  return el('div',{class:pairing ? 'connect-layout confirmation-first' : 'connect-layout'},...(pairing ? [approval, guide] : [guide, approval]));
+}
+
+function loginCommand() {
+  try {
+    const address = new URL(String(state.public?.site?.public_origin || ''));
+    if (!['http:','https:'].includes(address.protocol) || address.username || address.password || address.search || address.hash || address.pathname !== '/') return 'ccb login --gateway';
+    return `ccb login --gateway ${address.origin}`;
+  } catch { return 'ccb login --gateway'; }
+}
+function commandBlock(label, command) {
+  const code = el('code',{text:command});
+  const status = el('span',{class:'sr-only',role:'status'});
+  const button = el('button',{class:'btn small command-copy',type:'button','aria-label':`复制${label}`,text:'复制'});
+  let timer = 0;
+  const block = el('div',{class:'command-block'},el('div',{class:'command-label',text:label}),el('div',{class:'command-line'},el('pre',{},code),button),status);
+
+  button.addEventListener('click', async () => {
+    const value = code.textContent;
+    button.disabled = true;
+    let copied = false;
+    try { await navigator.clipboard.writeText(value); copied = true; }
+    catch { copied = false; }
+    button.disabled = false;
+    if (!copied) {
+      status.textContent = '无法访问剪贴板，已选中命令，请手动复制。';
+      const selection = getSelection(); const range = document.createRange();
+      range.selectNodeContents(code); selection.removeAllRanges(); selection.addRange(range);
+      return;
+    }
+    button.textContent = '已复制';
+    status.textContent = '命令已复制';
+    clearTimeout(timer);
+    timer = setTimeout(() => { button.textContent = '复制'; status.textContent = ''; }, 1800);
+  });
+  return block;
+}
+
+const usageRanges = [
+  {id:'1h',label:'近 1 小时',ms:3600000},
+  {id:'1d',label:'近 24 小时',ms:86400000},
+  {id:'7d',label:'近 7 天',ms:7 * 86400000},
+  {id:'30d',label:'近 30 天',ms:30 * 86400000},
+  {id:'all',label:'全部时间'},
+];
+function statusBadge(status) {
+  const code = Number(status);
+  if (!Number.isInteger(code)) return badge(String(status ?? '未知'));
+  const tone = code >= 200 && code < 300 ? 'good' : code === 429 || code >= 500 ? 'bad' : code >= 400 ? 'warn' : '';
+  const title = code === 429 ? '429 限流，计入失败' : code >= 500 ? '服务失败' : code >= 400 ? '请求未成功' : '成功';
+  return el('span',{class:`badge ${tone}`.trim(),title},el('span',{class:'dot'}),String(code));
+}
+function exactTokens(value) {
+  const n = finite(value);
+  return n === null ? '—' : new Intl.NumberFormat('zh-CN',{maximumFractionDigits:0}).format(n);
+}
+function cacheTokens(value) {
+  const n = finite(value);
+  if (n === null) return '—';
+  if (Math.abs(n) >= 1000000) return (n / 1000000).toFixed(1) + 'M';
+  if (Math.abs(n) >= 1000) return (n / 1000).toFixed(1) + 'K';
+  return exactTokens(n);
+}
+function formatCost(value) {
+  const n = finite(value);
+  if (n === null) return null;
+  return (n < 0 ? '-' : '') + '$' + Math.abs(n).toFixed(6);
+}
+let metricPopover = null;
+function closeMetricPopover() {
+  if (!metricPopover) return;
+  metricPopover.button.setAttribute('aria-expanded','false');
+  metricPopover.panel.remove();
+  metricPopover = null;
+}
+function placeMetricPopover(button, panel) {
+  const margin = 8;
+  const rect = button.getBoundingClientRect();
+  const width = panel.offsetWidth;
+  const height = panel.offsetHeight;
+  let left = rect.right + 10;
+  if (left + width > innerWidth - margin) left = Math.max(margin, rect.left - width - 10);
+  let top = rect.top + rect.height / 2 - height / 2;
+  top = Math.max(margin, Math.min(top, innerHeight - height - margin));
+  panel.style.left = `${Math.round(left)}px`;
+  panel.style.top = `${Math.round(top)}px`;
+}
+function openMetricPopover(button, panel) {
+  if (metricPopover?.button === button && metricPopover.panel.isConnected) return;
+  closeMetricPopover();
+  document.body.append(panel);
+  placeMetricPopover(button, panel);
+  button.setAttribute('aria-expanded','true');
+  metricPopover = {button, panel, pinned:false};
+}
+function metricInfo(label, build) {
+  const button = el('button',{type:'button',class:'metric-info','aria-label':label,'aria-expanded':'false','aria-haspopup':'dialog'},icon('info'));
+  const show = () => openMetricPopover(button, build());
+  button.addEventListener('mouseenter', show);
+  button.addEventListener('focus', show);
+  button.addEventListener('mouseleave', () => { if (metricPopover?.button === button && !metricPopover.pinned && document.activeElement !== button) closeMetricPopover(); });
+  button.addEventListener('blur', () => { if (metricPopover?.button === button && !metricPopover.pinned) closeMetricPopover(); });
+  button.addEventListener('click', event => {
+    event.preventDefault();
+    event.stopPropagation();
+    if (metricPopover?.button === button && metricPopover.pinned) closeMetricPopover();
+    else { show(); if (metricPopover?.button === button) metricPopover.pinned = true; }
+  });
+  return button;
+}
+document.addEventListener('click', event => { if (metricPopover?.pinned && !metricPopover.button.contains(event.target)) closeMetricPopover(); });
+document.addEventListener('keydown', event => { if (event.key === 'Escape') closeMetricPopover(); });
+addEventListener('scroll', () => closeMetricPopover(), true);
+addEventListener('resize', () => { if (metricPopover) placeMetricPopover(metricPopover.button, metricPopover.panel); });
+function detailRow(row) {
+  return el('div',{class:`metric-popover-row${row.total ? ' total' : ''}`},
+    el('span',{},row.label, row.tag ? el('span',{class:`token-tag${row.tag === '1h' ? ' hour' : ''}`,text:row.tag}) : null),
+    el('strong',{text:row.value}));
+}
+function detailPopover(title, rows, note, extraClass) {
+  return el('div',{class:`metric-popover${extraClass ? ' ' + extraClass : ''}`,role:'dialog','aria-label':title},
+    el('p',{class:'metric-popover-title',text:title}),
+    el('div',{class:'metric-popover-list'},rows.map(detailRow)),
+    note ? el('p',{class:'metric-popover-note',text:note}) : null);
+}
+function tokenPopoverRows(detail) {
+  const rows = detail.tokens.map(item => ({label:item.label, value:exactTokens(item.tokens), tag:item.tag}));
+  if (detail.totalTokens !== null) rows.push({label:'总 Token', value:exactTokens(detail.totalTokens), total:true});
+  return rows;
+}
+function requestTokens(row) {
+  if (row.usage_complete === false || !row.usage) return el('div',{class:'record-stack'},el('span',{text:'未知'}),el('span',{class:'record-secondary',text:row.count_only ? '仅计数，用量未完整记录' : '用量未完整记录，不计为零'}));
+  const usage = row.usage;
+  const detail = usageDetail(row);
+  const cache = el('div',{class:'token-line'});
+  if ((finite(usage.cache_read_input_tokens) || 0) > 0) cache.append(el('span',{class:'tok-read',title:'缓存读取'},icon('cache'),cacheTokens(usage.cache_read_input_tokens)));
+  if ((finite(usage.cache_creation_input_tokens) || 0) > 0) cache.append(el('span',{class:'tok-write',title:'缓存写入'},icon('edit'),cacheTokens(usage.cache_creation_input_tokens),(finite(usage.cache_creation_1h) || 0) > 0 ? el('span',{class:'token-tag',text:'1h'}) : null));
+  const note = detail.totalTokens === null ? 'Token 记录不完整，无法计算合计。' : '';
+  return el('div',{class:'token-cell'},el('div',{},
+    el('div',{class:'token-line'},el('span',{class:'tok-in',title:'输入'},icon('down'),exactTokens(usage.input_tokens)),el('span',{class:'tok-out',title:'输出'},icon('up'),exactTokens(usage.output_tokens))),
+    cache.childNodes.length ? cache : null),
+    metricInfo('查看 Token 明细', () => detailPopover('Token 明细', tokenPopoverRows(detail), note)));
+}
+function requestCost(row) {
+  if (row.count_only) return el('span',{class:'cost-note',text:'不计费'});
+  const cost = formatCost(row.cost_usd);
+  if (!cost) return el('span',{class:'is-unknown',text:'—'});
+  const detail = usageDetail(row);
+  const rows = detail.tokens.map(item => ({label:item.label, value:exactTokens(item.tokens), tag:item.tag}));
+  if (detail.totalTokens !== null) rows.push({label:'总 Token', value:exactTokens(detail.totalTokens)});
+  rows.push({label:'参考费用', value:cost, total:true});
+  return el('div',{class:'cost-cell'},el('span',{class:'cost-value',text:cost}),metricInfo('查看参考费用明细', () => detailPopover('参考费用明细', rows, '', 'cost-popover')),row.usage_complete !== true ? el('span',{class:'record-secondary',text:'用量未完整确认'}) : null);
+}
+function requestTiming(row) {
+  const first = row.count_only || row.stream !== true ? '不适用' : (finite(row.first_token_ms) === null ? '未记录' : formatDuration(row.first_token_ms));
+  return el('div',{class:'record-stack'},el('span',{class:'record-primary',text:formatDuration(row.duration_ms)}),el('span',{class:'record-secondary',text:`首 Token ${first}`}));
 }
 async function usageView() {
-  const params = new URLSearchParams(location.search); const requestedOffset = Number(params.get('offset')); const query = new URLSearchParams({limit:'20',offset:String(Number.isSafeInteger(requestedOffset) && requestedOffset >= 0 ? requestedOffset : 0)});
-  for (const key of ['from','to']) if (params.has(key)) query.set(key,params.get(key));
-  const data = await api(`/api/me/usage?${query}`); const requests = collection(data,'requests'); const usage = data.usage;
-  const form = el('form',{class:'filter-bar'},field('开始日期','from',{type:'date',value:(params.get('from') || '').slice(0,10)}),field('结束日期','to',{type:'date',value:(params.get('to') || '').slice(0,10)}),el('button',{class:'btn',type:'submit',text:'查询'}));
-  form.addEventListener('submit',event => { event.preventDefault(); const values = new FormData(form); const from = values.get('from'), to = values.get('to');
-    if (from && to && from > to) { document.getElementById('page-feedback').replaceChildren(notice('日期范围有误','开始日期不能晚于结束日期。','error')); return; }
-    const next = new URLSearchParams(); if (from) next.set('from',new Date(`${from}T00:00:00`).toISOString()); if (to) next.set('to',new Date(`${to}T23:59:59.999`).toISOString()); navigate(`/usage?${next}`);
+  const params = new URLSearchParams(location.search);
+  const requestedOffset = Number(params.get('offset'));
+  const offset = Number.isSafeInteger(requestedOffset) && requestedOffset >= 0 ? requestedOffset : 0;
+  const requested = params.get('range');
+  const hasBounds = params.has('from') || params.has('to');
+  const range = requested === 'today' || usageRanges.some(item => item.id === requested) ? requested : (hasBounds || requested === 'custom' ? 'custom' : '1d');
+  let from = params.get('from') || '', to = params.get('to') || '';
+  if (range === 'today') {
+    const start = new Date(); start.setHours(0,0,0,0);
+    from = start.toISOString(); to = new Date().toISOString();
+  } else if (range !== 'all' && range !== 'custom' && !hasBounds) {
+    const spec = usageRanges.find(item => item.id === range);
+    const end = new Date();
+    to = end.toISOString();
+    from = new Date(end.getTime() - spec.ms).toISOString();
+  } else if (range === 'all') { from = ''; to = ''; }
+  const query = new URLSearchParams({limit:'20',offset:String(offset)});
+  if (from) query.set('from',from);
+  if (to) query.set('to',to);
+  const data = await api(`/api/me/usage?${query}`);
+  const requests = collection(data,'requests'), usage = data.usage;
+  const label = range === 'today' ? '今日' : range === 'custom' ? '自定义范围' : usageRanges.find(item => item.id === range)?.label;
+  const form = el('form',{class:'filter-bar'},field('开始日期','from',{type:'date',value:localDay(from)}),field('结束日期','to',{type:'date',value:localDay(to)}),el('button',{class:'btn',type:'submit',text:'查询'}));
+  form.addEventListener('submit',event => {
+    event.preventDefault();
+    const values = new FormData(form), start = values.get('from'), end = values.get('to');
+    if (start && end && start > end) { document.getElementById('page-feedback').replaceChildren(notice('日期范围有误','开始日期不能晚于结束日期。','error')); return; }
+    const next = new URLSearchParams();
+    if (!start && !end) next.set('range','all');
+    else {
+      next.set('range','custom');
+      if (start) next.set('from',new Date(`${start}T00:00:00`).toISOString());
+      if (end) next.set('to',new Date(`${end}T23:59:59.999`).toISOString());
+    }
+    navigate(`/usage?${next}`);
   });
-  const offset = Number(query.get('offset')); const total = Number.isSafeInteger(data.total) ? data.total : null;
-  const pager = el('div',{class:'pager'},el('span',{text:total === null ? '总数未提供' : `共 ${number(total)} 条 · 第 ${Math.floor(offset/20)+1} 页`}),el('button',{class:'btn small',disabled:offset === 0,type:'button',text:'上一页',onclick:() => { query.set('offset',Math.max(0,offset-20)); navigate(`/usage?${query}`); }}),el('button',{class:'btn small',disabled:total === null || offset + 20 >= total,type:'button',text:'下一页',onclick:() => { query.set('offset',offset+20); navigate(`/usage?${query}`); }}));
-  return el('div',{class:'page-content'},notice('参考成本（USD），不是实际扣费','参考 USD 仅用于理解上游用量，不是您的零售价格，不会据此扣减钱包。未返回成本或不完整的用量将保留为未知。'),
-    el('div',{class:'stats-grid'},stat('请求次数',number(usage?.requests),'当前查询区间','chart'),stat('输入 / 输出 Token',`${number(usage?.input_tokens)} / ${number(usage?.output_tokens)}`,'不包含缓存 Token','code'),stat('参考成本 · USD',usd(usage?.cost_usd),'仅供核对，不会从钱包扣费','receipt'),stat('未知用量请求',number(usage?.unknown_usage),'用量缺失不视为零成本','info')),
+  const total = Number.isSafeInteger(data.total) ? data.total : null;
+  const pageOf = nextOffset => {
+    const next = new URLSearchParams({range});
+    if (from) next.set('from',from);
+    if (to) next.set('to',to);
+    if (nextOffset > 0) next.set('offset',String(nextOffset));
+    navigate(`/usage?${next}`);
+  };
+  const pager = el('div',{class:'pager'},el('span',{text:total === null ? '总数未提供' : `共 ${number(total)} 条 · 第 ${Math.floor(offset/20)+1} 页`}),el('button',{class:'btn small',disabled:offset === 0,type:'button',text:'上一页',onclick:() => pageOf(Math.max(0,offset-20))}),el('button',{class:'btn small',disabled:total === null || offset + 20 >= total,type:'button',text:'下一页',onclick:() => pageOf(offset+20)}));
+  const seg = el('div',{class:'seg',role:'group','aria-label':'时间范围'},usageRanges.map(item => el('button',{type:'button',class:range === item.id ? 'on' : '','aria-pressed':range === item.id ? 'true' : 'false',text:item.label,onclick:() => { const next = new URLSearchParams({range:item.id}); if (item.ms) { const end = new Date(); next.set('to',end.toISOString()); next.set('from',new Date(end.getTime() - item.ms).toISOString()); } navigate(`/usage?${next}`); }})));
+  return el('div',{class:'page-content usage-page'},
+    recordStats(usage,label),
     !usage ? notice('统计尚不可用','服务器尚未返回用量汇总。下方仅展示实际返回的请求记录。','warn') : null,
-    panel('请求记录','仅显示必要的运行元数据，不展示提示词或请求正文',el('div',{},form,table([
-      {label:'时间 / 模型',render:r => el('div',{},el('span',{text:date(r.time)}),el('span',{class:'table-sub',text:r.model || '未提供模型'}))},
-      {label:'状态',render:r => badge(String(r.status ?? '未知'))},
-      {label:'输入 / 输出',render:r => `${number(r.usage?.input_tokens)} / ${number(r.usage?.output_tokens)}`},
-      {label:'耗时',render:r => typeof r.duration_ms === 'number' ? `${number(r.duration_ms)} ms` : '—'},
-      {label:'参考 USD',render:r => el('div',{},usd(r.cost_usd),r.usage_complete !== true ? el('span',{class:'table-sub',text:'用量未完整确认'}) : null)},
+    panel('请求记录','模型调用和 Token 用量。参考费用不会从钱包扣费。',el('div',{},el('div',{class:'record-toolbar'},seg,form),table([
+      {label:'时间',render:row => date(row.time)},
+      {label:'模型 / 状态',render:row => el('div',{class:'record-stack'},el('span',{class:'record-primary',text:row.model || '—'}),el('span',{class:'record-secondary'},statusBadge(row.status),row.stream ? ' 流式' : '',row.count_only ? ' 计数' : ''))},
+      {label:'Token',render:requestTokens},
+      {label:'参考费用',render:requestCost},
+      {label:'总时长 / 首 Token',render:requestTiming},
     ],requests,'此区间暂无请求','换一个时间范围，或在获得权益并连接设备后开始使用。'),pager)));
 }
 function orderTable(orders, showCustomer = false) {
   return table([...(showCustomer ? [{label:'客户标识',render:o => el('span',{class:'mono',text:o.user_id || '未提供'})}] : []),{label:'订单编号',render:o => el('span',{class:'mono',text:o.id})},{label:'用途',render:o=>o.rental_id?'套餐支付':'余额充值'},{label:'金额',render:o => money(o.amount_minor,o.currency)},{label:'支付状态',render:o => badge(o.status)},{label:'创建时间',render:o => date(o.created_at)},{label:'操作',render:o=>['creating','pending','unknown'].includes(o.status)?actionButton('核对支付',()=>api(`/api/${showCustomer?'admin':'me'}/payments/${encodeURIComponent(o.id)}/reconcile`,{method:'POST',body:{}})):'—'}],orders,'暂无支付订单','只有服务器创建的真实支付订单才会出现在这里。');
 }
 async function walletView() {
-  const data = await api('/api/me/wallet'); const ledger = collection(data,'ledger'); const orders = collection(data,'orders');
-  const enabled = state.public.features.payment === true; const result = el('div',{});
-  const form = el('form',{},field('充值金额（人民币元）','amount',{required:true,type:'number',min:'0.01',step:'0.01',inputmode:'decimal',placeholder:'0.00',disabled:!enabled,hint:'实际支付金额以 Stripe 收银台及服务器订单为准。'}),el('button',{class:'btn primary',type:'submit',disabled:!enabled},icon('wallet'),enabled ? '创建 Stripe 支付订单' : '在线支付未启用'));
+  const [data, catalog] = await Promise.all([api('/api/me/wallet'), api('/api/plans'+(new URLSearchParams(location.search).get('renew_grant_id')?'?renew_grant_id='+encodeURIComponent(new URLSearchParams(location.search).get('renew_grant_id')):'')).catch(error=>({plans:[],catalogError:error.message}))]);
+  const ledger = collection(data,'ledger');
+  const orders = collection(data,'orders');
+  const plans = collection(catalog,'plans');
+  const enabled = state.public.features.payment === true;
+  const result = el('div',{});
+  const presets = ['50','100','200','500'];
+  const form = el('form',{class:'recharge-form'},
+    field('充值金额（人民币元）','amount',{required:true,type:'number',min:'0.01',step:'0.01',inputmode:'decimal',placeholder:'0.00',disabled:!enabled,hint:'实际支付金额以 Stripe 收银台及服务器订单为准。'}),
+    el('div',{class:'amount-choices'}, presets.map(amount => el('button',{type:'button',class:'amount-choice','data-amount':amount,disabled:!enabled,text:`¥${amount}`,onclick() {
+      const input = form.querySelector('input[name=amount]');
+      if (!input || input.disabled) return;
+      input.value = amount;
+      input.dispatchEvent(new Event('input',{bubbles:true}));
+      input.focus();
+    }}))),
+    el('button',{class:'btn primary',type:'submit',disabled:!enabled},icon('wallet'),enabled ? '创建 Stripe 支付订单' : '在线支付未启用'));
+  form.querySelector('input[name=amount]')?.addEventListener('input', event => {
+    for (const chip of form.querySelectorAll('.amount-choice')) chip.classList.toggle('on', chip.dataset.amount === event.currentTarget.value);
+  });
   bindForm(form,async values => {
     if (state.public.features.payment !== true) throw new Error('当前未启用在线支付。');
     const amount = values.get('amount').trim(); if (!/^\d+(\.\d{1,2})?$/.test(amount)) throw new Error('请输入最多两位小数的有效金额。');
@@ -517,18 +1090,22 @@ async function walletView() {
     result.replaceChildren(notice('支付订单已创建，尚不代表已付款',`订单 ${payment.order.id} · ${money(payment.order.amount_minor,payment.order.currency)}。仅以服务器确认的状态为准。`),el('p',{class:'inline-info',text:`将前往外部收银台：${url.origin}`}),
       el('div',{class:'button-row'},el('a',{class:'btn primary checkout-link',href:url.href,target:'_blank',rel:'noopener noreferrer',referrerpolicy:'no-referrer',text:'打开 Stripe 收银台 ↗'}),el('button',{class:'btn',type:'button',text:'查询订单状态',onclick:() => navigate(`/wallet?order=${encodeURIComponent(payment.order.id)}`)})));
   });
-  const root = el('div',{class:'page-content'},notice('钱包余额与参考用量分开记录','本页仅展示人民币余额、账本与支付订单。参考 USD 不是零售费用；本工作台不提供手动充值入口。'),
-    el('div',{class:'equal-col'},panel('账户余额','以服务器账本为准',el('div',{class:'card-body'},el('div',{class:'balance-card'},el('p',{text:'可用余额 · CNY'}),el('div',{class:'amount',text:money(data.wallet?.balance_minor,data.wallet?.currency)}),el('p',{text:'余额不等于资源授权，请在「我的权益」查看使用资格。'})))),
-      panel('在线充值','通过已配置的 Stripe Checkout 完成支付',el('div',{class:'card-body'},!enabled ? notice('支付服务尚未配置','暂时无法发起在线支付。请联系管理员；不会创建虚拟订单或显示模拟到账。','warn') : null,el('br'),form,result))));
+  const root = el('div',{class:'page-content wallet-page'},
+    el('div',{class:'wallet-top'},
+      panel('账户余额','以服务器账本为准',el('div',{class:'card-body'},el('div',{class:'balance-card'},el('p',{text:'可用余额 · CNY'}),el('div',{class:'amount',text:money(data.wallet?.balance_minor,data.wallet?.currency)}),el('p',{text:'余额不等于账号。购买并交付后，请在「我的账号」查看。'})))),
+      panel('在线充值','通过已配置的 Stripe Checkout 完成支付',el('div',{class:'card-body'},!enabled ? notice('支付服务尚未配置','暂时无法发起在线支付。请联系管理员；不会创建虚拟订单或显示模拟到账。','warn') : null,form,result))));
   const orderId = new URLSearchParams(location.search).get('order');
   if (orderId) {
     try { const payment = await api(`/api/me/payments/${encodeURIComponent(orderId)}`); if (!payment.order) throw new Error('订单信息缺失。'); root.prepend(panel('返回后的订单核对','回跳网址中的成功参数不会改变余额或订单状态',orderTable([payment.order]))); }
     catch (error) { root.prepend(errorNotice(error)); }
   }
-  root.append(panel('最近支付订单','完成付款后，请刷新以获取服务端确认状态',orderTable(orders)),panel('资金记录','所有金额使用人民币最小单位换算显示',table([
-    {label:'记录时间',render:r => date(r.created_at)}, {label:'类型',render:r => ({stripe_credit:'Stripe 支付入账',rental_debit:'套餐购买扣款',rental_refund:'未交付退回余额'}[r.kind] || r.kind || '未提供')},
-    {label:'变动金额',render:r => money(r.amount_minor,r.currency || data.wallet?.currency)}, {label:'关联订单',render:r => el('span',{class:'mono',text:r.rental_id || r.order_id || '—'})},
-  ],ledger,'暂无资金记录','没有发生过服务器确认的资金变动。'))); return root;
+  root.append(catalog.catalogError?notice('订阅目录暂不可用',catalog.catalogError,'warn'):subscriptionPanel(plans), el('div',{class:'wallet-history'},
+    panel('最近支付订单','完成付款后，请刷新以获取服务端确认状态',orderTable(orders)),
+    panel('资金记录','所有金额使用人民币最小单位换算显示',table([
+      {label:'记录时间',render:r => date(r.created_at)}, {label:'类型',render:r => ({stripe_credit:'Stripe 支付入账',rental_debit:'套餐购买扣款',rental_refund:'未交付退回余额'}[r.kind] || r.kind || '未提供')},
+      {label:'变动金额',render:r => money(r.amount_minor,r.currency || data.wallet?.currency)}, {label:'关联订单',render:r => el('span',{class:'mono',text:r.rental_id || r.order_id || '—'})},
+    ],ledger,'暂无资金记录','没有发生过服务器确认的资金变动。'))));
+  return root;
 }
 async function profileView() {
   const user = state.user;
@@ -538,7 +1115,7 @@ async function profileView() {
     if (!await confirmAction('更新登录密码','确认修改当前账户的密码？更新后请使用新密码重新登录。','更新密码')) return CANCEL;
     return api('/api/auth/password',{method:'PATCH',body:{current_password:values.get('current_password'),new_password:values.get('new_password')}});
   },(data,message) => { if (data.ok !== true) throw Object.assign(new Error('密码更新尚未确认。'),{uncertain:true}); state.user = null; state.csrf = null; state.returnTo = '/profile'; navigate('/login',true); toast('密码已更新，请使用新密码重新登录。'); });
-  return el('div',{class:'equal-col'},panel('账户信息','身份由当前服务端会话确定',el('div',{class:'card-body'},el('div',{class:'identity-card'},el('span',{class:'avatar',text:(user.display_name || user.email).slice(0,1).toUpperCase()}),el('div',{},el('h2',{text:user.display_name}),el('p',{class:'muted',text:user.email}))),el('dl',{class:'detail-list'},el('dt',{text:'账户角色'}),el('dd',{},badge(user.role)),el('dt',{text:'账户状态'}),el('dd',{},badge(user.status)),el('dt',{text:'上游账户'}),el('dd',{text:user.core_customer_id ? '已开通' : '尚未开通'})),el('hr',{class:'form-divider'}),notice('需要修改账户资料？','请联系商户管理员。账户身份不可在浏览器中手动切换。'))),panel('登录安全','修改您的站点登录密码',el('div',{class:'card-body'},form)));
+  return el('div',{class:'equal-col'},panel('账户信息','身份由当前服务端会话确定',el('div',{class:'card-body'},el('div',{class:'identity-card'},el('span',{class:'avatar',text:(user.display_name || user.email).slice(0,1).toUpperCase()}),el('div',{},el('h2',{text:user.display_name}),el('p',{class:'muted',text:user.email}))),el('dl',{class:'detail-list'},el('dt',{text:'账户角色'}),el('dd',{},badge(user.role)),el('dt',{text:'账户状态'}),el('dd',{},badge(user.status)),el('dt',{text:'账号交付'}),el('dd',{},el('a',{href:'/accounts',text:'查看我的账号'}))),el('hr',{class:'form-divider'}),notice('需要修改账户资料？','请联系商户管理员。账户身份不可在浏览器中手动切换。'))),panel('登录安全','修改您的站点登录密码',el('div',{class:'card-body'},form)));
 }
 
 function editorDialog(title, form) {
@@ -557,7 +1134,7 @@ function customerEditor(user) {
   const dialog = editorDialog(create ? '创建客户账户' : `编辑 ${user.display_name || user.email}`,form);
   bindForm(form,async values => {
     const payload = Object.fromEntries(values);
-    if (!await confirmAction(create ? '确认创建客户' : '确认修改客户',`将${create ? '创建' : '更新'}「${payload.display_name}」的站点账户，角色为${payload.role === 'admin' ? '管理员' : '成员'}。创建账户不会自动分配上游资源。`,'确认保存')) return CANCEL;
+    if (!await confirmAction(create ? '确认创建客户' : '确认修改客户',`将${create ? '创建' : '更新'}「${payload.display_name}」的站点账户，角色为${payload.role === 'admin' ? '管理员' : '成员'}。创建客户后，在账号库存中分配账号。`,'确认保存')) return CANCEL;
     return api(create ? '/api/admin/users' : `/api/admin/users/${encodeURIComponent(user.id)}`,{method:create ? 'POST' : 'PATCH',body:payload});
   },async data => {
     if (!data.user) throw Object.assign(new Error('未收到客户变更确认。'),{uncertain:true});
@@ -574,60 +1151,12 @@ async function customersView() {
   const data=await api(`/api/admin/users?${query}`),users=collection(data,'users');
   const search=el('form',{class:'button-row'},el('input',{name:'q',value:query.get('q'),placeholder:'搜索客户邮箱或名称','aria-label':'搜索客户'}),el('button',{class:'btn',type:'submit',text:'搜索'}));search.addEventListener('submit',event=>{event.preventDefault();navigate('/admin/customers?q='+encodeURIComponent(new FormData(search).get('q')));});
   const pager=el('div',{class:'pager'},el('span',{text:`共 ${data.total} 位客户 · 本页 ${users.length} 位`}),...[-50,50].map(delta=>el('button',{class:'btn small',text:delta<0?'上一页':'下一页',disabled:delta<0?offset===0:offset+users.length>=data.total,onclick:()=>{query.set('offset',String(Math.max(0,offset+delta)));navigate(`/admin/customers?${query}`);}})));
-  return el('div',{class:'page-content'},search,pager,notice('本站账户与上游客户分开开通','先创建本站账户，再开通上游客户。开通使用稳定的本站用户编号，不会把上游凭据交给客户。'),panel('客户账户',`${number(users.length)} 个站点账户`,table([
+  return el('div',{class:'page-content'},search,pager,panel('客户账户',`${number(users.length)} 个站点账户`,table([
     {label:'客户',render:u => el('div',{},el('strong',{text:u.display_name || '未命名客户'}),el('span',{class:'table-sub',text:u.email}))},
     {label:'角色 / 状态',render:u => el('div',{class:'button-row'},badge(u.role),badge(u.status))},
-    {label:'上游客户',render:u => el('span',{class:`badge ${u.core_customer_id ? 'good' : 'warn'}`,text:u.core_customer_id ? '已开通' : '待开通'})},
     {label:'创建时间',render:u => date(u.created_at)},
-    {label:'操作',render:u => el('div',{class:'table-actions'},el('button',{class:'btn small',type:'button',text:'编辑',onclick:() => customerEditor(u)}),u.core_customer_id ? el('a',{class:'btn small',href:`/admin/resources?user_id=${encodeURIComponent(u.id)}`,text:'管理授权'})
-      : actionButton('开通映射',async () => await confirmAction('开通上游客户',`将为「${u.display_name || u.email}」建立不可随意更换的上游客户关联。开通后不会自动分配资源。`,'确认开通') ? api(`/api/admin/users/${encodeURIComponent(u.id)}/provision`,{method:'POST'}) : CANCEL))},
-  ],users,'暂无客户账户','创建客户后，可以开通映射并分配资源。'),el('button',{class:'btn primary',type:'button',onclick:() => customerEditor()},icon('plus'),'创建客户')));
-}
-function grantEditor(user, resources, grant) {
-  const form = el('form',{});
-  form.append(notice('授权对象',user.display_name || user.email));
-  if (!grant) form.append(field('分配资源','resource_id',{type:'select',required:true,choices:[{value:'',label:'请选择可用资源'},...resources.filter(r => r.status === 'active' && r.available !== false).map(r => ({value:r.id,label:r.name}))]}));
-  let expiry = '';
-  if (grant?.expires_at) { const d = new Date(grant.expires_at); if (!Number.isNaN(d.getTime())) expiry = new Date(d.getTime()-d.getTimezoneOffset()*60000).toISOString().slice(0,16); }
-  form.append(field('授权到期时间','expires_at',{type:'datetime-local',value:expiry,hint:'使用您的本地时区。留空表示不设置额外到期时间；资源自身有效期仍然生效。'}));
-  if (grant) form.append(el('p',{class:'inline-info',text:`本次变更基于授权版本 ${grant.revision}。若服务器版本已更新，将拒绝覆盖。`}));
-  form.append(el('button',{class:'btn primary',type:'submit',text:grant ? '保存有效期' : '分配资源'}));
-  const dialog = editorDialog(grant ? '调整授权有效期' : '分配资源',form);
-  bindForm(form,async values => {
-    const local = values.get('expires_at'); let expires_at = null;
-    if (local) { const d = new Date(local); if (Number.isNaN(d.getTime()) || d.getTime() <= Date.now()) throw new Error('请选择未来的有效到期时间。'); expires_at = d.toISOString(); }
-    if (grant && !Number.isInteger(grant.revision)) throw new Error('授权缺少有效版本，请重新读取。');
-    if (!await confirmAction('确认授权变更',`为「${user.display_name || user.email}」${grant ? '更新授权有效期' : '分配所选资源'}。服务器会校验资源范围、产品与有效期。`,'确认授权')) return CANCEL;
-    return api(grant ? `/api/admin/grants/${encodeURIComponent(grant.id)}` : '/api/admin/grants',{method:grant ? 'PATCH' : 'POST',body:grant ? {expected_revision:grant.revision,expires_at} : {user_id:user.id,resource_id:values.get('resource_id'),expires_at}});
-  },data => { if (!data.grant) throw Object.assign(new Error('服务器尚未确认授权变更。'),{uncertain:true}); dialog.close(); toast('授权变更已保存'); render(); });
-}
-async function resourcesView() {
-  const [resourceData,userData] = await Promise.all([api('/api/admin/resources'),api('/api/admin/users')]);
-  const resources = collection(resourceData,'resources'), users = collection(userData,'users');
-  const selected = new URLSearchParams(location.search).get('user_id');if(selected&&!users.some(u=>u.id===selected)){const chosen=await api('/api/admin/users/'+encodeURIComponent(selected));users.push(chosen.user);} const user = users.find(u => u.id === selected);
-  const picker = field('选择客户，管理其授权','user_id',{type:'select',value:user?.id || '',choices:[{value:'',label:'请选择已开通映射的客户'},...users.filter(u => u.core_customer_id).map(u => ({value:u.id,label:`${u.display_name || u.email} · ${u.email}`}))]});
-  picker.querySelector('select').addEventListener('change',event => navigate(event.target.value ? `/admin/resources?user_id=${encodeURIComponent(event.target.value)}` : '/admin/resources'));
-  const grantBody = el('div',{},el('div',{class:'card-body'},picker));
-  if (user?.core_customer_id) {
-    const grants = collection(await api(`/api/admin/grants?user_id=${encodeURIComponent(user.id)}`),'grants');
-    grantBody.append(table([
-      {label:'资源',render:g => g.name || 'Code 资源'}, {label:'状态',render:g => badge(g.status)}, {label:'有效期至',render:g => g.expires_at ? date(g.expires_at) : '无额外到期时间'},
-      {label:'版本',render:g => number(g.revision)},
-      {label:'操作',render:g => el('div',{class:'table-actions'},el('button',{class:'btn small',type:'button',disabled:!Number.isInteger(g.revision),text:'有效期',onclick:() => grantEditor(user,resources,g)}),actionButton(g.status === 'active' ? '撤销授权' : '恢复授权',async () => {
-        const revoke = g.status === 'active';
-        if (!Number.isInteger(g.revision)) throw new Error('授权版本缺失，请重新读取。');
-        if (!await confirmAction(revoke ? '撤销资源授权' : '恢复资源授权',`确认${revoke ? '撤销' : '恢复'}「${user.display_name || user.email}」的「${g.name || '此资源'}」？版本 ${g.revision}。${revoke ? '新的执行会被拒绝，已受理的执行可能完成。' : '服务器将重新检查资源状态与有效期。'}`,revoke ? '撤销授权' : '恢复授权',revoke)) return CANCEL;
-        return api(`/api/admin/grants/${encodeURIComponent(g.id)}`,{method:'PATCH',body:{expected_revision:g.revision,status:revoke ? 'revoked' : 'active'}});
-      },{danger:g.status === 'active',disabled:!Number.isInteger(g.revision)}))},
-    ],grants,'此客户尚未获得资源授权','从上方可用资源中选择并分配。'));
-  } else grantBody.append(emptyState('选择一位客户','只列出已开通上游客户的本站账户。请先在客户管理中完成开通。','users'));
-  return el('div',{class:'page-content'},notice('资源由上游提供','本站只能分配当前商户拥有的资源。授权范围、期限与版本以上游校验为准；不会覆盖冲突的新版本。'),
-    panel('商户资源','仅支持 Code 产品通道',table([
-      {label:'资源名称',render:r => el('div',{},el('strong',{text:r.name}),el('span',{class:'table-sub',text:Array.isArray(r.surfaces) ? r.surfaces.join(' · ') : '—'}))},
-      {label:'状态',render:r => badge(r.available === false ? 'disabled' : r.status)}, 
-      {label:'有效期至',render:r => r.expires_at ? date(r.expires_at) : '未设置到期时间'}, {label:'版本',render:r => number(r.revision)},
-    ],resources,'尚无可分配资源','请联系平台管理员配置此商户的资源，本站不能创建上游资源。')),
-    panel('客户授权','变更时携带读取到的授权版本',grantBody,el('button',{class:'btn primary',type:'button',disabled:!user?.core_customer_id || !resources.some(r => r.status === 'active' && r.available !== false),onclick:() => grantEditor(user,resources)},icon('plus'),'分配资源')));
+    {label:'操作',render:u => el('div',{class:'table-actions'},el('button',{class:'btn small',type:'button',text:'编辑',onclick:()=>customerEditor(u)}),el('a',{class:'btn small',href:`/admin/inventory?user_id=${encodeURIComponent(u.id)}`,text:'查看账号'}))},
+  ],users,'暂无客户账户','创建客户后，在账号库存选择账号并分配给客户。'),el('button',{class:'btn primary',type:'button',onclick:() => customerEditor()},icon('plus'),'创建客户')));
 }
 function showSecret(data) {
   const secret = el('code',{class:'secret',text:data.token});
@@ -641,7 +1170,7 @@ function showSecret(data) {
 
 async function ordersView() {
   const orders = collection(await api('/api/admin/orders'),'orders');
-  return el('div',{class:'page-content'},state.public.features.payment !== true ? notice('在线支付未启用','此处仍可查看已有真实订单，但不会模拟收款或提供手工入账。','warn') : notice('订单状态以服务端为准','支付回跳、刷新页面或打开收银台均不能证明支付成功。'),panel('支付订单',`${number(orders.length)} 条服务器记录`,orderTable(orders,true)));
+  return el('div',{class:'page-content'},state.public.features.payment !== true ? notice('在线支付未启用','此处仍可查看已有真实订单，但不会模拟收款或提供手工入账。','warn') : null,panel('支付订单',`${number(orders.length)} 条服务器记录`,orderTable(orders,true)));
 }
 async function auditView() {
   const events = collection(await api('/api/admin/audit'),'events');
@@ -651,6 +1180,92 @@ async function auditView() {
     {label:'目标',render:e => el('span',{class:'mono',text:e.subject_id || '—'})}, {label:'结果',render:e => e.outcome ? badge(e.outcome) : '结果未提供'},
   ],events,'暂无审计记录','管理操作产生后，服务器记录将展示在此处。'));
 }
+
+function switchRow(title, hint, name, checked) {
+  return el('div',{class:'switch-row'},el('div',{},el('strong',{text:title}),el('p',{text:hint})),el('label',{class:'switch'},el('input',{type:'checkbox',name,'aria-label':title,checked:checked===true}),el('span')));
+}
+function emailSuffixEditor(initial) {
+  let tags = [];
+  const seen = new Set();
+  for (const item of initial || []) {
+    const domain = normalizeRegistrationEmailSuffixDomain(item);
+    if (!isRegistrationEmailSuffixDomainValid(domain) || seen.has(domain)) continue;
+    seen.add(domain); tags.push(domain);
+  }
+  const box = el('div',{class:'tag-box'});
+  const input = el('input',{type:'text',autocomplete:'off',spellcheck:'false',placeholder:'@example.com, *.edu.cn','aria-label':'添加邮箱域名'});
+  const paint = () => box.replaceChildren(...tags.map(tag => el('span',{class:'tag'},el('span',{text:tag}),el('button',{type:'button','aria-label':'移除 ' + tag,text:'×',onclick:() => { tags = tags.filter(item => item !== tag); paint(); }}))), input);
+  const add = raw => {
+    const domain = normalizeRegistrationEmailSuffixDomain(raw);
+    if (!isRegistrationEmailSuffixDomainValid(domain) || tags.includes(domain)) return;
+    tags = [...tags, domain];
+  };
+  input.addEventListener('input',() => { input.value = normalizeRegistrationEmailSuffixDomain(input.value); });
+  input.addEventListener('keydown',event => {
+    if (event.isComposing) return;
+    if ([' ','Enter','Tab',',','，'].includes(event.key)) { event.preventDefault(); add(input.value); input.value = ''; paint(); return; }
+    if (event.key === 'Backspace' && !input.value && tags.length) { tags.pop(); paint(); }
+  });
+  input.addEventListener('paste',event => {
+    const text = event.clipboardData?.getData('text') || '';
+    if (!text.trim()) return;
+    event.preventDefault();
+    for (const token of parseRegistrationEmailSuffixWhitelistInput(text)) add(token);
+    input.value = ''; paint();
+  });
+  input.addEventListener('blur',() => { if (input.value) { add(input.value); input.value = ''; paint(); } });
+  paint();
+  return {node:box, value:() => tags.map(tag => tag.startsWith('*.') ? tag : '@' + tag)};
+}
+
+
+function paymentMethodStatus(method) {
+  if (method.offered) return '前台会展示此支付方式。';
+  const reasons = {
+    disabled: '未启用，前台不展示。',
+    source_missing: '未选择来源，前台不展示。',
+    credentials_missing: '所选来源凭据不完整，前台不展示。',
+    not_collectable: '配置可以保存，但当前版本不能用此渠道收款，前台不展示。',
+  };
+  return reasons[method.reason] || '前台不展示。';
+}
+function paymentCatalogPayload(catalog, values) {
+  const methods = {}, providers = {};
+  for (const method of catalog.methods) methods[method.id] = { enabled: values.get(`method_${method.id}_enabled`) === 'on', source: values.get(`method_${method.id}_source`) || '' };
+  for (const provider of catalog.providers) {
+    const entry = { enabled: values.get(`provider_${provider.id}_enabled`) === 'on', clear_secrets: values.get(`provider_${provider.id}_clear`) === 'on' };
+    for (const item of provider.fields) entry[item.key] = values.get(`provider_${provider.id}_${item.key}`) ?? '';
+    providers[provider.id] = entry;
+  }
+  return { methods, providers };
+}
+function paymentCatalogForm(catalog) {
+  const form = el('form',{}, notice('只有已经能收款的渠道会出现在充值和购买里','启用后必须选择来源，并且该来源的必填凭据要齐全。支付宝、微信、易支付、随行付和 Airwallex 目前只能保存配置，不能创建支付单。','warn'));
+  for (const method of catalog.methods) {
+    form.append(
+      switchRow(`前台展示${method.title}`, '控制充值和购买是否展示此方式。未启用、未选来源或凭据不完整时不会展示。', `method_${method.id}_enabled`, method.enabled),
+      field(`${method.title}来源`, `method_${method.id}_source`, { type:'select', choices:[{value:'',label:'未配置'}, ...method.sources.map(source => ({value:source.id, label:source.collectable ? source.label : `${source.label}（当前不能收款）`}))], value:method.source || '', hint:'启用后必须选择一个来源。' }),
+      el('p',{class:'inline-info','data-method-status':method.id,text:paymentMethodStatus(method)}));
+  }
+  for (const provider of catalog.providers) {
+    const body = el('div',{},
+      switchRow(`启用${provider.title}`, '停用后可以先保存不完整的草稿。启用时必填项必须齐全。', `provider_${provider.id}_enabled`, provider.enabled),
+      switchRow(`清除${provider.title}密钥`, '仅在停用时生效。启用状态下不能清除密钥。', `provider_${provider.id}_clear`, false));
+    for (const item of provider.fields) {
+      body.append(field(item.label, `provider_${provider.id}_${item.key}`, item.options
+        ? {type:'select', choices:item.options.map(option => ({value:option.value, label:option.label})), value:item.value || '', hint:item.hint || (item.required ? '启用时必填。' : '可选。')}
+        : {type:item.sensitive ? 'password' : 'text', value:item.sensitive ? '' : (item.value || ''), autocomplete:item.sensitive ? 'new-password' : 'off', spellcheck:'false', placeholder:item.sensitive ? (item.configured ? '已配置，留空则保持不变' : '尚未配置') : '', hint:item.hint || (item.required ? '启用时必填。' : '可选。')}));
+    }
+    const enable = body.querySelector(`[name=provider_${provider.id}_enabled]`);
+    const clear = body.querySelector(`[name=provider_${provider.id}_clear]`);
+    enable.addEventListener('change', () => { if (enable.checked) clear.checked = false; });
+    clear.addEventListener('change', () => { if (clear.checked) enable.checked = false; });
+    form.append(el('details',{class:'provider-block'}, el('summary',{text:`${provider.title}${provider.collectable ? '' : ' · 当前不能收款'}`}), body));
+  }
+  form.append(el('button',{class:'btn primary',type:'submit',text:'保存支付方式'}));
+  return form;
+}
+
 async function settingsView() {
   const [settings, connection, operations] = await Promise.all([api('/api/admin/settings'), api('/api/admin/connection'), api('/api/admin/operations')]);
   const ready = operations.readiness;
@@ -659,10 +1274,8 @@ async function settingsView() {
     field('站点简介','description',{type:'textarea',maxlength:500,value:settings.site?.description}),
     field('Logo 地址（HTTPS，可选）','logo_url',{type:'url',value:settings.site?.logo_url || ''}),
     field('品牌主色','accent_color',{type:'color',value:settings.site?.accent_color || '#7c5cff'}),
-    field('支持邮箱','support_email',{type:'email',maxlength:254,value:settings.site?.support_email || ''}),
-    el('h3',{text:'成员注册'}),
-    el('p',{class:'inline-info',text:'关闭后不能自助注册。邮箱验证和密码找回随邮件服务开启，不能在这里单独打开。'}),
-    el('label',{class:'check-label'},el('input',{type:'checkbox',name:'registration_enabled',checked:settings.features?.registration === true}),'允许用户自助注册'),
+    field('支持邮箱','support_email',{type:'email',maxlength:254,value:settings.site?.support_email || '',hint:'对外联系邮箱。注册允许哪些域名，在下方的邮箱域名白名单中设置。'}),
+    switchRow('允许用户自助注册','关闭后不能自助注册。邮箱验证开启时，还需要先配好邮件服务。','registration_enabled',settings.registration?.enabled ?? settings.features?.registration === true),
     el('button',{class:'btn primary',type:'submit',text:'保存公开设置'}));
   bindForm(form,async values => {
     if (!await confirmAction('保存站点公开设置','将修改本站展示信息与注册开关。不会修改上游密钥、邮件或支付凭据。','确认保存')) return CANCEL;
@@ -703,7 +1316,7 @@ async function settingsView() {
     },data => {
       revision = data.revision;
       const current = data.connection;
-      output.replaceChildren(notice(data.saved ? '上游连接已保存' : '连接验证通过，尚未保存',`${current.merchant.name} · 直接接入账户 · 协议 v${current.protocol_version}`,'success'),el('p',{class:'inline-info',text:`已授权权限：${current.scopes.join(' · ')}`}),el('a',{href:'/admin/resources',class:'btn',text:'查看可用供给 →'}));
+      output.replaceChildren(notice(data.saved ? '上游连接已保存' : '连接验证通过，尚未保存',`${current.merchant.name} · 直接接入账户 · 协议 v${current.protocol_version}`,'success'),el('p',{class:'inline-info',text:`已授权权限：${current.scopes.join(' · ')}`}),el('a',{href:'/admin/inventory',class:'btn',text:'查看账号库存 →'}));
       if (data.saved) {
         state.public.features.term_rentals = true;
         upstreamForm.querySelector('[name=api_key]').value = '';
@@ -715,63 +1328,195 @@ async function settingsView() {
     upstream.append(panel('上游接入配置','先验证身份与权限，再保存。网络拒绝或验证失败不会替换当前配置。',el('div',{class:'card-body'},upstreamForm,output)));
   }
   upstream.append(el('a',{href:'/',class:'btn',text:'稍后配置，返回工作台'}));
-  const services = el('div',{id:'services',class:'settings-section'},panel('邮件、支付与访问','这些项目在服务端环境中配置。这里只表示是否已填写，不表示渠道已经可用，也不能在浏览器里修改密钥。',el('div',{class:'card-body'},
-    [['上游连接',ready.core_configured],['邮件服务',ready.mail_configured],['在线支付',ready.payment_configured],['公开 HTTPS',ready.https]].map(([label,ok]) => el('p',{},label,'：',badge(ok ? 'active' : 'pending'))),
-    el('dl',{class:'detail-list'},
-      el('dt',{text:'邮箱验证'}),el('dd',{text:settings.features?.email_verification === true ? '已启用' : '未启用'}),
-      el('dt',{text:'密码找回'}),el('dd',{text:settings.features?.password_reset === true ? '已启用' : '未启用'}),
-      el('dt',{text:'钱包扣费'}),el('dd',{text:'按充值与套餐结算，不按 Token 扣余额'})),
-    el('p',{class:'inline-info',text:`数据库版本 ${ready.schema_version} · 同时转发上限 ${ready.runtime_limit}`}),
-    notice('密钥不经过浏览器','上游密钥通过环境变量或上方的接入配置加密保存在服务端。邮件与 Stripe 密钥只存在于服务端环境。可选 Logo 会由浏览器向您填写的 HTTPS 地址请求图片。'))));
-  return el('div',{class:'settings-stack'},
-    notice('站点配置集中在本页','可修改公开信息和上游连接。邮件、支付与公开地址只显示服务端环境的配置状态。登录密码在个人设置，套餐价格在套餐管理。'),
-    el('nav',{class:'settings-index','aria-label':'设置分区'},el('a',{href:'#public',text:'公开信息'}),el('a',{href:'#upstream',text:'上游连接'}),el('a',{href:'#services',text:'邮件与支付'})),
-    el('section',{id:'public',class:'settings-section'},panel('公开站点信息','名称、简介、标识和注册开关会显示在登录页与工作台。',el('div',{class:'card-body'},form))),
-    upstream,
-    services);
+  const suffixes = emailSuffixEditor(settings.registration?.email_suffix_whitelist || settings.site?.registration_email_suffix_whitelist || []);
+  const registrationForm = el('form',{},
+    el('p',{class:'field-title',text:'邮箱域名白名单'}),
+    el('p',{class:'inline-info',text:'仅允许使用指定域名的邮箱注册账号；留空则不限制（例如 @qq.com, @gmail.com, *.edu.cn）'}),
+    suffixes.node,
+    el('p',{class:'inline-info',text:'留空则不限制。使用 *.edu.cn 可匹配 edu.cn 及其子域名。按回车、逗号或失焦加入，退格可删除最后一项。'}),
+    switchRow('邮箱验证','新用户注册时需要验证邮箱。关闭后，开放注册不必先配置邮件服务；密码找回仍需要邮件服务。','email_verification_enabled',settings.registration?.email_verification_enabled !== false),
+    switchRow('非白名单域名限量注册','开启后，白名单非空时，其他域名各限注册一个账户；关闭时非白名单域名直接拒绝。白名单为空时本开关无效果。','email_domain_quota_enabled',settings.registration?.email_domain_quota_enabled === true),
+    el('button',{class:'btn primary',type:'submit',text:'保存注册设置'}));
+  bindForm(registrationForm,async values => {
+    if (!await confirmAction('保存注册设置','将更新邮箱域名白名单、邮箱验证和限量注册。不会修改邮件或支付凭据。','确认保存')) return CANCEL;
+    return api('/api/admin/settings',{method:'PATCH',body:{email_suffix_whitelist:suffixes.value(),email_verification_enabled:values.get('email_verification_enabled')==='on',email_domain_quota_enabled:values.get('email_domain_quota_enabled')==='on'}});
+  },(data,message) => {
+    if (!data.registration || !data.features) throw Object.assign(new Error('注册设置更新结果不完整。'),{uncertain:true});
+    state.public.features = data.features; if (data.site) state.public.site = data.site;
+    message.replaceChildren(notice('注册设置已保存','白名单和验证开关已由服务器确认。','success'));
+  });
+  const registration = el('div',{id:'registration',class:'settings-section'},panel('注册设置','控制用户注册和验证',el('div',{class:'card-body'},registrationForm)));
+  const mail = settings.mail || {};
+  const payment = settings.payment || {};
+  const mailForm = el('form',{},
+    mail.editable === false ? notice('邮件服务由环境变量管理','服务器已设置 SMTP_HOST 与 SMTP_FROM。这里只显示状态，不能在页面里覆盖或回显密码。','warn') : null,
+    field('SMTP 主机','host',{required:mail.editable!==false,value:mail.host||'',disabled:mail.editable===false,placeholder:'smtp.example.com',autocomplete:'off'}),
+    field('端口','port',{type:'number',required:mail.editable!==false,min:1,max:65535,value:mail.port||587,disabled:mail.editable===false,hint:'587 使用 STARTTLS；465 使用隐式 TLS。'}),
+    field('用户名','username',{value:mail.username||'',disabled:mail.editable===false,autocomplete:'off',hint:'可信中继可以不填。填写用户名时必须同时设置密码。'}),
+    field('密码','password',{type:'password',autocomplete:'new-password',spellcheck:'false',disabled:mail.editable===false,placeholder:mail.password_configured?'已配置，留空则保持不变':'SMTP 密码',hint:'密码只保存在服务端，刷新后不会回显。'}),
+    field('发件邮箱','from',{type:'email',required:mail.editable!==false,value:mail.from||'',disabled:mail.editable===false,maxlength:254}),
+    field('发件人名称','from_name',{value:mail.from_name||'',disabled:mail.editable===false,maxlength:80}),
+    switchRow('使用 TLS','非 465 端口在开启时要求 STARTTLS。','use_tls',mail.use_tls!==false),
+    el('div',{class:'button-row'}, mail.editable===false?null:el('button',{class:'btn primary',type:'submit',text:'保存邮件服务'}), el('button',{class:'btn',type:'button',text:'测试连接',onclick:async event => {
+      const button = event.currentTarget; button.disabled = true;
+      try { await api('/api/admin/mail/test',{method:'POST',body:{}}); mailForm.querySelector('.form-message').replaceChildren(notice('邮件服务器已响应','连接和认证通过。这不代表以后的每封邮件都能送达。','success')); }
+      catch (error) { mailForm.querySelector('.form-message').replaceChildren(errorNotice(error)); }
+      finally { button.disabled = false; }
+    }})));
+  bindForm(mailForm,async values => {
+    if (!await confirmAction('保存邮件服务','凭据只写入服务端数据库，不会回显。留空的密码保持原值。主机留空将清除页面中保存的邮件配置。','确认保存')) return CANCEL;
+    const host = values.get('host').trim();
+    return api('/api/admin/settings',{method:'PATCH',body:{mail:host?{host,port:Number(values.get('port')),username:values.get('username').trim(),password:values.get('password'),from:values.get('from').trim(),from_name:values.get('from_name').trim(),use_tls:values.get('use_tls')==='on'}:{host:''}}});
+  },(data,message) => {
+    if (!data.mail || !data.features) throw Object.assign(new Error('邮件配置更新结果不完整。'),{uncertain:true});
+    state.public.features = data.features;
+    mailForm.querySelector('[name=password]').value = '';
+    message.replaceChildren(notice(data.mail.configured?'邮件服务已保存':'已清除页面中的邮件配置',data.mail.configured?'现在可以开放需要验证的注册，并用「测试连接」核对服务器。':'环境变量未配置时，验证邮件和密码找回保持关闭。','success'));
+  });
+  const paymentForm = el('form',{},
+    payment.editable === false ? notice('支付服务由环境变量管理','服务器已设置 Stripe 密钥。这里不能覆盖或回显密钥。','warn') : notice('当前在线支付是 Stripe Checkout','保存的是服务端密钥和 Webhook 签名密钥。Stripe 是当前唯一会创建支付单的在线渠道。','warn'),
+    field('Stripe 密钥','secret_key',{type:'password',autocomplete:'new-password',spellcheck:'false',disabled:payment.editable===false,placeholder:payment.secret_configured?'已配置，留空则保持不变':'sk_test_ 或 sk_live_',hint:'必须与 Webhook 密钥同为测试或正式环境。'}),
+    field('Webhook 签名密钥','webhook_secret',{type:'password',autocomplete:'new-password',spellcheck:'false',disabled:payment.editable===false,placeholder:payment.webhook_configured?'已配置，留空则保持不变':'whsec_',hint:'回调地址：' + location.origin + (payment.webhook_path || '/api/webhooks/stripe')}),
+    el('p',{class:'inline-info',text:(payment.configured? (payment.live?'当前为正式环境密钥。':'当前为测试环境密钥。') : '尚未配置可收款的密钥。') + ' 有未完成订单时不能更换密钥。'}),
+    payment.editable===false?null:el('button',{class:'btn primary',type:'submit',text:'保存支付服务'}));
+  bindForm(paymentForm,async values => {
+    if (!await confirmAction('保存支付服务','密钥只写入服务端。两项都留空会清除页面中保存的支付配置。有未完成订单时服务器会拒绝更换。','确认保存')) return CANCEL;
+    return api('/api/admin/settings',{method:'PATCH',body:{payment:{secret_key:values.get('secret_key'),webhook_secret:values.get('webhook_secret')}}});
+  },(data,message) => {
+    if (!data.payment || !data.features) throw Object.assign(new Error('支付配置更新结果不完整。'),{uncertain:true});
+    state.public.features = data.features;
+    paymentForm.querySelector('[name=secret_key]').value = '';
+    paymentForm.querySelector('[name=webhook_secret]').value = '';
+    message.replaceChildren(notice(data.payment.configured?'支付服务已保存':'已清除页面中的支付配置','订单是否到账仍只以服务端核对结果为准。','success'));
+  });
+  const paymentCatalog = settings.payment?.catalog || describePaymentCatalog(emptyPaymentCatalog());
+  const catalogForm = paymentCatalogForm(paymentCatalog);
+  bindForm(catalogForm, async values => {
+    if (!await confirmAction('保存支付方式','将保存前台支付方式、来源和渠道凭据。密钥只写入服务端。还不能收款的渠道不会出现在充值或购买中。','确认保存')) return CANCEL;
+    const body = paymentCatalogPayload(paymentCatalog, values);
+    for (const method of paymentCatalog.methods) if (body.methods[method.id].enabled && !body.methods[method.id].source) throw new Error(`${method.title}已启用，请先选择支付来源。`);
+    return api('/api/admin/settings',{method:'PATCH',body:{payment_catalog:body}});
+  }, (data,message) => {
+    if (!data.payment?.catalog || !data.features) throw Object.assign(new Error('支付方式更新结果不完整。'),{uncertain:true});
+    state.public.features = data.features;
+    for (const method of data.payment.catalog.methods) {
+      const status = catalogForm.querySelector(`[data-method-status="${method.id}"]`);
+      if (status) status.textContent = paymentMethodStatus(method);
+      const source = catalogForm.querySelector(`[name=method_${method.id}_source]`);
+      if (source) source.value = method.source || '';
+      const enabled = catalogForm.querySelector(`[name=method_${method.id}_enabled]`);
+      if (enabled) enabled.checked = method.enabled === true;
+    }
+    for (const provider of data.payment.catalog.providers) {
+      const enabled = catalogForm.querySelector(`[name=provider_${provider.id}_enabled]`);
+      if (enabled) enabled.checked = provider.enabled === true;
+      const clear = catalogForm.querySelector(`[name=provider_${provider.id}_clear]`);
+      if (clear) clear.checked = false;
+      for (const item of provider.fields) {
+        const input = catalogForm.querySelector(`[name=provider_${provider.id}_${item.key}]`);
+        if (!input) continue;
+        if (item.sensitive) { input.value = ''; input.placeholder = item.configured ? '已配置，留空则保持不变' : '尚未配置'; }
+        else input.value = item.value || '';
+      }
+    }
+    message.replaceChildren(notice('支付方式已保存','密钥不会回显。还不能收款的渠道不会出现在充值或购买中。','success'));
+  });
+  const services = el('div',{id:'services',class:'settings-section'},
+    panel('邮件服务','配置后才能发送验证邮件和密码重置。只表示已保存，不表示每次投递都会成功。',el('div',{class:'card-body'},mailForm)),
+    panel('支付服务','配置 Stripe 后，成员可以创建在线支付订单。回跳地址不能当作到账。',el('div',{class:'card-body'},paymentForm)),
+        panel('支付方式','按前台可见方式选择来源，再保存对应渠道的凭据。缺凭据、未选来源或当前不能收款的渠道都不会展示给用户。',el('div',{class:'card-body'},catalogForm)),
+    panel('运行状态','这些状态来自当前进程，不是模拟结果。',el('div',{class:'card-body'},
+      [['上游连接',ready.core_configured],['邮件服务',ready.mail_configured],['在线支付',ready.payment_configured],['公开 HTTPS',ready.https]].map(([label,ok]) => el('p',{},label,'：',badge(ok ? 'active' : 'pending'))),
+      el('dl',{class:'detail-list'},
+        el('dt',{text:'邮箱验证'}),el('dd',{text:settings.features?.email_verification === true ? '已启用' : '未启用'}),
+        el('dt',{text:'密码找回'}),el('dd',{text:settings.features?.password_reset === true ? '已启用' : '未启用'}),
+        el('dt',{text:'钱包扣费'}),el('dd',{text:'按充值与套餐结算，不按 Token 扣余额'})),
+      el('p',{class:'inline-info',text:`数据库版本 ${ready.schema_version} · 同时转发上限 ${ready.runtime_limit}`}),
+      notice('密钥不回显','上游、邮件和 Stripe 密钥不会返回给浏览器。可选 Logo 会由浏览器向您填写的 HTTPS 地址请求图片。'))));
+  const pages = [
+    ['public','公开信息',el('section',{id:'public',class:'settings-section'},panel('公开站点信息','名称、简介、标识和注册开关会显示在登录页与工作台。',el('div',{class:'card-body'},form)))],
+    ['registration','注册设置',registration],
+    ['upstream','上游连接',upstream],
+    ['services','邮件与支付',services],
+  ];
+  const selected = new Set(pages.map(([id]) => id)).has(location.hash.slice(1)) ? location.hash.slice(1) : 'public';
+  const tabs = {};
+  const showPage = id => {
+    for (const [key,,page] of pages) page.hidden = key !== id;
+    for (const [key,tab] of Object.entries(tabs)) { tab.classList.toggle('active', key === id); tab.setAttribute('aria-selected', key === id ? 'true' : 'false'); }
+    const next = location.pathname + location.search + '#' + id;
+    if (location.pathname + location.search + location.hash !== next) history.replaceState({}, '', next);
+  };
+  const index = el('div',{class:'settings-index',role:'tablist','aria-label':'设置分区'},pages.map(([id,label]) => {
+    const tab = el('button',{type:'button',role:'tab','aria-controls':id,'aria-selected':id === selected ? 'true' : 'false',class:id === selected ? 'active' : '',onclick:() => showPage(id)},label);
+    tabs[id] = tab; return tab;
+  }));
+  showPage(selected);
+  return el('div',{class:'settings-stack'},index,...pages.map(([, ,page]) => page));
 }
 
 
 function purchaseDialog(plan) {
  const requestId=crypto.randomUUID();
- const form=el('form',{},notice('确认购买',`${plan.name} · ${plan.duration_days} 天 · ${money(plan.amount_minor)}。有效使用权从原到期时间续期，已过期的从本次开通起算。按 24 小时计一天，不自动续费。`),
-  field('支付方式','payment_method',{type:'select',choices:[{value:'wallet',label:'钱包余额'},...(state.public.features.payment?[{value:'stripe',label:'Stripe 在线支付'}]:[])],value:'wallet'}),
-  el('button',{type:'submit',class:'btn primary',text:'确认下单'}),el('a',{href:'/orders',class:'btn',text:'查看已有订单'}));
- const dialog=editorDialog('购买或续期套餐',form);
+ const platforms=Array.isArray(plan.platforms)?plan.platforms:[];
+ const form=el('form',{},notice('\u786e\u8ba4\u8ba2\u9605',`${plan.name} \u00b7 ${plan.duration_days} \u5929 \u00b7 ${money(plan.amount_minor)}\u3002\u6309 24 \u5c0f\u65f6\u8ba1\u4e00\u5929\uff0c\u4e0d\u81ea\u52a8\u7eed\u8d39\u3002\u8bf7\u5355\u9009\u4e00\u4e2a\u767b\u5f55\u5e73\u53f0\uff0c\u6709\u8d27\u624d\u80fd\u4e0b\u5355\u3002`),
+  field('\u767b\u5f55\u5e73\u53f0','platform',{type:'select',required:true,choices:platforms.map(item=>({value:item.platform,label:`${item.label||item.platform} \u00b7 ${item.available>0?`\u6709\u8d27 ${item.available}`:'\u65e0\u8d27'}`})),value:platforms.find(item=>item.available>0)?.platform||''}),
+  field('\u652f\u4ed8\u65b9\u5f0f','payment_method',{type:'select',choices:[{value:'wallet',label:'\u94b1\u5305\u4f59\u989d'},...(state.public.features.payment?[{value:'stripe',label:'Stripe \u5728\u7ebf\u652f\u4ed8'}]:[])],value:'wallet'}),
+  el('button',{type:'submit',class:'btn primary',text:'\u786e\u8ba4\u4e0b\u5355',disabled:!platforms.some(item=>item.available>0)}),el('a',{href:'/orders',class:'btn',text:'\u67e5\u770b\u5df2\u6709\u8ba2\u5355'}));
+ const dialog=editorDialog('\u8d2d\u4e70\u8ba2\u9605',form);
  bindForm(form,async values=>{
-  if(!await confirmAction('确认购买套餐',`${plan.name}，${plan.duration_days} 天，${money(plan.amount_minor)}。余额支付会立即扣款；在线支付将在收银台确认。`,'确认购买'))return CANCEL;
-  return api('/api/me/rentals',{method:'POST',body:{plan_id:plan.id,expected_revision:plan.revision,payment_method:values.get('payment_method'),request_id:requestId}});
+  const platform=values.get('platform');
+  const slot=platforms.find(item=>item.platform===platform);
+  if(!slot||slot.available<1) throw new Error('\u8fd9\u4e2a\u5e73\u53f0\u5f53\u524d\u65e0\u8d27\uff0c\u8bf7\u6539\u9009\u5176\u4ed6\u5e73\u53f0\u3002');
+  if(!await confirmAction('\u786e\u8ba4\u8d2d\u4e70\u8ba2\u9605',`${plan.name}\uff0c${plan.duration_days} \u5929\uff0c${money(plan.amount_minor)}\uff0c\u5e73\u53f0 ${slot.label||platform}\u3002\u4f59\u989d\u652f\u4ed8\u4f1a\u7acb\u5373\u6263\u6b3e\u3002`,'\u786e\u8ba4\u8d2d\u4e70'))return CANCEL;
+  return api('/api/me/rentals',{method:'POST',body:{plan_id:plan.id,expected_revision:plan.revision,payment_method:values.get('payment_method'),platform,request_id:requestId,renew_grant_id:plan.renew_grant_id||''}});
  },data=>{
-  if(!data.rental?.id)throw Object.assign(new Error('订单结果未知，请前往订单核对。'),{uncertain:true});
-  const result=el('div',{class:'card-body'},badge(data.rental.status),el('p',{class:'mono',text:data.rental.id}),notice('订单已记录','支付成功不等于交付完成。交付异常会进入待办；未交付订单可由管理员核对后退回余额。'),el('a',{class:'btn',href:'/orders',text:'查看订单与交付'}));
-  if(data.checkout_url){const url=new URL(data.checkout_url);if(url.origin==='https://checkout.stripe.com'&&!url.username&&!url.password)result.append(el('a',{class:'btn primary',href:url.href,target:'_blank',rel:'noopener noreferrer',referrerpolicy:'no-referrer',text:'打开 Stripe 收银台 ↗'}));}
+  if(!data.rental?.id)throw Object.assign(new Error('\u8ba2\u5355\u7ed3\u679c\u672a\u77e5\uff0c\u8bf7\u524d\u5f80\u8ba2\u5355\u6838\u5bf9\u3002'),{uncertain:true});
+  const result=el('div',{class:'card-body'},badge(data.rental.status),el('p',{class:'mono',text:data.rental.id}),notice('\u8ba2\u5355\u5df2\u8bb0\u5f55','\u652f\u4ed8\u6210\u529f\u4e0d\u7b49\u4e8e\u4ea4\u4ed8\u5b8c\u6210\u3002\u4ea4\u4ed8\u540e\u8d26\u53f7\u4f1a\u8fdb\u5165\u6211\u7684\u8d26\u53f7\u3002'),el('a',{class:'btn',href:'/accounts',text:'\u67e5\u770b\u6211\u7684\u8d26\u53f7'}),el('a',{class:'btn',href:'/orders',text:'\u67e5\u770b\u8ba2\u5355'}));
+  if(data.checkout_url){const url=new URL(data.checkout_url);if(url.origin==='https://checkout.stripe.com'&&!url.username&&!url.password)result.append(el('a',{class:'btn primary',href:url.href,target:'_blank',rel:'noopener noreferrer',referrerpolicy:'no-referrer',text:'\u6253\u5f00 Stripe \u6536\u94f6\u53f0'}));}
   form.replaceWith(result);
  });
  return dialog;
 }
-async function plansView() {
- const data=await api('/api/plans'),plans=collection(data,'plans');
- if(!plans.length)return emptyState('暂无在售套餐','商户发布套餐后可在这里购买或续期。不会用示例价格替代真实销售价。','layers');
- return el('div',{class:'page-content'},notice('按期限租用 · 不按 Token 扣费','套餐价格以服务器下单快照为准。续期不能超过供给期限；资源可用性由上游最终校验。'),el('div',{class:'resource-grid'},plans.map(p=>el('article',{class:'card resource-card'},el('span',{class:'eyebrow',text:'CODE · 固定期限'}),el('h2',{text:p.name}),el('p',{class:'muted',text:p.description}),el('h2',{text:money(p.amount_minor)}),el('p',{text:`${p.duration_days} 天 / 版本 ${p.revision}`}),el('button',{class:'btn primary',text:'购买 / 续期',onclick:()=>purchaseDialog(p)})))));
+function planCard(plan) {
+  const platforms = Array.isArray(plan.platforms) ? plan.platforms : [];
+  const available = platforms.some(item => item.available > 0);
+  const facts = [`${plan.duration_days} 天`, '不自动续费'];
+  if (Number.isSafeInteger(plan.device_limit) && plan.device_limit > 0) facts.splice(1, 0, `${plan.device_limit} 台设备`);
+  return el('article',{class:'plan-card'},
+    el('div',{class:'plan-top'},el('span',{class:'eyebrow',text:'订阅'}),el('span',{class:`badge ${available ? 'good' : 'warn'}`},el('span',{class:'dot'}),available ? '有货' : '无货')),
+    el('h2',{text:plan.name || '未命名套餐'}),
+    plan.description ? el('p',{class:'plan-copy',text:plan.description}) : null,
+    el('p',{class:'plan-price',text:money(plan.amount_minor, plan.currency)}),
+    el('p',{class:'plan-meta',text:facts.join(' · ')}),
+    platforms.length ? el('ul',{class:'platform-pills'},platforms.map(item => el('li',{class:item.available > 0 ? 'in' : 'out'},el('span',{text:item.label || item.platform}),el('strong',{text:item.available > 0 ? String(item.available) : '无货'})))) : null,
+    el('button',{class:'btn primary',type:'button',text:'购买',disabled:!available,onclick:() => purchaseDialog(plan)}));
 }
+function subscriptionPanel(plans) {
+  if (!plans.length) return panel('订阅套餐','只显示订阅分组的在售套餐。',emptyState('暂无在售套餐','商户为订阅分组设置有效期和金额后，可以在这里购买。','layers'));
+  return panel('订阅套餐','选择一个登录平台。有货数量随下单变化，以服务器当时核对的库存为准。',el('div',{class:'card-body'},el('div',{class:'plan-grid'},plans.map(planCard))));
+}
+
 function planEditor(plan,resources) {
- const form=el('form',{},field('套餐名称','name',{required:true,maxlength:100,value:plan?.name||''}),field('套餐说明','description',{type:'textarea',maxlength:1000,value:plan?.description||''}),
- field('供给资源','resource_id',{type:'select',choices:resources.map(r=>({value:r.id,label:r.name})),value:plan?.resource_id||resources[0]?.id,disabled:Boolean(plan)}),
- field('租期（天，每天 24 小时）','duration_days',{type:'number',required:true,min:1,max:366,step:1,value:plan?.duration_days||30}),
- field('销售价（人民币元）','price',{type:'number',required:true,min:0.01,step:0.01,value:plan?String(plan.amount_minor/100):''}),
- field('上架状态','status',{type:'select',choices:[{value:'active',label:'上架'},{value:'archived',label:'下架'}],value:plan?.status||'archived'}),el('button',{class:'btn primary',type:'submit',text:'保存套餐'}));
- const dialog=editorDialog(plan?'编辑套餐':'创建套餐',form);
+ const choices=resources.filter(resource=>resource.kind==='subscription'&&resource.status==='active'&&resource.available!==false);
+ const form=el('form',{},field('\u8ba2\u9605\u5206\u7ec4','resource_id',{type:'select',choices:(choices.length?choices:resources).map(resource=>({value:resource.id,label:resource.name})),value:plan?.resource_id||choices[0]?.id,disabled:Boolean(plan)||!choices.length}),
+  field('\u6709\u6548\u671f\uff08\u5929\uff0c\u6bcf\u5929 24 \u5c0f\u65f6\uff09','duration_days',{type:'number',required:true,min:1,max:366,step:1,value:plan?.duration_days||30}),
+  field('\u5957\u9910\u91d1\u989d\uff08\u4eba\u6c11\u5e01\u5143\uff09','price',{type:'number',required:true,min:0.01,step:0.01,value:plan?String(plan.amount_minor/100):''}),
+  field('\u4e0a\u67b6\u72b6\u6001','status',{type:'select',choices:[{value:'active',label:'\u4e0a\u67b6'},{value:'archived',label:'\u4e0b\u67b6'}],value:plan?.status||'archived'}),el('button',{class:'btn primary',type:'submit',text:'\u4fdd\u5b58\u5957\u9910'}));
+ const dialog=editorDialog(plan?'\u7f16\u8f91\u5957\u9910':'\u521b\u5efa\u5957\u9910',form);
  bindForm(form,async values=>{
-  const price=values.get('price');if(!/^\d+(\.\d{1,2})?$/.test(price))throw new Error('价格最多支持两位小数。');
+  const price=values.get('price');if(!/^\d+(\.\d{1,2})?$/.test(price))throw new Error('\u4ef7\u683c\u6700\u591a\u652f\u6301\u4e24\u4f4d\u5c0f\u6570\u3002');
   const [whole,fraction='']=price.split('.'),amount=Number(whole)*100+Number(fraction.padEnd(2,'0'));
-  const body={name:values.get('name').trim(),description:values.get('description').trim(),duration_days:Number(values.get('duration_days')),amount_minor:amount,status:values.get('status'),...(plan?{expected_revision:plan.revision}:{resource_id:values.get('resource_id')})};
-  if(!await confirmAction('保存套餐',`销售价 ${money(amount)}，租期 ${body.duration_days} 天。已有订单保留原价格及租期，不随本次编辑变化。`,'确认保存'))return CANCEL;
+  const duration=Number(values.get('duration_days'));
+  const body={name:`${duration} \u5929`,description:'',duration_days:duration,amount_minor:amount,status:values.get('status'),...(plan?{expected_revision:plan.revision}:{resource_id:values.get('resource_id')})};
+  if(!await confirmAction('\u4fdd\u5b58\u5957\u9910',`\u9500\u552e\u4ef7 ${money(amount)}\uff0c\u79df\u671f ${duration} \u5929\u3002\u5df2\u6709\u8ba2\u5355\u4fdd\u7559\u539f\u4ef7\u683c\u53ca\u79df\u671f\u3002`,'\u786e\u8ba4\u4fdd\u5b58'))return CANCEL;
   return api(plan?`/api/admin/plans/${encodeURIComponent(plan.id)}`:'/api/admin/plans',{method:plan?'PATCH':'POST',body});
  },()=>{dialog.close();render();});
 }
 async function planAdminView() {
  const [p,r]=await Promise.all([api('/api/admin/plans'),api('/api/admin/resources')]),plans=collection(p,'plans'),resources=collection(r,'resources');
- return panel('销售套餐','下架不影响已支付订单；每笔订单保存独立价格与租期快照。',table([{label:'套餐',render:p=>p.name},{label:'销售价',render:p=>money(p.amount_minor)},{label:'租期',render:p=>`${p.duration_days} 天`},{label:'状态',render:p=>badge(p.status)},{label:'版本',render:p=>p.revision},{label:'操作',render:p=>el('button',{class:'btn small',text:'编辑',onclick:()=>planEditor(p,resources)})}],plans,'尚未配置套餐','先确认上游已分配 Code 供给，再创建销售套餐。'),el('button',{class:'btn primary',text:'创建套餐',disabled:!resources.length,onclick:()=>planEditor(null,resources)}));
+ const groups=resources.filter(resource=>resource.kind==='subscription');
+ return panel('\u8ba2\u9605\u5957\u9910','\u53ea\u586b\u6709\u6548\u671f\u548c\u91d1\u989d\u3002\u5957\u9910\u6302\u5728\u8ba2\u9605\u5206\u7ec4\u4e0a\uff0c\u4e0d\u6309\u5355\u4e2a\u8d26\u53f7\u5efa\u4ef7\u3002',table([{label:'\u5957\u9910',render:plan=>plan.name},{label:'供货参考价',render:plan=>money(plan.cost_minor)},{label:'销售价',render:plan=>money(plan.amount_minor)},{label:'\u79df\u671f',render:plan=>`${plan.duration_days} \u5929`},{label:'\u72b6\u6001',render:plan=>badge(plan.status)},{label:'\u7248\u672c',render:plan=>plan.revision},{label:'\u64cd\u4f5c',render:plan=>el('button',{class:'btn small',text:'\u7f16\u8f91',onclick:()=>planEditor(plan,resources)})}],plans,'\u5c1a\u672a\u914d\u7f6e\u5957\u9910','\u5148\u5728\u4e0a\u6e38\u628a\u5206\u7ec4\u8bbe\u4e3a\u8ba2\u9605\u5206\u7ec4\u5e76\u5206\u914d\u7ed9\u672c\u7ad9\uff0c\u518d\u586b\u6709\u6548\u671f\u548c\u91d1\u989d\u3002'),el('button',{class:'btn primary',text:'\u521b\u5efa\u5957\u9910',disabled:!groups.length,onclick:()=>planEditor(null,resources)}));
 }
 async function rentalsView() {
  const admin=location.pathname==='/admin/rentals',base=admin?'/admin/rentals':'/orders',endpoint=admin?'/api/admin/rentals':'/api/me/rentals';
@@ -796,12 +1541,12 @@ async function rentalsView() {
  }});
  const pager=el('div',{class:'button-row'},el('span',{class:'muted',text:`共 ${data.total} 笔 · 本页 ${rows.length} 笔`}),...[-30,30].map(delta=>el('button',{class:'btn small',text:delta<0?'上一页':'下一页',disabled:delta<0?offset===0:offset+rows.length>=data.total,onclick:()=>{query.set('offset',String(Math.max(0,offset+delta)));navigate(`${base}?${query}`);}})));
  const rentalTable=table(columns,rows);rentalTable.classList.add('rental-table');
- return el('div',{class:'page-content'},notice('支付、交付和退款分别核对','已交付表示上游曾确认使用权，并不保证它当前未被撤销；实时状态请查看我的权益。未交付退款仅退回本站余额。'),filters,panel('套餐订单','价格、租期和购买身份以下单快照为准。',rentalTable,exportButton),pager);
+ return el('div',{class:'page-content'},filters,panel('套餐订单','价格、租期和购买身份以下单快照为准。',rentalTable,exportButton),pager);
 }
 async function operationsView() {
  const data=await api('/api/admin/operations');
  const tasks=collection(data,'pending_customers');
- return el('div',{class:'page-content'},notice('后台自动核对已启用',`客户同步和已知支付会话会定期核对，订单交付最多自动尝试 ${data.worker.max_attempts} 次，之后保留待人工处理。不会重新创建不确定的支付订单。`),
+ return el('div',{class:'page-content'},
  el('div',{class:'stats-grid'},stat('待同步客户',number(tasks.length),'本页最多列出 100 个','users'),stat('待确认支付',number(data.payments_pending),'包括结果未知的订单','wallet'),stat('待核对交付',number(data.rentals.filter(r=>['review','refund_pending'].includes(r.status)).reduce((n,r)=>n+r.count,0)),'可在销售与交付处理','receipt')),
  panel('客户同步待办','停用尚未确认时，本站会暂停该客户的新运行请求，直到上游确认。',table([{label:'客户',render:u=>u.display_name},{label:'状态',render:u=>badge(u.status)},{label:'提示',render:u=>u.sync_error||'等待同步'},{label:'操作',render:u=>actionButton('重新核对',()=>api(`/api/admin/users/${encodeURIComponent(u.id)}${u.core_customer_id?'':'/provision'}`,{method:u.core_customer_id?'PATCH':'POST',body:{}}))}],tasks,'没有待同步客户','当前没有持久化客户同步待办。')),
  el('p',{class:'inline-info'},'邮件、支付和公开地址是否已配置，请在',el('a',{href:'/admin/settings#services',text:'站点设置'}),'中查看。'),el('a',{class:'btn',href:'/admin/rentals?status=review',text:'处理交付待办 →'}));
@@ -842,7 +1587,7 @@ async function accessView() {
  const search=el('form',{class:'button-row'},el('input',{name:'q',value:query.get('q'),placeholder:'搜索 API 客户','aria-label':'搜索 API 客户'}),el('button',{class:'btn',type:'submit',text:'搜索'}));search.addEventListener('submit',event=>{event.preventDefault();navigate('/admin/access?q='+encodeURIComponent(new FormData(search).get('q')));});
  root.append(search,el('div',{class:'pager'},el('span',{text:`共 ${data.total} 个接入账户`}),...[-50,50].map(delta=>el('button',{class:'btn small',text:delta<0?'上一页':'下一页',disabled:delta<0?offset===0:offset+accounts.length>=data.total,onclick:()=>{query.set('offset',String(Math.max(0,offset+delta)));navigate(`/admin/access?${query}`);}}))));
  const selectedID=params.get('account');if(selectedID&&!accounts.some(a=>a.id===selectedID)){const chosen=await api('/api/admin/access-accounts/'+encodeURIComponent(selectedID));accounts.push(chosen.account);}
- root.append(notice('只管理直接接入的客户','客户使用本站签发的密钥。本站请求上游时只用自己的凭据，不转发客户密钥，也不管理客户自己的下级。'),panel('API 客户','一个接入账户可以有多把密钥；数据和资源属于账户，不属于单把密钥。',table([{label:'客户',render:a=>el('div',{},el('strong',{text:a.name}),el('p',{class:'mono muted',text:a.slug}))},{label:'站点',render:a=>el('span',{class:'mono',text:a.public_origin})},{label:'状态',render:a=>badge(a.status)},{label:'操作',render:a=>el('div',{class:'button-row'},el('button',{class:'btn small',text:'编辑',onclick:()=>accessEditor(a)}),el('a',{class:'btn small',href:`/admin/access?account=${encodeURIComponent(a.id)}`,text:'资源与密钥'}))}],accounts,'暂无 API 客户','先创建本站接入账户，再分配资源和签发密钥。'),el('button',{class:'btn primary',text:'创建 API 客户',onclick:()=>accessEditor(null)})));
+ root.append(panel('API 客户','一个接入账户可以有多把密钥；数据和资源属于账户，不属于单把密钥。',table([{label:'客户',render:a=>el('div',{},el('strong',{text:a.name}),el('p',{class:'mono muted',text:a.slug}))},{label:'站点',render:a=>el('span',{class:'mono',text:a.public_origin})},{label:'状态',render:a=>badge(a.status)},{label:'操作',render:a=>el('div',{class:'button-row'},el('button',{class:'btn small',text:'编辑',onclick:()=>accessEditor(a)}),el('a',{class:'btn small',href:`/admin/access?account=${encodeURIComponent(a.id)}`,text:'资源与密钥'}))}],accounts,'暂无 API 客户','先创建本站接入账户，再分配资源和签发密钥。'),el('button',{class:'btn primary',text:'创建 API 客户',onclick:()=>accessEditor(null)})));
  const selected=accounts.find(a=>a.id===new URLSearchParams(location.search).get('account'));
  if(selected){
   const [r,k,own]=await Promise.all([api(`/api/admin/access-accounts/${selected.id}/resources`),api(`/api/admin/access-accounts/${selected.id}/keys`),api('/api/admin/resources')]),resources=collection(r,'resources'),keys=collection(k,'keys'),sources=collection(own,'resources');
@@ -851,5 +1596,5 @@ async function accessView() {
  }
  return root;
 }
-const views = {'/admin/access':accessView,'/plans':plansView,'/orders':rentalsView,'/admin/plans':planAdminView,'/admin/rentals':rentalsView,'/admin/operations':operationsView,'/':overviewView,'/rights':rightsView,'/devices':devicesView,'/connect':connectView,'/usage':usageView,'/wallet':walletView,'/profile':profileView,'/admin/customers':customersView,'/admin/resources':resourcesView,'/admin/orders':ordersView,'/admin/audit':auditView,'/admin/settings':settingsView};
+const views = {'/admin/inventory':inventoryView,'/admin/access':accessView,'/orders':rentalsView,'/admin/plans':planAdminView,'/admin/rentals':rentalsView,'/admin/operations':operationsView,'/':overviewView,'/accounts':accountsView,'/devices':devicesView,'/connect':connectView,'/usage':usageView,'/wallet':walletView,'/profile':profileView,'/admin/customers':customersView,'/admin/orders':ordersView,'/admin/audit':auditView,'/admin/settings':settingsView};
 bootstrap();
