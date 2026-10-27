@@ -22,7 +22,7 @@ export function loadConfig(env = process.env, root = process.cwd()) {
     upstreamUrl = url.origin;
   }
   const upstreamKey = env.UPSTREAM_API_KEY || '';
-  if (upstreamKey && !/^ccbm_[A-Za-z0-9_-]{16,}$/.test(upstreamKey)) throw new Error('UPSTREAM_API_KEY must be a merchant-scoped ccbm_ key');
+  if (upstreamKey && !/^ccb[km]_[A-Za-z0-9_-]{16,}$/.test(upstreamKey)) throw new Error('UPSTREAM_API_KEY must be an owner-scoped API key');
   if (Boolean(upstreamUrl) !== Boolean(upstreamKey)) throw new Error('Set both UPSTREAM_URL and UPSTREAM_API_KEY, or neither');
   const publicDir = resolve(root, 'public');
   const dataDir = resolve(root, env.DATA_DIR || 'data');

@@ -18,10 +18,10 @@ test('actual wizard and local API account UI isolate credentials, manage resourc
  await page.getByLabel('初始化令牌',{exact:true}).fill(f.setupToken);await page.getByLabel('显示名称',{exact:true}).fill('本站管理员');await page.getByLabel('电子邮箱',{exact:true}).fill('admin@example.test');await page.getByLabel('密码',{exact:true}).fill(password);await page.getByLabel('确认密码',{exact:true}).fill(password);
  await page.getByRole('button',{name:'创建管理员',exact:true}).click();await page.getByRole('button',{name:'确认初始化',exact:true}).click();
  await page.getByRole('heading',{name:'上游接入',exact:true}).waitFor();
- await page.getByLabel('上游服务地址',{exact:true}).fill(`http://127.0.0.1:${f.fakeCore.address().port}`);await page.getByLabel('上游商户密钥',{exact:true}).fill(upstreamKey);await page.getByRole('button',{name:'执行接入检查',exact:true}).click();
+ await page.getByLabel('上游服务地址',{exact:true}).fill(`http://127.0.0.1:${f.fakeCore.address().port}`);await page.getByLabel('上游接入密钥',{exact:true}).fill(upstreamKey);await page.getByRole('button',{name:'执行接入检查',exact:true}).click();
  await page.getByText('连接验证通过，尚未保存',{exact:true}).waitFor();assert.equal(f.config.upstreamUrl,null);
- await page.getByLabel('上游商户密钥',{exact:true}).fill(upstreamKey);await page.getByLabel('接入操作',{exact:true}).selectOption('save');await page.getByRole('button',{name:'执行接入检查',exact:true}).click();await page.getByRole('dialog').getByRole('button',{name:'确认保存',exact:true}).click();
- await page.getByText('上游连接已保存',{exact:true}).waitFor();assert.equal(await page.getByLabel('上游商户密钥',{exact:true}).inputValue(),'');
+ await page.getByLabel('上游接入密钥',{exact:true}).fill(upstreamKey);await page.getByLabel('接入操作',{exact:true}).selectOption('save');await page.getByRole('button',{name:'执行接入检查',exact:true}).click();await page.getByRole('dialog').getByRole('button',{name:'确认保存',exact:true}).click();
+ await page.getByText('上游连接已保存',{exact:true}).waitFor();assert.equal(await page.getByLabel('上游接入密钥',{exact:true}).inputValue(),'');
  const artifacts=resolve(project,'tests/browser/artifacts');await mkdir(artifacts,{recursive:true});await page.screenshot({path:resolve(artifacts,'direct-upstream.png'),fullPage:true});
  await page.goto(f.config.publicOrigin+'/admin/access');await page.getByRole('button',{name:'创建 API 客户',exact:true}).click();
  await page.getByLabel('接入标识',{exact:true}).fill('client-c');await page.getByLabel('客户名称',{exact:true}).fill('直接客户 C');assert.equal(await page.getByLabel('客户站点地址',{exact:true}).count(),0);
@@ -29,7 +29,7 @@ test('actual wizard and local API account UI isolate credentials, manage resourc
  await page.getByRole('row').filter({hasText:'直接客户 C'}).getByRole('link',{name:'资源与密钥',exact:true}).click();await page.getByRole('button',{name:'分配资源',exact:true}).click();
  await page.getByLabel('客户可见资源名称',{exact:true}).fill('C 的资源');assert.equal(await page.getByLabel('预留名额',{exact:true}).count(),0);await page.getByRole('button',{name:'保存资源范围',exact:true}).click();await page.getByRole('dialog').getByRole('button',{name:'确认保存',exact:true}).click();await page.getByRole('row').filter({hasText:'C 的资源'}).waitFor();
  await page.getByRole('button',{name:'签发接入密钥',exact:true}).click();await page.getByLabel('密钥名称',{exact:true}).fill('C 生产接入');
- assert.equal(await page.getByRole('checkbox',{name:'keys.manage',exact:true}).count(),0);
+ assert.equal(await page.getByRole('checkbox',{name:'delegation.keys.manage',exact:true}).count(),0);
  await page.getByRole('dialog').getByRole('button',{name:'签发接入密钥',exact:true}).click();await page.getByRole('dialog').filter({hasText:'签发接入密钥'}).getByRole('button',{name:'确认签发',exact:true}).click();
  await page.getByRole('dialog',{name:'接入密钥'}).waitFor();const token=await page.locator('.secret').textContent();assert.match(token,/^ccbm_[a-f0-9]{64}$/);
  assert.equal(await page.evaluate(()=>JSON.stringify({...localStorage,...sessionStorage})).then(v=>v.includes(token)),false);

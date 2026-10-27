@@ -64,7 +64,7 @@ test('shipped UI works with real setup, sessions, customer CRUD and unconfigured
   await page.getByLabel('初始密码',{exact:true}).fill('Member-browser test password!');
   await page.getByLabel('显示名称',{exact:true}).fill('本地应用测试客户');
   await page.getByRole('button',{name:'创建客户账户',exact:true}).click();
-  await page.getByRole('dialog').filter({hasText:'确认创建客户'}).getByRole('button',{name:'确认保存',exact:true}).click();
+
   await page.getByRole('row').filter({hasText:'member@example.test'}).waitFor();
   const member=app.store.db.prepare('SELECT * FROM users WHERE email=?').get('member@example.test');
   assert.equal(member.role,'member');assert.equal(member.core_customer_id,null);

@@ -22,7 +22,7 @@ test('upstream wizard verifies before saving, encrypts credentials and pins iden
 
 test('upstream target policy blocks private, metadata, self, redirects and wrong identity without replacing config',async t=>{
  let wrong=false,redirect=false;
- const f=await fixture(t,{withoutCore:true,onCore:({url,res,json})=>{if(url.pathname==='/merchant/v1/me'&&redirect){res.writeHead(302,{Location:'http://169.254.169.254/latest/meta-data/'});res.end();return true;}if(url.pathname==='/merchant/v1/me'&&wrong){json({protocol_version:4,authority_id:'other-authority',merchant:{id:'other-merchant',name:'Wrong',public_origin:f.config.publicOrigin,status:'active'},scopes:[]});return true;}}});
+ const f=await fixture(t,{withoutCore:true,onCore:({url,res,json})=>{if(url.pathname==='/access/v1/me'&&redirect){res.writeHead(302,{Location:'http://169.254.169.254/latest/meta-data/'});res.end();return true;}if(url.pathname==='/access/v1/me'&&wrong){json({protocol_version:5,authority_id:'other-authority',user:{id:'other-merchant',name:'Wrong',public_origin:f.config.publicOrigin,status:'active'},scopes:[]});return true;}}});
  const admin=await f.request('POST','/api/setup',{...input,setup_token:f.setupToken}),target=`http://127.0.0.1:${f.fakeCore.address().port}`;
  const body={action:'save',url:target,api_key:upstreamKey,expected_revision:0};
  for(const url of ['http://127.0.0.1:1','http://169.254.169.254','https://169.254.169.254','http://[::1]:1',f.config.publicOrigin,'file:///private','http://user:pass@host.test','https://example.test/path']){
@@ -41,14 +41,14 @@ test('browser/member requests cannot operate child protocol or overwrite environ
  const member=await f.request('POST','/api/auth/login',{email:'member@example.test',password});
  assert.equal((await f.request('GET','/api/admin/access-accounts',undefined,member)).status,403);
  assert.equal((await f.request('POST','/api/admin/upstream',{action:'save',url:f.config.upstreamUrl,api_key:upstreamKey,expected_revision:0},admin)).status,409);
- assert.equal((await f.request('GET','/merchant/v1/me',undefined,admin)).status,403);
- assert.equal((await f.request('POST','/merchant/v1/customers',{external_id:'x'}, {headers:{Authorization:'Bearer '+upstreamKey}})).status,403);
- assert.equal((await f.request('GET','/merchant/v1/anything',undefined,{native:true})).status,404);
+ assert.equal((await f.request('GET','/access/v1/me',undefined,admin)).status,403);
+ assert.equal((await f.request('POST','/access/v1/customers',{external_id:'x'}, {headers:{Authorization:'Bearer '+upstreamKey}})).status,403);
+ assert.equal((await f.request('GET','/access/v1/anything',undefined,{native:true})).status,404);
 });
 
 test('revoked administrator cannot save upstream after a delayed verification',async t=>{
  let release,arrived;const entered=new Promise(r=>arrived=r),wait=new Promise(r=>release=r);
- const f=await fixture(t,{withoutCore:true,onCore:async({url})=>{if(url.pathname==='/merchant/v1/me'){arrived();await wait;}}});
+ const f=await fixture(t,{withoutCore:true,onCore:async({url})=>{if(url.pathname==='/access/v1/me'){arrived();await wait;}}});
  const admin=await f.request('POST','/api/setup',{...input,setup_token:f.setupToken});
  await f.request('POST','/api/admin/users',{email:'second@example.test',display_name:'Second',password,role:'admin'},admin);
  const pending=f.request('POST','/api/admin/upstream',{action:'save',url:`http://127.0.0.1:${f.fakeCore.address().port}`,api_key:upstreamKey,expected_revision:0},admin);

@@ -12,7 +12,7 @@ test('network configuration fails closed and credentials are service-scoped',()=
   assert.throws(()=>loadConfig({HOST:'0.0.0.0'}),/Network operation/);
   assert.throws(()=>loadConfig({HOST:'0.0.0.0',ALLOW_REMOTE:'true'}),/Network operation/);
   assert.throws(()=>loadConfig({PUBLIC_ORIGIN:'http://store.example',ALLOW_REMOTE:'true'}),/HTTPS/);
-  assert.throws(()=>loadConfig({UPSTREAM_URL:'https://core.example',UPSTREAM_API_KEY:'platform-admin-key'}),/merchant-scoped/);
+  assert.throws(()=>loadConfig({UPSTREAM_URL:'https://core.example',UPSTREAM_API_KEY:'platform-admin-key'}),/owner-scoped/);
   assert.throws(()=>loadConfig({UPSTREAM_URL:'https://core.example'}),/both/);
   assert.throws(()=>loadConfig({DATA_DIR:'public/private'}),/outside public/);
   assert.throws(()=>loadConfig({SMTP_HOST:'localhost'}),/SMTP/);
@@ -129,7 +129,7 @@ test('JSON size limits, SQL-shaped strings, unknown fields and public file bound
   assert.match((await f.request('GET','/connect')).raw,/real static test shell/);
   assert.equal((await f.request('GET','/admin/api/users')).status,404);
   assert.equal((await f.request('GET','/.env')).status,404);
-  assert.equal((await f.request('GET','/merchant/v1/customers')).status,401);
+  assert.equal((await f.request('GET','/access/v1/customers')).status,401);
   assert.equal((await f.request('GET','/api/admin/settings',undefined,{...admin,headers:{'Sec-Fetch-Site':'cross-site'}})).status,403);
   const file=await readFile(join(f.root,'data','merchant.sqlite'));assert.ok(file.length>0);
 });

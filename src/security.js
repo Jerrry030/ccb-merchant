@@ -73,7 +73,7 @@ export function requestBoundary(req, config, pathname) {
   const hostAllowed = req.headers.host === config.publicHost || (config.localOrigin && localHosts.includes(req.headers.host)) || bootstrap;
   if (!hostAllowed) throw new HttpError(421, 'invalid_host', 'Host is not configured for this server.');
   if (pathname === '/api/setup' && (!loopback || !localHosts.includes(req.headers.host))) throw new HttpError(403, 'local_setup_only', 'Setup is available only through a direct loopback connection.');
-  if(pathname.startsWith('/merchant/v1/')) {
+  if(pathname.startsWith('/access/v1/')) {
     if(req.headers.origin!==undefined||req.headers.cookie!==undefined||req.headers['sec-fetch-site'])throw new HttpError(403,'server_only','Merchant protocol is server-to-server only.');
     return;
   }

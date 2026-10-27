@@ -17,18 +17,18 @@ export class Customers {
    if(!current || current.core_pending!==before.core_pending || current.status!==before.status || current.display_name!==before.display_name || current.core_customer_id!==before.core_customer_id) throw new HttpError(409,'customer_changed','Customer changed while synchronization was in progress.');
   };
   try {
-   const list=await this.core.request('GET',`/merchant/v1/customers?external_id=${encodeURIComponent(userId)}`); check();
+   const list=await this.core.request('GET',`/access/v1/customers?external_id=${encodeURIComponent(userId)}`); check();
    if(!Array.isArray(list.customers)) throw new HttpError(503,'invalid_core_response','Invalid customer list.');
    let customer=list.customers.map(c=>project(c,schemas.customer)).find(c=>c?.external_id===userId);
    if(before.core_customer_id) {
     if(customer?.id!==before.core_customer_id) throw new HttpError(409,'immutable_mapping','Existing customer mapping could not be verified.');
     if(desired && (customer.status!==desired.status || customer.display_name!==desired.display_name)) {
-     const data=await this.core.request('PATCH',`/merchant/v1/customers/${opaqueId(customer.id)}`,{expected_revision:customer.revision,...desired});
+     const data=await this.core.request('PATCH',`/access/v1/customers/${opaqueId(customer.id)}`,{expected_revision:customer.revision,...desired});
      customer=project(data.customer,schemas.customer);check();
     }
     if(customer?.id!==before.core_customer_id || customer.external_id!==userId || (desired && (customer.status!==desired.status || customer.display_name!==desired.display_name))) throw new HttpError(503,'core_sync_pending','Customer synchronization is unconfirmed.');
    } else {
-    if(!customer) {const data=await this.core.request('POST','/merchant/v1/customers',{external_id:userId,display_name:name});customer=project(data.customer,schemas.customer);check();}
+    if(!customer) {const data=await this.core.request('POST','/access/v1/customers',{external_id:userId,display_name:name});customer=project(data.customer,schemas.customer);check();}
     if(!customer?.id || customer.external_id!==userId || customer.display_name!==name || customer.status!=='active') throw new HttpError(409,'customer_conflict','Existing customer differs from the persisted provisioning request.');
    }
    check();

@@ -2,7 +2,7 @@ import { randomUUID,randomBytes } from 'node:crypto';
 import { HttpError,fields,text,opaqueId,expiry,digest,readBody,respond } from './security.js';
 import { project,schemas } from './upstream.js';
 
-export const accessScopes=['resources.read','customers.read','customers.write','grants.read','grants.write','devices.read','devices.write','usage.read','runtime'];
+export const accessScopes=['resources.read','customers.read','customers.write','delegation.grants.read','delegation.grants.write','delegation.devices.read','delegation.devices.write','delegation.usage.read','runtime'];
 const live=end=>!end||Date.parse(end)>Date.now();
 function accountView(a){return {id:a.id,slug:a.slug,name:a.name,status:a.status,revision:a.revision,created_at:a.created_at};}
 function customerView(c){return {id:c.id,external_id:c.external_id,display_name:c.display_name,status:c.status,revision:c.revision,created_at:c.created_at};}
@@ -14,9 +14,9 @@ export class Access {
  constructor(store,upstream){this.store=store;this.db=store.db;this.upstream=upstream;this.busy=false;}
  authenticate(req,scope){
   const runtime=req.url.startsWith('/bridge/');
-  const header=runtime?'x-ccb-merchant-key':'authorization';
+  const header=runtime?'x-ccb-access-key':'authorization';
   if(req.rawHeaders.filter((v,i)=>i%2===0&&v.toLowerCase()===header).length!==1)throw new HttpError(401,'access_key_required','One credential is required.');
-  const token=runtime?req.headers['x-ccb-merchant-key']:(req.headers.authorization||'').replace(/^Bearer /,'');
+  const token=runtime?req.headers['x-ccb-access-key']:(req.headers.authorization||'').replace(/^Bearer /,'');
   if(typeof token!=='string'||!/^ccbm_[a-f0-9]{64}$/.test(token))throw new HttpError(401,'access_key_required','An API account key is required.');
   const key=this.db.prepare('SELECT * FROM access_keys WHERE token_hash=?').get(digest(token));
   const account=key?this.db.prepare('SELECT * FROM access_accounts WHERE id=?').get(key.account_id):null;
@@ -38,7 +38,7 @@ export class Access {
  async resources(accountId){
   const account=this.object('access_accounts',accountId),rows=this.db.prepare('SELECT * FROM access_resources WHERE account_id=? ORDER BY id').all(accountId);
   if(!rows.length)return [];
-  const data=await this.upstream.request('GET','/merchant/v1/resources');
+  const data=await this.upstream.request('GET','/access/v1/resources');
   if(!Array.isArray(data.resources))throw new HttpError(503,'invalid_core_response','Supply inventory is unavailable.');
   return rows.map(r=>{
    const source=data.resources.find(v=>v.id===r.upstream_id),ends=[r.expires_at,source?.expires_at].filter(Boolean).map(Date.parse);
@@ -51,13 +51,13 @@ export class Access {
   return {id:g.id,customer_id:g.customer_id,resource_id:g.resource_id,name:r.name,status:g.status,surfaces:['code'],expires_at:ends.length?new Date(Math.min(...ends)).toISOString():null,revision:g.revision,updated_at:g.updated_at,pending:Boolean(g.pending)};
  }
  async syncCustomer(row,check){
-  const list=await this.upstream.request('GET',`/merchant/v1/customers?external_id=${encodeURIComponent(row.upstream_external)}`);check();
+  const list=await this.upstream.request('GET',`/access/v1/customers?external_id=${encodeURIComponent(row.upstream_external)}`);check();
   if(!Array.isArray(list.customers))throw new HttpError(503,'invalid_core_response','Customer list unavailable.');
   let remote=list.customers.find(c=>c.external_id===row.upstream_external);
   if(row.upstream_id&&remote?.id!==row.upstream_id)throw new HttpError(409,'mapping_conflict','Existing customer mapping changed.');
-  if(!remote){const result=await this.upstream.request('POST','/merchant/v1/customers',{external_id:row.upstream_external,display_name:'API customer'});check();remote=result.customer;}
+  if(!remote){const result=await this.upstream.request('POST','/access/v1/customers',{external_id:row.upstream_external,display_name:'API customer'});check();remote=result.customer;}
   if(!remote?.id||remote.external_id!==row.upstream_external||remote.display_name!=='API customer')throw new HttpError(409,'mapping_conflict','Customer creation remains unconfirmed.');
-  if(remote.status!==row.status){const result=await this.upstream.request('PATCH',`/merchant/v1/customers/${opaqueId(remote.id)}`,{expected_revision:remote.revision,status:row.status});check();remote=result.customer;}
+  if(remote.status!==row.status){const result=await this.upstream.request('PATCH',`/access/v1/customers/${opaqueId(remote.id)}`,{expected_revision:remote.revision,status:row.status});check();remote=result.customer;}
   if(remote?.external_id!==row.upstream_external||remote.status!==row.status)throw new HttpError(503,'core_outcome_unknown','Customer update remains unconfirmed.');
   this.db.prepare('UPDATE access_customers SET upstream_id=?,pending=0 WHERE id=?').run(remote.id,row.id);
   return this.object('access_customers',row.id,row.account_id);
@@ -99,7 +99,7 @@ export class Access {
    for(const g of rows){
     if(!g.upstream_id||g.pending)continue;
     const c=this.object('access_customers',g.customer_id,account.id),r=this.object('access_resources',g.resource_id,account.id);
-    const remote=await this.upstream.request('GET',`/merchant/v1/grants?customer_id=${opaqueId(c.upstream_id)}&resource_id=${opaqueId(r.upstream_id)}`);check();
+    const remote=await this.upstream.request('GET',`/access/v1/grants?customer_id=${opaqueId(c.upstream_id)}&resource_id=${opaqueId(r.upstream_id)}`);check();
     if(!Array.isArray(remote.grants))throw new HttpError(503,'invalid_core_response','Grant lookup unavailable.');
     const current=remote.grants.find(v=>v.id===g.upstream_id),status=current?.status||'revoked',end=current?current.expires_at:g.expires_at;
     if(!['active','revoked'].includes(status))throw new HttpError(503,'invalid_core_response','Unexpected grant state.');
@@ -134,14 +134,14 @@ export class Access {
  }
  async syncGrant(g,c,r,check){
   if(!c.upstream_id)throw new HttpError(409,'customer_pending','Customer provisioning is pending.');
-  const list=await this.upstream.request('GET',`/merchant/v1/grants?customer_id=${opaqueId(c.upstream_id)}&resource_id=${opaqueId(r.upstream_id)}`);check();
+  const list=await this.upstream.request('GET',`/access/v1/grants?customer_id=${opaqueId(c.upstream_id)}&resource_id=${opaqueId(r.upstream_id)}`);check();
   let remote=list.grants?.find(v=>v.customer_id===c.upstream_id&&v.resource_id===r.upstream_id);
   if(g.upstream_id&&remote?.id!==g.upstream_id)throw new HttpError(409,'mapping_conflict','Grant mapping changed.');
   const allocation={accountId:g.account_id,resourceId:r.id,authorize:check};
   if(!remote){if(g.status==='revoked'){this.db.prepare('UPDATE access_grants SET pending=0 WHERE id=?').run(g.id);return this.object('access_grants',g.id,g.account_id);}
-   const data=await this.upstream.request('POST','/merchant/v1/grants',{customer_id:c.upstream_id,resource_id:r.upstream_id,expires_at:g.expires_at},undefined,allocation);check();remote=data.grant;
+   const data=await this.upstream.request('POST','/access/v1/grants',{customer_id:c.upstream_id,resource_id:r.upstream_id,expires_at:g.expires_at},undefined,allocation);check();remote=data.grant;
   }else if(remote.status!==g.status||Date.parse(remote.expires_at||'')!==Date.parse(g.expires_at||'')&&remote.expires_at!==g.expires_at){
-   const data=await this.upstream.request('PATCH',`/merchant/v1/grants/${opaqueId(remote.id)}`,{expected_revision:remote.revision,status:g.status,expires_at:g.expires_at},undefined,allocation);check();remote=data.grant;
+   const data=await this.upstream.request('PATCH',`/access/v1/grants/${opaqueId(remote.id)}`,{expected_revision:remote.revision,status:g.status,expires_at:g.expires_at},undefined,allocation);check();remote=data.grant;
   }
   if(!remote?.id||remote.customer_id!==c.upstream_id||remote.resource_id!==r.upstream_id||remote.status!==g.status)throw new HttpError(503,'core_outcome_unknown','Grant result is unconfirmed.');
   this.store.transaction(()=>{this.db.prepare('UPDATE access_grants SET upstream_id=?,pending=0 WHERE id=?').run(remote.id,g.id);});
@@ -169,12 +169,12 @@ export class Access {
    if(!f){const uuid=randomUUID();this.db.prepare("INSERT INTO access_fulfillments(id,account_id,order_id,customer_id,resource_id,duration_days,action,status,created_at) VALUES(?,?,?,?,?,?,?,'pending',?)").run(uuid,account.id,orderId,c.id,r.id,body.duration_days,body.action,new Date().toISOString());f=this.db.prepare('SELECT * FROM access_fulfillments WHERE id=?').get(uuid);}
    if(body.action==='cancel')this.db.prepare("UPDATE access_fulfillments SET action='cancel' WHERE id=? AND status='pending'").run(f.id);
    f=this.db.prepare('SELECT * FROM access_fulfillments WHERE id=?').get(f.id);
-   const data=await this.upstream.request('PUT',`/merchant/v1/fulfillments/${f.id}`,{customer_id:c.upstream_id,resource_id:r.upstream_id,duration_days:f.duration_days,action:f.action},undefined,{accountId:account.id,resourceId:r.id,authorize:check});check();
+   const data=await this.upstream.request('PUT',`/access/v1/fulfillments/${f.id}`,{customer_id:c.upstream_id,resource_id:r.upstream_id,duration_days:f.duration_days,action:f.action},undefined,{accountId:account.id,resourceId:r.id,authorize:check});check();
    const v=data.fulfillment;
    if(!v||v.order_id!==f.id||v.customer_id!==c.upstream_id||v.resource_id!==r.upstream_id||v.duration_days!==f.duration_days||!['fulfilled','cancelled'].includes(v.status)||v.status==='fulfilled'&&(!v.grant_id||!Number.isFinite(Date.parse(v.expires_at))))throw new HttpError(503,'core_outcome_unknown','Fulfillment result is unconfirmed.');
    let currentGrant=null;
    if(v.status==='fulfilled'){
-    const latest=await this.upstream.request('GET',`/merchant/v1/grants?customer_id=${opaqueId(c.upstream_id)}&resource_id=${opaqueId(r.upstream_id)}`);check();
+    const latest=await this.upstream.request('GET',`/access/v1/grants?customer_id=${opaqueId(c.upstream_id)}&resource_id=${opaqueId(r.upstream_id)}`);check();
     currentGrant=latest.grants?.find(item=>item.id===v.grant_id&&item.customer_id===c.upstream_id&&item.resource_id===r.upstream_id);
     if(!currentGrant||!['active','revoked'].includes(currentGrant.status))throw new HttpError(503,'core_outcome_unknown','Current grant state cannot be reconciled yet.');
    }
@@ -193,7 +193,7 @@ export class Access {
  receiptView(f){return {order_id:f.order_id,customer_id:f.customer_id,resource_id:f.resource_id,duration_days:f.duration_days,status:f.status,grant_id:f.grant_id,expires_at:f.expires_at,created_at:f.created_at};}
  async devices(account,customerId,method,suffix,body,check){
   const c=this.object('access_customers',customerId,account.id);if(!c.upstream_id)throw new HttpError(409,'customer_pending','Customer is not provisioned.');
-  const base=`/merchant/v1/customers/${opaqueId(c.upstream_id)}`;
+  const base=`/access/v1/customers/${opaqueId(c.upstream_id)}`;
   if(method==='GET'){
    if(suffix!=='/devices')throw new HttpError(404,'not_found','Unsupported device read.');
    const data=await this.upstream.request('GET',base+'/devices');check();
@@ -217,35 +217,35 @@ export class Access {
  async usage(account,customerId,query,check){
   const c=this.object('access_customers',customerId,account.id);if(!c.upstream_id)throw new HttpError(409,'customer_pending','Customer not ready.');
   for(const [key,value] of query)if(!['from','to','limit','offset'].includes(key)||query.getAll(key).length!==1||value.length>100)throw new HttpError(400,'invalid_query','Unsupported usage filter.');
-  const data=await this.upstream.request('GET',`/merchant/v1/customers/${opaqueId(c.upstream_id)}/usage?${query}`);check();
+  const data=await this.upstream.request('GET',`/access/v1/customers/${opaqueId(c.upstream_id)}/usage?${query}`);check();
   return {usage:project(data.usage,schemas.usage),total:data.total,requests:(data.requests||[]).map(row=>{const v=project(row,schemas.request);v.grant_id=this.db.prepare('SELECT id FROM access_grants WHERE upstream_id=? AND account_id=?').get(row.grant_id||'',account.id)?.id||null;return v;})};
  }
  async protocol(req,res,url){
   const path=url.pathname,method=req.method;let match,scope;
-  if(path==='/merchant/v1/me')scope=null;
-  else if(path==='/merchant/v1/resources')scope='resources.read';
-  else if(/^\/merchant\/v1\/customers(?:\/[A-Za-z0-9_-]+)?$/.test(path))scope=method==='GET'?'customers.read':'customers.write';
-  else if(/^\/merchant\/v1\/grants(?:\/[A-Za-z0-9_-]+)?$/.test(path)||path.startsWith('/merchant/v1/fulfillments/'))scope=method==='GET'?'grants.read':'grants.write';
-  else if(path.endsWith('/usage'))scope='usage.read';
-  else if(path.includes('/devices'))scope=method==='GET'?'devices.read':'devices.write';
+  if(path==='/access/v1/me')scope=null;
+  else if(path==='/access/v1/resources')scope='resources.read';
+  else if(/^\/access\/v1\/customers(?:\/[A-Za-z0-9_-]+)?$/.test(path))scope=method==='GET'?'customers.read':'customers.write';
+  else if(/^\/access\/v1\/grants(?:\/[A-Za-z0-9_-]+)?$/.test(path)||path.startsWith('/access/v1/fulfillments/'))scope=method==='GET'?'delegation.grants.read':'delegation.grants.write';
+  else if(path.endsWith('/usage'))scope='delegation.usage.read';
+  else if(path.includes('/devices'))scope=method==='GET'?'delegation.devices.read':'delegation.devices.write';
   else throw new HttpError(404,'not_found','No local API operation at this path.');
-  const allowedQuery=path==='/merchant/v1/grants'?['customer_id','resource_id','limit','offset']:path==='/merchant/v1/customers'?['external_id','limit','offset']:path.endsWith('/usage')?['from','to','limit','offset']:[];
+  const allowedQuery=path==='/access/v1/grants'?['customer_id','resource_id','limit','offset']:path==='/access/v1/customers'?['external_id','limit','offset']:path.endsWith('/usage')?['from','to','limit','offset']:[];
   for(const [name,value] of url.searchParams)if(!allowedQuery.includes(name)||url.searchParams.getAll(name).length!==1||value.length>150)throw new HttpError(400,'invalid_query','Unsupported query.');
   const p=this.authenticate(req,scope),check=()=>this.authenticate(req,scope);
   this.store.throttle(`access:${p.account.id}`,300,60000);
   let body={};if(method!=='GET'&&(Number(req.headers['content-length']||0)>0||req.headers['transfer-encoding']))body=await readBody(req,16384);
   check();
   let result;
-  if(path==='/merchant/v1/me'&&method==='GET')result={protocol_version:4,authority_id:this.upstream.instanceId,merchant:accountView(p.account),scopes:JSON.parse(p.key.scopes)};
-  else if(path==='/merchant/v1/resources'&&method==='GET')result={resources:await this.resources(p.account.id)};
-  else if((match=path.match(/^\/merchant\/v1\/customers(?:\/([A-Za-z0-9_-]+))?$/))&&((!match[1]&&['GET','POST'].includes(method))||(match[1]&&method==='PATCH')))result=await this.customers(p.account,method,match[1],body,url.searchParams,check);
-  else if((match=path.match(/^\/merchant\/v1\/grants(?:\/([A-Za-z0-9_-]+))?$/))&&((!match[1]&&['GET','POST'].includes(method))||(match[1]&&method==='PATCH')))result=await this.grants(p.account,method,match[1],body,url.searchParams,check);
-  else if((match=path.match(/^\/merchant\/v1\/fulfillments\/([A-Za-z0-9_-]+)$/))&&method==='PUT')result=await this.fulfillment(p.account,match[1],body,check);
-  else if((match=path.match(/^\/merchant\/v1\/customers\/([A-Za-z0-9_-]+)(\/devices(?:\/[A-Za-z0-9_-]+)?)$/)))result=await this.devices(p.account,match[1],method,match[2],body,check);
-  else if((match=path.match(/^\/merchant\/v1\/customers\/([A-Za-z0-9_-]+)\/usage$/))&&method==='GET')result=await this.usage(p.account,match[1],url.searchParams,check);
+  if(path==='/access/v1/me'&&method==='GET')result={protocol_version:5,authority_id:this.upstream.instanceId,user:{...accountView(p.account),can_delegate:true},scopes:JSON.parse(p.key.scopes)};
+  else if(path==='/access/v1/resources'&&method==='GET')result={resources:await this.resources(p.account.id)};
+  else if((match=path.match(/^\/access\/v1\/customers(?:\/([A-Za-z0-9_-]+))?$/))&&((!match[1]&&['GET','POST'].includes(method))||(match[1]&&method==='PATCH')))result=await this.customers(p.account,method,match[1],body,url.searchParams,check);
+  else if((match=path.match(/^\/access\/v1\/grants(?:\/([A-Za-z0-9_-]+))?$/))&&((!match[1]&&['GET','POST'].includes(method))||(match[1]&&method==='PATCH')))result=await this.grants(p.account,method,match[1],body,url.searchParams,check);
+  else if((match=path.match(/^\/access\/v1\/fulfillments\/([A-Za-z0-9_-]+)$/))&&method==='PUT')result=await this.fulfillment(p.account,match[1],body,check);
+  else if((match=path.match(/^\/access\/v1\/customers\/([A-Za-z0-9_-]+)(\/devices(?:\/[A-Za-z0-9_-]+)?)$/)))result=await this.devices(p.account,match[1],method,match[2],body,check);
+  else if((match=path.match(/^\/access\/v1\/customers\/([A-Za-z0-9_-]+)\/usage$/))&&method==='GET')result=await this.usage(p.account,match[1],url.searchParams,check);
   else throw new HttpError(404,'not_found','No local API operation.');
   try{check();}catch(error){if(method==='GET')throw error;throw new HttpError(503,'core_outcome_unknown','Permission changed; another valid key must reconcile the outcome.');}
-  respond(res,method==='POST'&&['/merchant/v1/customers','/merchant/v1/grants'].includes(path)?201:200,result);
+  respond(res,method==='POST'&&['/access/v1/customers','/access/v1/grants'].includes(path)?201:200,result);
  }
  async admin(req,res,url,authorize){
   const actor=authorize().user,method=req.method,path=url.pathname;
@@ -307,7 +307,7 @@ export class Access {
     const source=old?.upstream_id||text(body.upstream_id,'upstream_id',150),status=body.status||old?.status||'active';
     if(old&&body.upstream_id&&body.upstream_id!==source||!['active','disabled'].includes(status))throw new HttpError(400,'invalid_input','Invalid status or immutable resource.');
     if(!old&&this.db.prepare('SELECT 1 FROM access_resources WHERE account_id=? AND upstream_id=?').get(id,source))throw new HttpError(409,'resource_conflict','Resource is already authorized; edit it instead.');
-    const supply=await this.upstream.request('GET','/merchant/v1/resources');authorize();
+    const supply=await this.upstream.request('GET','/access/v1/resources');authorize();
     const sourceRow=supply.resources?.find(r=>r.id===source);if(!sourceRow)throw new HttpError(409,'supply_unavailable','Source resource is unavailable.');
     const ends=body.expires_at===undefined?(old?.expires_at??sourceRow.expires_at):expiry(body.expires_at);
     if(status==='active'&&(sourceRow.status!=='active'||sourceRow.available!==true||!live(ends)||sourceRow.expires_at&&(!ends||Date.parse(ends)>Date.parse(sourceRow.expires_at))))throw new HttpError(409,'supply_unavailable','The source cannot cover this authorization term.');
@@ -325,7 +325,7 @@ export class Access {
  // Device bearer is never exchanged for the provider key. Every boundary binds
  // its digest to one local API account, maps control IDs and enforces local access.
  async prepareRuntime(req,url,raw){
-  const peer=req.headers['x-ccb-merchant-key']!==undefined?this.authenticate(req,'runtime'):null;
+  const peer=req.headers['x-ccb-access-key']!==undefined?this.authenticate(req,'runtime'):null;
   const start=req.method==='POST'&&url.pathname==='/bridge/v1/device/start';
   let body=raw;
   let control;

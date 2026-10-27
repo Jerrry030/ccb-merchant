@@ -25,7 +25,7 @@ test('retired procurement history is preserved on reopen without being an active
 
 test('upstream quote refresh updates cost but never overwrites the local retail price or term',async t=>{
  let revision=1,cost=1000;
- const f=await fixture(t,{onCore:({url,json})=>{if(url.pathname==='/merchant/v1/resources'){json({resources:[{id:'resource-1',name:'Pool',kind:'subscription',status:'active',available:true,surfaces:['code'],plans:[{id:'source-plan',duration_days:90,amount_minor:cost,revision,status:'active'}],stock:[]}]});return true;}}});
+ const f=await fixture(t,{onCore:({url,json})=>{if(url.pathname==='/access/v1/resources'){json({resources:[{id:'resource-1',name:'Pool',kind:'subscription',status:'active',available:true,surfaces:['code'],plans:[{id:'source-plan',duration_days:90,amount_minor:cost,revision,status:'active'}],stock:[]}]});return true;}}});
  const admin=await f.request('POST','/api/setup',{setup_token:f.setupToken,email:'admin@example.test',password,display_name:'Owner'});
  let plans=await f.request('GET','/api/admin/plans',undefined,admin);assert.equal(plans.status,200,plans.raw);const plan=plans.data.plans[0];
  const edited=await f.request('PATCH',`/api/admin/plans/${plan.id}`,{name:'Local 7 days',description:'retail',duration_days:7,amount_minor:550,status:'active',expected_revision:plan.revision},admin);assert.equal(edited.status,200,edited.raw);
@@ -82,7 +82,7 @@ test('invalid inventory or inactive users never trigger automatic customer creat
 
 test('automatic identity registration rechecks admin privilege before delivering any account',async t=>{
  let dropAdmin=false,f;
- f=await fixture(t,{onCore:({req,url,json,state,body})=>{if(dropAdmin&&req.method==='POST'&&url.pathname==='/merchant/v1/customers'){const customer={id:'created-but-not-delivered',external_id:body.external_id,display_name:body.display_name,status:'active',revision:1};state.customers.push(customer);f.store.db.prepare("UPDATE users SET status='disabled' WHERE email='admin@example.test'").run();json({customer},201);return true;}}});
+ f=await fixture(t,{onCore:({req,url,json,state,body})=>{if(dropAdmin&&req.method==='POST'&&url.pathname==='/access/v1/customers'){const customer={id:'created-but-not-delivered',external_id:body.external_id,display_name:body.display_name,status:'active',revision:1};state.customers.push(customer);f.store.db.prepare("UPDATE users SET status='disabled' WHERE email='admin@example.test'").run();json({customer},201);return true;}}});
  const admin=await f.request('POST','/api/setup',{setup_token:f.setupToken,email:'admin@example.test',password,display_name:'Owner'});
  const member=await f.request('POST','/api/admin/users',{email:'buyer@example.test',password,display_name:'Buyer',role:'member'},admin);
  // Role demotion requires a second active administrator; leave the invariant intact.

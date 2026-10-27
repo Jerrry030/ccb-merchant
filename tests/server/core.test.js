@@ -8,11 +8,11 @@ const memberInput={email:'member@example.test',display_name:'Member',password,ro
 test('a core 5xx after a committed write is unknown, not a definite rejection',async t=>{
   let failWrite=true;
   const f=await fixture(t,{onCore:async({req,url,body,state,json})=>{
-    if(url.pathname==='/merchant/v1/grants' && req.method==='POST' && failWrite) {
+    if(url.pathname==='/access/v1/grants' && req.method==='POST' && failWrite) {
       state.grants.push({id:'grant-after-500',customer_id:body.customer_id,resource_id:body.resource_id,name:'Code',status:'active',surfaces:['code'],expires_at:null,revision:1,updated_at:now});
       json({error:{message:'PRIVATE_UPSTREAM_DETAIL'}},500);return true;
     }
-    if(url.pathname==='/merchant/v1/resources') {json({error:{}},503);return true;}
+    if(url.pathname==='/access/v1/resources') {json({error:{}},503);return true;}
   }});
   const admin=await f.request('POST','/api/setup',{...adminInput,setup_token:f.setupToken});
   const created=await f.request('POST','/api/admin/users',memberInput,admin), id=created.data.user.id;
@@ -20,7 +20,7 @@ test('a core 5xx after a committed write is unknown, not a definite rejection',a
   const result=await f.request('POST','/api/admin/grants',{user_id:id,resource_id:'resource-1'},admin);
   assert.equal(result.status,503);assert.equal(result.data.error.code,'core_outcome_unknown');
   assert.equal(result.raw.includes('PRIVATE_UPSTREAM_DETAIL'),false);
-  assert.equal(f.state.requests.filter(r=>r.method==='POST'&&r.path==='/merchant/v1/grants').length,1);
+  assert.equal(f.state.requests.filter(r=>r.method==='POST'&&r.path==='/access/v1/grants').length,1);
   const read=await f.request('GET','/api/admin/resources',undefined,admin);
   assert.equal(read.status,503);assert.equal(read.data.error.code,'core_unavailable');
   const list=await f.request('GET',`/api/admin/grants?user_id=${id}`,undefined,admin);
@@ -36,7 +36,7 @@ test('provisioning rechecks administrator identity after awaited core operations
     const waiting=new Promise(resolve=>{entered=resolve;});
     const gate=new Promise(resolve=>{release=resolve;});
     const f=await fixture(t,{env:{UPSTREAM_TIMEOUT_MS:'10000'},onCore:async({req,url,body,state,json})=>{
-      if(!pause || url.pathname!=='/merchant/v1/customers') return false;
+      if(!pause || url.pathname!=='/access/v1/customers') return false;
       if(phase==='read' && req.method==='GET') {entered();await gate;return false;}
       if(phase==='create' && req.method==='POST') {
         const customer={id:'customer-committed',external_id:body.external_id,display_name:body.display_name,status:'active',revision:1,created_at:now};
@@ -71,7 +71,7 @@ test('provisioning is immutable/idempotent; core resources, usage, grants are fi
   assert.equal(provision.status,200);assert.equal(provision.data.customer.external_id,id);assert.equal(provision.raw.includes('LEAK'),false);
   const again=await f.request('POST',`/api/admin/users/${id}/provision`,undefined,admin);
   assert.equal(again.data.customer.id,provision.data.customer.id);
-  assert.equal(f.state.requests.filter(r=>r.method==='POST'&&r.path==='/merchant/v1/customers').length,1);
+  assert.equal(f.state.requests.filter(r=>r.method==='POST'&&r.path==='/access/v1/customers').length,1);
   assert.throws(()=>f.store.db.prepare('UPDATE users SET core_customer_id=? WHERE id=?').run('other',id),/immutable_customer/);
   const login=await f.request('POST','/api/auth/login',{email:memberInput.email,password});
   const grant=await f.request('POST','/api/admin/grants',{user_id:id,resource_id:'resource-1'},admin);
@@ -95,13 +95,13 @@ test('provisioning is immutable/idempotent; core resources, usage, grants are fi
   assert.equal((await f.request('PATCH',`/api/admin/grants/${grant.data.grant.id}`,{expected_revision:99,status:'revoked'},admin)).data.error.code,'core_conflict');
   assert.equal((await f.request('PATCH',`/api/admin/grants/${grant.data.grant.id}`,{expected_revision:1,status:'revoked'},admin)).data.grant.status,'revoked');
   assert.equal((await f.request('GET','/api/admin/keys',undefined,admin)).status,404);
-  for(const request of f.state.requests.filter(r=>r.path.startsWith('/merchant/'))) {assert.equal(request.headers.authorization,`Bearer ${upstreamKey}`);assert.equal(request.headers.cookie,undefined);}
+  for(const request of f.state.requests.filter(r=>r.path.startsWith('/access/'))) {assert.equal(request.headers.authorization,`Bearer ${upstreamKey}`);assert.equal(request.headers.cookie,undefined);}
 });
 
 test('customer creation lost response is not blindly retried; external_id reconciles after process restart',async t=>{
   let lose=true;
   const f=await fixture(t,{onCore:async({req,res,url,body,state})=>{
-    if(lose&&req.method==='POST'&&url.pathname==='/merchant/v1/customers') {
+    if(lose&&req.method==='POST'&&url.pathname==='/access/v1/customers') {
       state.customers.push({id:'customer-lost',external_id:body.external_id,display_name:body.display_name,status:'active',revision:1,created_at:now});res.destroy();return true;
     }
   }});
@@ -109,17 +109,17 @@ test('customer creation lost response is not blindly retried; external_id reconc
   const member=await f.request('POST','/api/admin/users',memberInput,admin), id=member.data.user.id;
   const lost=await f.request('POST',`/api/admin/users/${id}/provision`,undefined,admin);
   assert.equal(lost.status,503);assert.equal(lost.data.error.code,'core_outcome_unknown');
-  assert.equal(f.state.requests.filter(r=>r.method==='POST'&&r.path==='/merchant/v1/customers').length,1);
+  assert.equal(f.state.requests.filter(r=>r.method==='POST'&&r.path==='/access/v1/customers').length,1);
   assert.equal(f.store.db.prepare('SELECT core_customer_id FROM users WHERE id=?').get(id).core_customer_id,null);
   lose=false; await f.restart();
   const reconcile=await f.request('POST',`/api/admin/users/${id}/provision`,undefined,admin);
   assert.equal(reconcile.status,200);assert.equal(reconcile.data.user.core_customer_id,'customer-lost');
-  assert.equal(f.state.requests.filter(r=>r.method==='POST'&&r.path==='/merchant/v1/customers').length,1);
+  assert.equal(f.state.requests.filter(r=>r.method==='POST'&&r.path==='/access/v1/customers').length,1);
 });
 
 test('suspension immediately revokes local sessions and gates new runtime until core alignment; re-enable waits for core',async t=>{
   let failPatch=false;
-  const f=await fixture(t,{onCore:async({req,res,url})=>{if(failPatch&&req.method==='PATCH'&&url.pathname.startsWith('/merchant/v1/customers/')){res.destroy();return true;}}});
+  const f=await fixture(t,{onCore:async({req,res,url})=>{if(failPatch&&req.method==='PATCH'&&url.pathname.startsWith('/access/v1/customers/')){res.destroy();return true;}}});
   const admin=await f.request('POST','/api/setup',{...adminInput,setup_token:f.setupToken});
   const member=await f.request('POST','/api/admin/users',memberInput,admin), id=member.data.user.id;
   await f.request('POST',`/api/admin/users/${id}/provision`,undefined,admin);
@@ -148,7 +148,7 @@ test('suspension immediately revokes local sessions and gates new runtime until 
 test('committed suspension with lost response reconciles by GET without a second write',async t=>{
   let lose=false;
   const f=await fixture(t,{onCore:async({req,res,url,state,body})=>{
-    if(lose&&req.method==='PATCH'&&url.pathname.startsWith('/merchant/v1/customers/')) {
+    if(lose&&req.method==='PATCH'&&url.pathname.startsWith('/access/v1/customers/')) {
       state.customers[0].status=body.status;state.customers[0].revision++;res.destroy();return true;
     }
   }});
@@ -163,8 +163,8 @@ test('committed suspension with lost response reconciles by GET without a second
 test('core errors and redirects never expose secrets or leak the server credential to another origin',async t=>{
   let redirected=false,deny=true;
   const f=await fixture(t,{onCore:async({url,res,json})=>{
-    if(deny&&url.pathname==='/merchant/v1/resources') {json({error:{code:'sql',message:'LEAK DB_PASSWORD and upstream@mail.test'}},503);return true;}
-    if(url.pathname==='/merchant/v1/resources') {res.writeHead(302,{Location:'/credential-capture'});res.end();return true;}
+    if(deny&&url.pathname==='/access/v1/resources') {json({error:{code:'sql',message:'LEAK DB_PASSWORD and upstream@mail.test'}},503);return true;}
+    if(url.pathname==='/access/v1/resources') {res.writeHead(302,{Location:'/credential-capture'});res.end();return true;}
     if(url.pathname==='/credential-capture') {redirected=true;json({keys:[]});return true;}
   }});
   const admin=await f.request('POST','/api/setup',{...adminInput,setup_token:f.setupToken});
@@ -176,7 +176,7 @@ test('core errors and redirects never expose secrets or leak the server credenti
 test('grant write lost after commit is surfaced as unknown and safely discoverable by customer/resource',async t=>{
   let lose=true;
   const f=await fixture(t,{onCore:async({req,res,url,body,state})=>{
-    if(lose&&req.method==='POST'&&url.pathname==='/merchant/v1/grants') {
+    if(lose&&req.method==='POST'&&url.pathname==='/access/v1/grants') {
       state.grants.push({id:'grant-lost',customer_id:body.customer_id,resource_id:body.resource_id,name:'Code',surfaces:['code'],status:'active',expires_at:null,revision:1,updated_at:now});res.destroy();return true;
     }
   }});
@@ -185,7 +185,7 @@ test('grant write lost after commit is surfaced as unknown and safely discoverab
   await f.request('POST',`/api/admin/users/${id}/provision`,undefined,admin);
   const grant=await f.request('POST','/api/admin/grants',{user_id:id,resource_id:'resource-1'},admin);
   assert.equal(grant.status,503);assert.equal(grant.data.error.code,'core_outcome_unknown');
-  assert.equal(f.state.requests.filter(r=>r.method==='POST'&&r.path==='/merchant/v1/grants').length,1);
+  assert.equal(f.state.requests.filter(r=>r.method==='POST'&&r.path==='/access/v1/grants').length,1);
   const list=await f.request('GET',`/api/admin/grants?user_id=${id}`,undefined,admin);
   assert.equal(list.data.grants.length,1);assert.equal(list.data.grants[0].id,'grant-lost');
   lose=false;

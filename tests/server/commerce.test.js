@@ -109,7 +109,7 @@ test('insufficient funds, excessive term and concurrent purchases never create u
 
 test('background customer synchronization restores a suspended site after restart and honors current intent',async t=>{
  let offline=false;
- const {f,admin,member,user,plan}=await shop(t,{onCore:({req,url,json})=>{if(offline&&req.method==='PATCH'&&url.pathname.startsWith('/merchant/v1/customers/')){json({error:{}},503);return true;}}});
+ const {f,admin,member,user,plan}=await shop(t,{onCore:({req,url,json})=>{if(offline&&req.method==='PATCH'&&url.pathname.startsWith('/access/v1/customers/')){json({error:{}},503);return true;}}});
  const purchase=await f.request('POST','/api/me/rentals',{plan_id:plan.id,expected_revision:1,payment_method:'wallet',platform:'MacOS/arm64',request_id:randomUUID()},member);assert.equal(purchase.data.rental.status,'fulfilled');
  offline=true;const disabled=await f.request('PATCH',`/api/admin/users/${user.id}`,{status:'disabled'},admin);assert.equal(disabled.status,503);
  assert.ok(f.store.db.prepare('SELECT core_pending FROM users WHERE id=?').get(user.id).core_pending);

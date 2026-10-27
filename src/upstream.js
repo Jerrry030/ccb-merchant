@@ -10,7 +10,7 @@ const tokenUsage = { input_tokens:N, output_tokens:N, cache_read_input_tokens:N,
 export const schemas = {
   heldAccount: {grant_revision:N,customer_expires_at:S,id:S,resource_id:S,platform:S,grant_id:S,customer_id:S,assigned:B,status:S,expires_at:S,revision:N,created_at:S,device_limit:N,details:{id:S,name:S,plan:S,state:S,device_name:S,platform:S,expires_at:S,device_limit:N,surfaces:[S],quota:{status:S,updated_at:S,windows:[{key:S,label:S,used_percent:N,resets_at:S,reset:B}]}}},
 
-  merchant: { id:S, slug:S, name:S, status:S, revision:N, created_at:S },
+  user: { id:S, username:S, name:S, status:S, can_delegate:B, revision:N, created_at:S },
   resource: { allocatable:B,id:S, name:S, status:S, kind:S, surfaces:[S], expires_at:S, revision:N, available:B, plans:[{id:S,duration_days:N,amount_minor:N,currency:S,status:S,revision:N}], stock:[{platform:S,label:S,available:N}] },
   account: { device_limit:N,platform:S,expires_at:S,id:S, name:S, plan:S, state:S, device_name:S, surfaces:[S], quota:{status:S,updated_at:S,windows:[{key:S,label:S,used_percent:N,resets_at:S,reset:B}]} },
   customer: { id:S, external_id:S, display_name:S, status:S, revision:N, created_at:S },
@@ -37,11 +37,20 @@ export function project(value, schema) {
   }
   return result;
 }
-export const scopes = ['resources.read','customers.read','customers.write','grants.read','grants.write','devices.read','devices.write','usage.read','runtime','keys.manage'];
+export const scopes = ['resources.read','customers.read','customers.write','delegation.grants.read','delegation.grants.write','delegation.devices.read','delegation.devices.write','delegation.usage.read','runtime','delegation.keys.manage'];
 
 export class Upstream {
  constructor(config,store) {
   this.config=config;this.store=store;this.verified=null;this.changing=false;
+  // Convert only the persisted correlation key; never rebind to another owner.
+  store.transaction(()=>{
+   const saved=store.db.prepare("SELECT value FROM settings WHERE key='upstream_binding'").get();
+   if(saved){const binding=JSON.parse(saved.value);if(Object.hasOwn(binding,'merchant_id')){binding.user_id=binding.merchant_id;delete binding.merchant_id;store.db.prepare("UPDATE settings SET value=? WHERE key='upstream_binding'").run(JSON.stringify(binding));}}
+   for(const key of store.db.prepare('SELECT id,scopes FROM access_keys').all()){
+    const before=JSON.parse(key.scopes),after=before.map(value=>['grants.read','grants.write','devices.read','devices.write','usage.read','keys.manage'].includes(value)?'delegation.'+value:value);
+    if(JSON.stringify(before)!==JSON.stringify(after))store.db.prepare('UPDATE access_keys SET scopes=? WHERE id=?').run(JSON.stringify(after),key.id);
+   }
+  });
   store.db.prepare('INSERT OR IGNORE INTO settings VALUES(?,?)').run('instance_id',randomUUID());
   this.instanceId=store.db.prepare("SELECT value FROM settings WHERE key='instance_id'").get().value;
   const saved=store.db.prepare("SELECT value FROM settings WHERE key='upstream'").get();
@@ -58,15 +67,15 @@ export class Upstream {
   const stamp=`${candidate.upstreamUrl}|${candidate.upstreamKey}`;
   if(bind&&this.verified?.stamp===stamp)return this.verified.data;
   if(!candidate.upstreamUrl||!candidate.upstreamKey)throw new HttpError(503,'core_not_configured','Upstream connection is not configured.');
-  const response=await upstreamFetch(candidate,`${candidate.upstreamUrl}/merchant/v1/me`,{headers:{Authorization:`Bearer ${candidate.upstreamKey}`,Accept:'application/json'},signal:signal||AbortSignal.timeout(candidate.upstreamTimeoutMs)});
+  const response=await upstreamFetch(candidate,`${candidate.upstreamUrl}/access/v1/me`,{headers:{Authorization:`Bearer ${candidate.upstreamKey}`,Accept:'application/json'},signal:signal||AbortSignal.timeout(candidate.upstreamTimeoutMs)});
   if(!response.ok){await response.body?.cancel();throw new HttpError(503,'upstream_verification_failed','Upstream could not verify this merchant identity.');}
   const raw=await readUpstreamJSON(response);
-  const data={protocol_version:raw.protocol_version,authority_id:raw.authority_id,merchant:project(raw.merchant,schemas.merchant),scopes:Array.isArray(raw.scopes)?raw.scopes.filter(v=>scopes.includes(v)):[]};
-  if(data.protocol_version!==4||typeof data.authority_id!=='string'||!data.authority_id||data.authority_id.length>150||!Array.isArray(raw.scopes)||!data.merchant?.id||data.merchant.status!=='active')throw new HttpError(409,'upstream_protocol_mismatch','A compatible active direct account connection is required.');
+  const data={protocol_version:raw.protocol_version,authority_id:raw.authority_id,user:project(raw.user,schemas.user),scopes:Array.isArray(raw.scopes)?raw.scopes.filter(v=>scopes.includes(v)):[]};
+  if(data.protocol_version!==5||typeof data.authority_id!=='string'||!data.authority_id||data.authority_id.length>150||!Array.isArray(raw.scopes)||!data.user?.id||data.user.status!=='active')throw new HttpError(409,'upstream_protocol_mismatch','A compatible active direct account connection is required.');
   const pinned=this.store.db.prepare("SELECT value FROM settings WHERE key='upstream_binding'").get();
-  if(pinned){const binding=JSON.parse(pinned.value);if(binding.authority_id!==data.authority_id||binding.merchant_id!==data.merchant.id)throw new HttpError(409,'upstream_identity_mismatch','Existing data is bound to another merchant or core authority.');}
+  if(pinned){const binding=JSON.parse(pinned.value);if(binding.authority_id!==data.authority_id||binding.user_id!==data.user.id)throw new HttpError(409,'upstream_identity_mismatch','Existing data is bound to another merchant or core authority.');}
   if(bind){
-   this.store.db.prepare('INSERT OR IGNORE INTO settings VALUES(?,?)').run('upstream_binding',JSON.stringify({authority_id:data.authority_id,merchant_id:data.merchant.id}));
+   this.store.db.prepare('INSERT OR IGNORE INTO settings VALUES(?,?)').run('upstream_binding',JSON.stringify({authority_id:data.authority_id,user_id:data.user.id}));
    this.verified={stamp,data};
   }
   return data;
@@ -77,7 +86,7 @@ export class Upstream {
   if(this.changing||body.expected_revision!==this.revision)throw new HttpError(409,'upstream_changed','Refresh connection configuration before saving.');
   if(!['verify','save'].includes(body.action))throw new HttpError(400,'invalid_input','Choose verify or save.');
   let url;try{url=new URL(body.url);}catch{throw new HttpError(400,'invalid_upstream','Invalid upstream origin.');}
-  if(url.pathname!=='/'||url.search||url.hash||url.username||url.password||!/^ccbm_[a-f0-9]{64}$/.test(body.api_key||''))throw new HttpError(400,'invalid_upstream','Use an upstream origin and its service merchant key.');
+  if(url.pathname!=='/'||url.search||url.hash||url.username||url.password||!/^ccb[km]_[A-Za-z0-9_-]{32,128}$/.test(body.api_key||''))throw new HttpError(400,'invalid_upstream','Use an upstream origin and its service merchant key.');
   this.changing=true;
   try {
    const candidate={...this.config,upstreamUrl:url.origin,upstreamKey:body.api_key};
@@ -91,8 +100,8 @@ export class Upstream {
     const saved={url:url.origin,revision:this.revision+1,secret:{iv:iv.toString('base64'),tag:cipher.getAuthTag().toString('base64'),data:bytes.toString('base64')}};
     this.store.transaction(()=>{
      this.store.db.prepare('INSERT INTO settings VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value').run('upstream',JSON.stringify(saved));
-     this.store.db.prepare('INSERT OR IGNORE INTO settings VALUES(?,?)').run('upstream_binding',JSON.stringify({authority_id:data.authority_id,merchant_id:data.merchant.id}));
-     this.store.audit(actor.user.id,'upstream.configure',data.merchant.id);
+     this.store.db.prepare('INSERT OR IGNORE INTO settings VALUES(?,?)').run('upstream_binding',JSON.stringify({authority_id:data.authority_id,user_id:data.user.id}));
+     this.store.audit(actor.user.id,'upstream.configure',data.user.id);
     });
     this.revision=saved.revision;this.saved=saved;this.config.upstreamUrl=url.origin;this.config.upstreamKey=body.api_key;this.verified={stamp:`${url.origin}|${body.api_key}`,data};
    }
@@ -102,12 +111,12 @@ export class Upstream {
  async request(method,path,body,signal,allocation=null) {
   const config={...this.config};
   if(!config.upstreamUrl||!config.upstreamKey)throw new HttpError(503,'core_not_configured','Upstream connection is not configured.');
-  if(!path.startsWith('/merchant/v1/')||path.includes('#'))throw new Error('Invalid internal merchant route');
+  if(!path.startsWith('/access/v1/')||path.includes('#'))throw new Error('Invalid internal merchant route');
   const timed=AbortSignal.timeout(config.upstreamTimeoutMs),combined=signal?AbortSignal.any([signal,timed]):timed;
   try {
-   if(method==='GET' &&path==='/merchant/v1/me')this.verified=null;
+   if(method==='GET' &&path==='/access/v1/me')this.verified=null;
    const identity=await this.inspect(config,true,combined);
-   if(method==='GET'&&path==='/merchant/v1/me')return identity;
+   if(method==='GET'&&path==='/access/v1/me')return identity;
    allocation?.authorize?.();
    if(allocation && body?.status!=='revoked' && body?.action!=='cancel'){
     const local=this.store.db.prepare('SELECT * FROM access_resources WHERE id=? AND account_id=?').get(allocation.resourceId,allocation.accountId);

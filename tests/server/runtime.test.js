@@ -27,7 +27,7 @@ test('Code runtime exact route/method allowlist rejects Desktop, arbitrary URLs 
 
 test('runtime injects only service merchant key, preserves device bearer and protocol headers, strips cookies and secrets',async t=>{
   const f=await fixture(t);
-  assert.equal((await f.request('POST','/bridge/v1/bindings',{}, {native:true,headers:{...native.headers,'X-CCB-Merchant-Key':'attacker'}})).status,401);
+  assert.equal((await f.request('POST','/bridge/v1/bindings',{}, {native:true,headers:{...native.headers,'X-CCB-Access-Key':'attacker'}})).status,401);
   const response=await f.request('POST','/bridge/v1/bindings',{}, {native:true,headers:{
     ...native.headers,Cookie:'session=SECRET',
     'X-Api-Key':'UPSTREAM_SECRET','X-Forwarded-For':'evil','X-Custom-Secret':'SECRET','X-CSRF-Token':'SECRET',
@@ -35,7 +35,7 @@ test('runtime injects only service merchant key, preserves device bearer and pro
     'X-CCB-Wire-Order':'Cookie,Authorization,X-Stainless-Os,X-Custom-Secret,Content-Type',
   }});
   assert.equal(response.status,200);const sent=f.state.requests.at(-1).headers;
-  assert.equal(sent.authorization,bearer);assert.equal(sent['x-ccb-merchant-key'],upstreamKey);
+  assert.equal(sent.authorization,bearer);assert.equal(sent['x-ccb-access-key'],upstreamKey);
   assert.equal(sent['x-stainless-os'],'windows');assert.equal(sent['x-ccb-binding'],'binding-test');
   for(const header of ['cookie','x-api-key','x-forwarded-for','x-custom-secret','x-csrf-token','origin']) assert.equal(sent[header],undefined,header);
   assert.equal(sent['x-ccb-wire-order'],'Authorization,X-Stainless-Os,Content-Type');

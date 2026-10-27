@@ -698,7 +698,7 @@ function inventoryStatus(account) {
 async function inventoryView() {
  const data=await api('/api/admin/inventory'),accounts=collection(data,'accounts');
  const customerId=new URLSearchParams(location.search).get('user_id');
- const shown=customerId?accounts.filter(a=>a.user_id===customerId):accounts;
+ const shown=customerId?accounts.filter(a=>a.user_id===customerId||!a.assigned):accounts;
  const inventory=table([
   {label:'账号',render:a=>el('div',{},el('strong',{text:a.details?.name||a.id}),el('span',{class:'table-sub',text:a.platform}))},
   {label:'规格',render:a=>a.details?.plan||'Claude'},
@@ -708,20 +708,20 @@ async function inventoryView() {
   {label:'设备',render:a=>a.details?.device_name||'未绑定'},
   {label:'操作',render:a=>el('div',{class:'button-row'},
    el('button',{class:'btn small',text:'账号详情',onclick:()=>editorDialog('账号详情',accountCard({...a.details,id:a.id,platform:a.platform,expires_at:a.expires_at,device_limit:1},true))}),
-   !a.assigned?el('button',{class:'btn small',text:'分配客户',disabled:inventoryStatus(a)!=='可分配',onclick:()=>assignInventoryAccount(a)}):[
+   !a.assigned?el('button',{class:'btn small',text:'分配客户',disabled:inventoryStatus(a)!=='可分配',onclick:()=>assignInventoryAccount(a,customerId)}):[
     el('button',{class:'btn small',text:'延长客户有效期',disabled:a.status!=='active'||!a.grant_revision||Date.parse(a.customer_expires_at)>=Date.parse(a.expires_at),onclick:()=>extendCustomerAccount(a)}),
     actionButton('收回账号',async()=>await confirmAction('收回账号',`收回「${a.details?.name||'此账号'}」对「${a.customer_name||'当前客户'}」的授权。原客户和设备将不能继续使用，确认成功后才可重新分配。`,'确认收回',true)?api('/api/admin/grants/'+encodeURIComponent(a.grant_id),{method:'PATCH',body:{expected_revision:a.grant_revision,status:'revoked'}}):CANCEL,{danger:true,disabled:!a.grant_id||!a.grant_revision})])}
- ],shown,'暂无账号',customerId?'这位客户尚未获得账号，请返回全部库存选择可分配账号。':'请联系平台管理员分配账号。账号进入库存后，直接选择客户即可交付。');
+ ],shown,'暂无账号',customerId?'这位客户尚未获得账号，当前也没有可分配库存。':'请联系平台管理员分配账号。账号进入库存后，直接选择客户即可交付。');
  inventory.classList.add('rental-table');
  return el('div',{class:'page-content inventory-page'},customerId?el('a',{href:'/admin/inventory',class:'btn',text:'查看全部库存'}):null,
   el('div',{class:'stats-grid'},stat('可分配',number(accounts.filter(a=>inventoryStatus(a)==='可分配').length),'选择账号后分配客户','layers'),stat('已分配',number(accounts.filter(a=>a.assigned).length),'一份账号交付给一位客户','users')),
   panel('账号库存','选账号 → 选客户 → 确认分配。每个账号最多绑定 1 台设备。',inventory));
 }
-async function assignInventoryAccount(account){
+async function assignInventoryAccount(account,customerId=null){
  try {
   let users=collection(await api('/api/admin/users?limit=200'),'users').filter(u=>u.status==='active'),pending=null,busy=false,searchVersion=0;
   const feedback=el('div',{class:'form-message'}),search=field('搜索客户','search',{placeholder:'姓名或邮箱'});
-  const picker=field('客户','user_id',{type:'select',required:true,choices:[{value:'',label:'请选择客户'},...users.map(u=>({value:u.id,label:`${u.display_name||u.email} · ${u.email}`}))]});
+  const picker=field('客户','user_id',{type:'select',required:true,value:users.some(u=>u.id===customerId)?customerId:'',choices:[{value:'',label:'请选择客户'},...users.map(u=>({value:u.id,label:`${u.display_name||u.email} · ${u.email}`}))]});
   const expires=field('客户到期时间','expires_at',{type:'datetime-local',hint:'留空沿用账号到期时间；只能缩短，不能超过上游期限。'});
   const submit=el('button',{class:'btn primary',type:'submit',text:'确认分配'});
   const reconcile=el('button',{class:'btn',type:'button',text:'核对分配结果',hidden:true});
@@ -776,7 +776,7 @@ function accountCard(account, inventory = false) {
     windows.length ? el('div',{class:'quota-list'},windows.slice(0,2).map(item => quotaRow(item, limited))) : el('p',{class:'quota-empty',text:account.quota?.status === 'error' ? '\u989d\u5ea6\u6682\u65f6\u8bfb\u4e0d\u5230\u3002' : '\u4e0a\u6e38\u8fd8\u6ca1\u6709\u8fd4\u56de\u989d\u5ea6\uff0c\u4e0d\u4ee3\u8868\u5df2\u7ecf\u7528\u5b8c\u3002'}),
     limited ? el('p',{class:'quota-empty',text:'\u989d\u5ea6\u6682\u65f6\u7528\u5b8c\uff0c\u7a97\u53e3\u91cd\u7f6e\u540e\u81ea\u52a8\u6062\u590d\u3002'}) : null,
     el('p',{class:'inline-info',text:`${account.platform||'平台未提供'} · 有效期至 ${date(account.expires_at)} · 设备上限 1 台`}),
-    inventory ? null : el('div',{class:'button-row'},['available','limited'].includes(account.state)?el('a',{class:'btn primary small',href:'/connect',text:'开始使用'}):el('span',{class:'badge',text:account.state==='expired'?'已到期，请联系管理员':'暂不可用，请联系管理员'}),account.device_name?el('a',{class:'btn small',href:'/devices?account_id='+encodeURIComponent(account.id),text:'更换设备'}):null),
+    inventory ? null : el('div',{class:'button-row'},['available','limited'].includes(account.state)?el('a',{class:'btn primary small',href:'/connect?account_id='+encodeURIComponent(account.id),text:'开始使用'}):el('span',{class:'badge',text:account.state==='expired'?'已到期，请联系管理员':'暂不可用，请联系管理员'}),account.device_name?el('a',{class:'btn small',href:'/devices?account_id='+encodeURIComponent(account.id),text:'更换设备'}):null),
     el('div',{class:'account-foot',text:account.device_name ? `${account.device_name} \u5728\u7528` : '\u6ca1\u6709\u8bbe\u5907\u5728\u7528'}));
 }
 function quotaRow(item, limited) {
@@ -807,6 +807,11 @@ async function devicesView() {
 async function connectView() {
   const query = new URLSearchParams(location.search);
   if (query.has('code')) { state.code = query.get('code').slice(0,128); history.replaceState({},'','/connect'); }
+  const accountId=query.get('account_id');let selected=null;
+  if(accountId){
+    const accounts=collection(await api('/api/me/accounts'),'accounts');selected=accounts.find(a=>a.id===accountId);
+    if(!selected||!['available','limited'].includes(selected.state)||!/^[A-Za-z0-9_.-]+$/.test(accountId))return panel('账号暂不可用','请返回我的账号重新选择。',el('a',{href:'/accounts',class:'btn',text:'返回我的账号'}));
+  }
   const preview = el('div',{}); let currentPreview = null;
   const form = el('form',{class:'form-narrow'},field('CCB 连接码','code',{required:true,maxlength:128,value:state.code,class:'code-input',autocomplete:'off',spellcheck:'false',placeholder:'输入客户端显示的连接码',hint:'先查看设备信息，再单独确认授权；不会因打开链接而自动批准。'}),el('button',{class:'btn primary',type:'submit'},icon('monitor'),'查看设备信息'));
   form.querySelector('input').addEventListener('input',() => { currentPreview = null; preview.replaceChildren(); state.code = ''; });
@@ -831,20 +836,20 @@ async function connectView() {
   const approval = panel('确认终端设备码','当前登录账户决定可使用的权益。先核对设备，再单独确认。',el('div',{class:'card-body'},form,preview,checks));
   const steps = el('ol',{class:'connection-steps'},
     el('li',{},el('h3',{text:'安装 ccb'}),el('p',{text:'需要 Node.js 18 或更新版本。Windows、macOS 和 Linux 使用同一条命令。'}),commandBlock('安装命令','npm install -g @rimuruchan/ccb'),el('p',{class:'instruction-note'},'首次启动时 ccb 会下载官方 Claude Code；电脑上已有 ',el('code',{text:'claude'}),' 时直接使用。以后用同一条命令更新。')),
-    el('li',{},el('h3',{text:'登录这台电脑'}),el('p',{text:'在需要接入的电脑上运行登录命令。浏览器会打开本页，让你确认设备。'}),commandBlock('登录命令',loginCommand()),el('p',{class:'instruction-note',text:'浏览器没有自动打开时，在本页「确认终端设备码」中输入终端显示的连接码。'})),
+    el('li',{},el('h3',{text:'登录这台电脑'}),el('p',{text:'在需要接入的电脑上运行登录命令。浏览器会打开本页，让你确认设备。'}),commandBlock('登录命令',loginCommand(selected?.id)),el('p',{class:'instruction-note',text:'浏览器没有自动打开时，在本页「确认终端设备码」中输入终端显示的连接码。'})),
     el('li',{},el('h3',{text:'选择账号，开始项目'}),el('p',{},'在项目目录运行 ccb。还没选账号时会列出账号供你选择，之后用 ',el('code',{text:'ccb account'}),' 切换。'),commandBlock('启动命令','ccb')));
   const reference = el('dl',{class:'connection-reference','aria-label':'常用命令'});
   for (const [name, command] of [['继续上次会话','ccb -c'],['切换账号','ccb account'],['检查连接','ccb status'],['设备续期','ccb login --renew'],['更新 Claude Code','ccb update']]) reference.append(el('div',{},el('dt',{text:name}),el('dd',{},el('code',{text:command}))));
   const guide = panel('安装与登录','安装客户端、登录本站、确认设备，然后在项目目录开始。',el('div',{class:'card-body'},steps,reference));
   const pairing = Boolean(state.code);
-  return el('div',{class:pairing ? 'connect-layout confirmation-first' : 'connect-layout'},...(pairing ? [approval, guide] : [guide, approval]));
+  return el('div',{class:pairing ? 'connect-layout confirmation-first' : 'connect-layout'},selected?notice('当前账号：'+selected.name,'设备确认后终端会选择此账号。不会抢占旧设备；商户站当前提供 Code。'):null,...(pairing ? [approval, guide] : [guide, approval]));
 }
 
-function loginCommand() {
+function loginCommand(accountId) {
   try {
     const address = new URL(String(state.public?.site?.public_origin || ''));
     if (!['http:','https:'].includes(address.protocol) || address.username || address.password || address.search || address.hash || address.pathname !== '/') return 'ccb login --gateway';
-    return `ccb login --gateway ${address.origin}`;
+    return `ccb login --gateway ${address.origin}${accountId?' --account '+accountId+' --surface code':''}`;
   } catch { return 'ccb login --gateway'; }
 }
 function commandBlock(label, command) {
@@ -1142,7 +1147,7 @@ function customerEditor(user) {
   const dialog = editorDialog(create ? '创建客户账户' : `编辑 ${user.display_name || user.email}`,form);
   bindForm(form,async values => {
     const payload = Object.fromEntries(values);
-    if (!await confirmAction(create ? '确认创建客户' : '确认修改客户',`将${create ? '创建' : '更新'}「${payload.display_name}」的站点账户，角色为${payload.role === 'admin' ? '管理员' : '成员'}。创建客户后，在账号库存中分配账号。`,'确认保存')) return CANCEL;
+    if ((!create && (payload.status==='disabled'&&user.status!=='disabled'||payload.role!==user.role)||create&&payload.role==='admin') && !await confirmAction('确认权限变更','此操作会停用客户或授予站点管理员权限。','确认变更',true)) return CANCEL;
     return api(create ? '/api/admin/users' : `/api/admin/users/${encodeURIComponent(user.id)}`,{method:create ? 'POST' : 'PATCH',body:payload});
   },async data => {
     if (!data.user) throw Object.assign(new Error('未收到客户变更确认。'),{uncertain:true});
@@ -1163,7 +1168,7 @@ async function customersView() {
     {label:'客户',render:u => el('div',{},el('strong',{text:u.display_name || '未命名客户'}),el('span',{class:'table-sub',text:u.email}))},
     {label:'角色 / 状态',render:u => el('div',{class:'button-row'},badge(u.role),badge(u.status))},
     {label:'创建时间',render:u => date(u.created_at)},
-    {label:'操作',render:u => el('div',{class:'table-actions'},el('button',{class:'btn small',type:'button',text:'编辑',onclick:()=>customerEditor(u)}),el('a',{class:'btn small',href:`/admin/inventory?user_id=${encodeURIComponent(u.id)}`,text:'查看账号'}))},
+    {label:'操作',render:u => el('div',{class:'table-actions'},el('button',{class:'btn small',type:'button',text:'编辑',onclick:()=>customerEditor(u)}),el('a',{class:'btn small',href:`/admin/inventory?user_id=${encodeURIComponent(u.id)}`,text:'查看与分配账号'}))},
   ],users,'暂无客户账户','创建客户后，在账号库存选择账号并分配给客户。'),el('button',{class:'btn primary',type:'button',onclick:() => customerEditor()},icon('plus'),'创建客户')));
 }
 function showSecret(data) {
@@ -1255,7 +1260,7 @@ async function settingsView() {
     el('dl',{class:'detail-list'},
       el('dt',{text:'本站公开地址'}),el('dd',{class:'mono',text:connection.public_origin || location.origin}),
       el('dt',{text:'上游地址'}),el('dd',{'data-upstream-summary':'url',class:'mono',text:connection.upstream_url || '未配置'}),
-      el('dt',{text:'商户身份'}),el('dd',{'data-upstream-summary':'name',text:connection.merchant?.name || '尚未核实'}),
+      el('dt',{text:'上游用户'}),el('dd',{'data-upstream-summary':'name',text:connection.user?.name || '尚未核实'}),
       el('dt',{text:'连接状态'}),el('dd',{'data-upstream-summary':'status'},badge(connection.available ? 'active' : 'pending'))),
     el('p',{class:'inline-info',text:'公开地址由服务端的 PUBLIC_ORIGIN 决定，上级不登记或限制域名。更换后请同步邮件和支付配置并重启。'}),
     el('h3',{text:'已声明的权限'}),
@@ -1266,7 +1271,7 @@ async function settingsView() {
     const output = el('div',{});
     const upstreamForm = el('form',{},
       field('上游服务地址','url',{required:true,type:'url',value:connection.upstream_url || '',placeholder:'https://your-provider.example',hint:'只填写协议、域名和可选端口。私网或 HTTP 地址需由部署者在 UPSTREAM_ALLOWED_ORIGINS 中明确允许。'}),
-      field('上游商户密钥','api_key',{required:true,type:'password',autocomplete:'off',spellcheck:'false',placeholder:'ccbm_…',hint:'由直接上级单独签发给本站。不会写入浏览器存储。'}),
+      field('上游接入密钥','api_key',{required:true,type:'password',autocomplete:'off',spellcheck:'false',placeholder:'ccbk_…',hint:'由直接上级单独签发给本站。不会写入浏览器存储。'}),
       field('接入操作','action',{type:'select',choices:[{value:'verify',label:'仅验证，不保存'},{value:'save',label:'验证并保存'}],value:'verify'}),
       el('button',{type:'submit',class:'btn primary',text:'执行接入检查'}));
     bindForm(upstreamForm,async values => {
@@ -1276,12 +1281,12 @@ async function settingsView() {
     },data => {
       revision = data.revision;
       const current = data.connection;
-      output.replaceChildren(notice(data.saved ? '上游连接已保存' : '连接验证通过，尚未保存',`${current.merchant.name} · 直接接入账户 · 协议 v${current.protocol_version}`,'success'),el('p',{class:'inline-info',text:`已授权权限：${current.scopes.join(' · ')}`}),el('a',{href:'/admin/inventory',class:'btn',text:'查看账号库存 →'}));
+      output.replaceChildren(notice(data.saved ? '上游连接已保存' : '连接验证通过，尚未保存',`${current.user.name} · 直接接入账户 · 协议 v${current.protocol_version}`,'success'),el('p',{class:'inline-info',text:`已授权权限：${current.scopes.join(' · ')}`}),el('a',{href:'/admin/inventory',class:'btn',text:'查看账号库存 →'}));
       if (data.saved) {
         state.public.features.term_rentals = true;
         upstreamForm.querySelector('[name=api_key]').value = '';
         upstream.querySelector('[data-upstream-summary=url]').textContent = new URL(upstreamForm.querySelector('[name=url]').value).origin;
-        upstream.querySelector('[data-upstream-summary=name]').textContent = current.merchant.name;
+        upstream.querySelector('[data-upstream-summary=name]').textContent = current.user.name;
         upstream.querySelector('[data-upstream-summary=status]').replaceChildren(badge('active'));
       }
     });
@@ -1449,7 +1454,7 @@ function accessResourceEditor(account,sources,resource) {
  },data=>{if(!data.resource?.id)throw Object.assign(new Error('资源状态未知，请刷新。'),{uncertain:true});dialog.close();render();});
 }
 function accessKeyEditor(account) {
- const allowed=['resources.read','customers.read','customers.write','grants.read','grants.write','devices.read','devices.write','usage.read','runtime'];
+ const allowed=['resources.read','customers.read','customers.write','delegation.grants.read','delegation.grants.write','delegation.devices.read','delegation.devices.write','delegation.usage.read','runtime'];
  const form=el('form',{},field('密钥名称','name',{required:true,maxlength:80,placeholder:'生产接入 / 轮换密钥'}),el('fieldset',{},el('legend',{text:'允许的接口权限'}),el('div',{class:'scope-grid'},allowed.map(scope=>el('label',{class:'check-label'},el('input',{type:'checkbox',name:'scopes',value:scope,checked:true}),scope)))),field('密钥到期时间','expires_at',{type:'datetime-local'}),notice('密钥与接入账户分离','本站独立生成密钥，撤销前可以再次查看。轮换同一账户的密钥不改变它的数据与资源，也不修改它在自己平台签发的密钥。'),el('button',{type:'submit',class:'btn primary',text:'签发接入密钥'}));
  const dialog=editorDialog('签发本站 API 密钥',form);
  bindForm(form,async v=>{

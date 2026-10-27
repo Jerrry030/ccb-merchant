@@ -68,14 +68,14 @@ export function createMerchant(config, options={}) {
   async function connection() {
     if(!config.upstreamUrl) return {configured:false,available:false};
     try {
-      const data=await core.request('GET','/merchant/v1/me');
-      const merchant=project(data.merchant,schemas.merchant);
-      if(!merchant?.id || !Array.isArray(data.scopes)) throw new Error('Invalid core metadata');
-      return {configured:true,available:merchant.status==='active',protocol_version:data.protocol_version,merchant,scopes:data.scopes.filter(scope=>scopes.includes(scope))};
+      const data=await core.request('GET','/access/v1/me');
+      const user=project(data.user,schemas.user);
+      if(!user?.id || !Array.isArray(data.scopes)) throw new Error('Invalid core metadata');
+      return {configured:true,available:user.status==='active',protocol_version:data.protocol_version,user,scopes:data.scopes.filter(scope=>scopes.includes(scope))};
     } catch(error) { return {configured:true,available:false,error:error instanceof HttpError?error.code:'invalid_core_response'}; }
   }
   async function staticFile(req,res,path) {
-    if(!['GET','HEAD'].includes(req.method) || ['/api','/bridge','/merchant','/admin/api','.'].some(prefix=>path===prefix || path.startsWith(`${prefix}/`)) || path.split('/').some(part=>part.startsWith('.'))) throw new HttpError(404,'not_found','Not found.');
+    if(!['GET','HEAD'].includes(req.method) || ['/api','/bridge','/access','/admin/api','.'].some(prefix=>path===prefix || path.startsWith(`${prefix}/`)) || path.split('/').some(part=>part.startsWith('.'))) throw new HttpError(404,'not_found','Not found.');
     const candidate=resolve(config.publicDir,`.${path}`);
     let file;
     try {
@@ -111,7 +111,7 @@ export function createMerchant(config, options={}) {
       if(!rawPath.startsWith('/') || rawPath.startsWith('//') || rawPath.includes('\\') || rawPath.includes('%') || rawPath.split('/').some(part=>part==='..' || part==='.') || rawPath.includes('//')) throw new HttpError(400,'invalid_path','Invalid request path.');
       const url=new URL(req.url,config.publicOrigin), path=url.pathname, route=`${req.method} ${path}`;
       requestBoundary(req,config,path);
-      if(path.startsWith('/merchant/v1/')) {
+      if(path.startsWith('/access/v1/')) {
         await access.protocol(req,res,url);return;
       }
       if(path.startsWith('/bridge/')) {
@@ -152,7 +152,7 @@ export function createMerchant(config, options={}) {
       if(!['GET','HEAD'].includes(req.method) && (Number(req.headers['content-length'] || 0)>0 || req.headers['transfer-encoding'])) body=await readBody(req,config.jsonBodyLimit);
       if(await auth.handle(req,res,path,body,settings().features)) return;
       const {user}=auth.require(req,path.startsWith('/api/admin/'));
-      const memberPrefix=user.core_customer_id?`/merchant/v1/customers/${opaqueId(user.core_customer_id)}`:null;
+      const memberPrefix=user.core_customer_id?`/access/v1/customers/${opaqueId(user.core_customer_id)}`:null;
       const customerReady=()=>{
         if(!memberPrefix) throw new HttpError(409,'not_provisioned','Contact the administrator to assign an account first.');
         if(user.core_pending) throw new HttpError(409,'core_sync_pending','Customer synchronization must be reconciled first.');
@@ -166,7 +166,7 @@ export function createMerchant(config, options={}) {
           if(user.core_pending) pending.push('customer_sync_pending');
           if(memberPrefix && state.available && !user.core_pending) {
             const results=await Promise.allSettled([
-              core.request('GET',`/merchant/v1/grants?customer_id=${opaqueId(user.core_customer_id)}`),
+              core.request('GET',`/access/v1/grants?customer_id=${opaqueId(user.core_customer_id)}`),
               core.request('GET',`${memberPrefix}/devices`),core.request('GET',`${memberPrefix}/usage?limit=1`),
             ]);
             if(results[0].status==='fulfilled') grants=collection(results[0].value.grants,schemas.grant).filter(g=>g.customer_id===user.core_customer_id); else pending.push('grants_unavailable');
@@ -178,7 +178,7 @@ export function createMerchant(config, options={}) {
         }
         case 'GET /api/me/grants': {
           customerReady();
-          const data=await core.request('GET',`/merchant/v1/grants?customer_id=${opaqueId(user.core_customer_id)}`);
+          const data=await core.request('GET',`/access/v1/grants?customer_id=${opaqueId(user.core_customer_id)}`);
           respond(res,200,{grants:collection(data.grants,schemas.grant).filter(g=>g.customer_id===user.core_customer_id)}); return;
         }
         case 'GET /api/me/accounts': {
@@ -218,7 +218,7 @@ export function createMerchant(config, options={}) {
         case 'GET /api/plans':
         case 'GET /api/admin/plans': {respond(res,200,{plans:await commerce.catalog(path.startsWith('/api/admin/'),user.core_customer_id,url.searchParams.get('renew_grant_id'))});return;}
         case 'GET /api/admin/inventory': {
-          const owned=await core.request('GET','/merchant/v1/accounts');
+          const owned=await core.request('GET','/access/v1/accounts');
           if(!Array.isArray(owned.accounts))throw new HttpError(503,'invalid_core_response','Upstream allocated accounts are unavailable.');
           const users=new Map(store.db.prepare('SELECT id,display_name,email,core_customer_id FROM users WHERE core_customer_id IS NOT NULL').all().map(u=>[u.core_customer_id,u]));
           const accounts=collection(owned.accounts,schemas.heldAccount).map(account=>{
@@ -361,7 +361,7 @@ export function createMerchant(config, options={}) {
           const created=store.transaction(()=>{ const added=store.createUser({email:address,display_name:name,password_hash:hash,role:body.role,status:'active'}); store.audit(user.id,'user.create',added.id); return added; });
           respond(res,201,{user:publicUser(created)}); return;
         }
-        case 'GET /api/admin/resources': { const data=await core.request('GET','/merchant/v1/resources'); respond(res,200,{resources:collection(data.resources,schemas.resource)}); return; }
+        case 'GET /api/admin/resources': { const data=await core.request('GET','/access/v1/resources'); respond(res,200,{resources:collection(data.resources,schemas.resource)}); return; }
         case 'GET /api/admin/grants': {
           const limit=Number(url.searchParams.get('limit')||100),offset=Number(url.searchParams.get('offset')||0);if(!Number.isSafeInteger(limit)||limit<1||limit>500||!Number.isSafeInteger(offset)||offset<0)throw new HttpError(400,'invalid_page','Invalid pagination.');
           let query=`?limit=${limit}&offset=${offset}`;
@@ -372,7 +372,7 @@ export function createMerchant(config, options={}) {
             if(!target.core_customer_id) {respond(res,200,{grants:[]}); return;}
             query+=`&customer_id=${opaqueId(target.core_customer_id)}`;
           }
-          const data=await core.request('GET',`/merchant/v1/grants${query}`);
+          const data=await core.request('GET',`/access/v1/grants${query}`);
           respond(res,200,{grants:collection(data.grants,schemas.grant),total:data.total,limit,offset}); return;
         }
         case 'POST /api/admin/grants': {
@@ -391,7 +391,7 @@ export function createMerchant(config, options={}) {
             let target=store.db.prepare('SELECT * FROM users WHERE id=?').get(targetId);
             if(!target||target.status!=='active'||target.core_pending)throw new HttpError(409,'customer_not_ready','Select an active customer with no pending changes.');
             if(payload.account_lease_id) {
-              const owned=await core.request('GET','/merchant/v1/accounts');auth.require(req,true);
+              const owned=await core.request('GET','/access/v1/accounts');auth.require(req,true);
               if(!Array.isArray(owned.accounts))throw new HttpError(503,'invalid_core_response','Account inventory is unavailable.');
               const account=owned.accounts.find(a=>a.id===payload.account_lease_id);
               if(!account||account.resource_id!==payload.resource_id||account.status!=='active'||!Number.isFinite(Date.parse(account.expires_at))||Date.parse(account.expires_at)<=Date.now())throw new HttpError(409,'account_unavailable','This account is no longer available. Refresh the inventory.');
@@ -407,7 +407,7 @@ export function createMerchant(config, options={}) {
             target=store.db.prepare('SELECT * FROM users WHERE id=?').get(targetId);
             if(!target?.core_customer_id||target.status!=='active'||target.core_pending)throw new HttpError(409,'customer_not_ready','Customer state changed. Refresh before delivery.');
             payload.customer_id=target.core_customer_id;
-            const data=await core.request('POST','/merchant/v1/grants',payload), grant=project(data.grant,schemas.grant);
+            const data=await core.request('POST','/access/v1/grants',payload), grant=project(data.grant,schemas.grant);
             auth.require(req,true);
             if(!grant?.id||grant.status!=='active'||grant.customer_id!==target.core_customer_id||grant.resource_id!==payload.resource_id||(payload.account_lease_id&&(grant.account_lease_id!==payload.account_lease_id||Date.parse(grant.expires_at)!==Date.parse(payload.expires_at))))throw new HttpError(503,'core_outcome_unknown','Delivery is unconfirmed. Check the account before retrying the same assignment.');
             store.audit(user.id,'grant.create',grant.id);respond(res,201,{grant});return;
@@ -465,7 +465,7 @@ export function createMerchant(config, options={}) {
         fields(body,['expected_revision','status','expires_at'],['expected_revision']);
         if(!Number.isSafeInteger(body.expected_revision) || body.expected_revision<1 || (body.status!==undefined && !['active','revoked'].includes(body.status))) throw new HttpError(400,'invalid_input','Invalid grant revision/status.');
         if(body.expires_at!==undefined) expiry(body.expires_at);
-        const data=await core.request('PATCH',`/merchant/v1/grants/${opaqueId(match[1])}`,body), grant=project(data.grant,schemas.grant);
+        const data=await core.request('PATCH',`/access/v1/grants/${opaqueId(match[1])}`,body), grant=project(data.grant,schemas.grant);
         if(grant?.id!==match[1]) throw new HttpError(503,'core_outcome_unknown','Grant update is unconfirmed. Refresh before another change.');
         store.audit(user.id,'grant.update',grant.id); respond(res,200,{grant}); return;
       }

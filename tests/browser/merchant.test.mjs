@@ -156,7 +156,7 @@ test('grant revoke carries exact revision, rejects 409, then requires fresh expl
 test('last-admin error is actionable and never locally changes the current role',async t => {
   const h = await harness(t); await login(h,'admin'); await h.page.getByRole('link',{name:'客户管理',exact:true}).click();
   await h.page.getByRole('row').filter({hasText:'admin@example.test'}).getByRole('button',{name:'编辑',exact:true}).click();
-  await h.page.getByLabel('账户角色',{exact:true}).selectOption('member'); await h.page.getByRole('button',{name:'保存客户信息',exact:true}).click(); await h.page.getByRole('dialog').filter({hasText:'确认修改客户'}).getByRole('button',{name:'确认保存',exact:true}).click();
+  await h.page.getByLabel('账户角色',{exact:true}).selectOption('member'); await h.page.getByRole('button',{name:'保存客户信息',exact:true}).click(); await h.page.getByRole('dialog').filter({hasText:'确认权限变更'}).getByRole('button',{name:'确认变更',exact:true}).click();
   await h.page.getByText('需要保留可用的管理员',{exact:true}).waitFor(); assert.equal(h.fixture.state.users[0].role,'admin'); assert.equal(await h.page.getByRole('link',{name:'站点设置',exact:true}).count(),1);
 });
 
@@ -214,8 +214,8 @@ test('partial overview failures preserve unknown counters even when core itself 
 test('customer management creates local accounts without exposing a provisioning or resource editor',async t=>{
  const h=await harness(t,{connected:true});await login(h,'admin');await h.page.getByRole('link',{name:'客户管理',exact:true}).click();
  await h.page.getByRole('button',{name:'创建客户',exact:true}).click();
- const dialog=h.page.getByRole('dialog',{name:'创建客户账户'});await dialog.getByLabel('电子邮箱',{exact:true}).fill('new@example.test');await dialog.getByLabel('初始密码',{exact:true}).fill('fixture-password-123');await dialog.getByLabel('显示名称',{exact:true}).fill('新客户');await dialog.getByRole('button',{name:'创建客户账户',exact:true}).click();await h.page.getByRole('dialog').filter({hasText:'确认创建客户'}).getByRole('button',{name:'确认保存',exact:true}).click();
- await dialog.waitFor({state:'hidden'});const row=h.page.getByRole('row').filter({hasText:'new@example.test'});await row.waitFor();assert.equal(await row.getByRole('button',{name:'开通映射',exact:true}).count(),0);await row.getByRole('link',{name:'查看账号',exact:true}).click();await h.page.getByRole('heading',{name:'账号库存',exact:true}).first().waitFor();assert.ok(!h.fixture.state.requests.some(r=>r.path.endsWith('/provision')));
+ const dialog=h.page.getByRole('dialog',{name:'创建客户账户'});await dialog.getByLabel('电子邮箱',{exact:true}).fill('new@example.test');await dialog.getByLabel('初始密码',{exact:true}).fill('fixture-password-123');await dialog.getByLabel('显示名称',{exact:true}).fill('新客户');await dialog.getByRole('button',{name:'创建客户账户',exact:true}).click();
+ await dialog.waitFor({state:'hidden'});const row=h.page.getByRole('row').filter({hasText:'new@example.test'});await row.waitFor();assert.equal(await row.getByRole('button',{name:'开通映射',exact:true}).count(),0);await row.getByRole('link',{name:'查看与分配账号',exact:true}).click();await h.page.getByRole('heading',{name:'账号库存',exact:true}).first().waitFor();assert.ok(!h.fixture.state.requests.some(r=>r.path.endsWith('/provision')));
 });
 
 test('settings save only public fields; profile password update returns to authentication',async t => {

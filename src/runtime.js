@@ -53,7 +53,7 @@ export async function proxyRuntime(req, res, integration, store, url, access) {
   req.once('aborted',abort); res.once('close',onClose);
   const timer = setTimeout(abort, config.runtimeTimeoutMs); timer.unref();
   try {
-    const headers = { 'x-ccb-merchant-key':config.upstreamKey, 'accept-encoding':'identity' };
+    const headers = { 'x-ccb-access-key':config.upstreamKey, 'accept-encoding':'identity' };
     for (const key of runtimeHeaders) if (typeof req.headers[key] === 'string') headers[key] = req.headers[key];
     // Wire order may contain credential/header names; only advertise headers actually forwarded.
     if (req.headers['x-ccb-wire-order']) headers['x-ccb-wire-order'] = req.headers['x-ccb-wire-order'].split(',').map(s=>s.trim()).filter(s=>runtimeHeaders.includes(s.toLowerCase())).join(',');

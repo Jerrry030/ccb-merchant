@@ -23,12 +23,12 @@ export async function fixture(t,options={}) {
     state.requests.push({method:req.method,path:req.url,headers:req.headers,body,raw});
     const json=(value,status=200)=>{res.writeHead(status,{'Content-Type':'application/json'});res.end(JSON.stringify(value));};
     if(await options.onCore?.({req,res,url,body,state,json})) return;
-    if(url.pathname.startsWith('/merchant/') && req.headers.authorization!==`Bearer ${upstreamKey}`) {json({error:{message:'bad secret'}},401);return;}
+    if(url.pathname.startsWith('/access/') && req.headers.authorization!==`Bearer ${upstreamKey}`) {json({error:{message:'bad secret'}},401);return;}
     const path=url.pathname;
-    if(path==='/merchant/v1/me') {json({protocol_version:4,authority_id:'fixture-authority',merchant:{id:'merchant-1',name:'Test merchant',slug:'test',status:'active',api_key:'LEAK'},scopes:['resources.read','customers.read','customers.write','devices.read','devices.write','usage.read','runtime','keys.manage','grants.read','grants.write'],credentials:'LEAK'});return;}
-    if(path==='/merchant/v1/resources') {json({resources:[{id:'resource-1',name:'Code resource',status:'active',kind:'subscription',surfaces:['code'],expires_at:null,revision:1,available:true,plans:[],stock:[{platform:'MacOS/arm64',label:'macOS',available:5}],delegated:0,account_id:'LEAK',email:'LEAK',proxy_password:'LEAK'}]});return;}
-    if(path==='/merchant/v1/accounts'){json({accounts:state.inventory});return;}
-    if(path==='/merchant/v1/customers') {
+    if(path==='/access/v1/me') {json({protocol_version:5,authority_id:'fixture-authority',user:{id:'merchant-1',name:'Test merchant',slug:'test',status:'active',api_key:'LEAK'},scopes:['resources.read','customers.read','customers.write','delegation.devices.read','delegation.devices.write','delegation.usage.read','runtime','delegation.keys.manage','delegation.grants.read','delegation.grants.write'],credentials:'LEAK'});return;}
+    if(path==='/access/v1/resources') {json({resources:[{id:'resource-1',name:'Code resource',status:'active',kind:'subscription',surfaces:['code'],expires_at:null,revision:1,available:true,plans:[],stock:[{platform:'MacOS/arm64',label:'macOS',available:5}],delegated:0,account_id:'LEAK',email:'LEAK',proxy_password:'LEAK'}]});return;}
+    if(path==='/access/v1/accounts'){json({accounts:state.inventory});return;}
+    if(path==='/access/v1/customers') {
       if(req.method==='GET') {json({customers:state.customers.filter(c=>!url.searchParams.has('external_id')||c.external_id===url.searchParams.get('external_id'))});return;}
       let customer=state.customers.find(c=>c.external_id===body.external_id);
       if(customer && customer.display_name!==body.display_name) {json({error:{code:'conflict'}},409);return;}
@@ -36,13 +36,13 @@ export async function fixture(t,options={}) {
       json({customer},201);return;
     }
     let match;
-    if(req.method==='PATCH' && (match=path.match(/^\/merchant\/v1\/customers\/([^/]+)$/))) {
+    if(req.method==='PATCH' && (match=path.match(/^\/access\/v1\/customers\/([^/]+)$/))) {
       const customer=state.customers.find(c=>c.id===match[1]);
       if(!customer) {json({error:{}},404);return;}
       if(customer.revision!==body.expected_revision) {json({error:{}},409);return;}
       Object.assign(customer,{status:body.status??customer.status,display_name:body.display_name??customer.display_name,revision:customer.revision+1});json({customer});return;
     }
-    if(req.method==='PUT' && path.startsWith('/merchant/v1/fulfillments/')) {
+    if(req.method==='PUT' && path.startsWith('/access/v1/fulfillments/')) {
       const id=path.split('/').at(-1),prior=state.fulfillments.get(id);
       if(prior) {if(prior.customer_id!==body.customer_id||prior.resource_id!==body.resource_id||prior.duration_days!==body.duration_days||prior.platform!==(body.platform||'')||prior.account_lease_id!==(body.account_lease_id||'')||prior.renew_grant_id!==(body.renew_grant_id||'')){json({error:{}},409);return;}json({fulfillment:prior});return;}
       const receipt={order_id:id,customer_id:body.customer_id,resource_id:body.resource_id,duration_days:body.duration_days,platform:body.platform||'',account_lease_id:body.account_lease_id||'',renew_grant_id:body.renew_grant_id||'',status:'cancelled',expires_at:null,created_at:new Date().toISOString()};
@@ -61,8 +61,8 @@ export async function fixture(t,options={}) {
       if(await options.afterFulfillment?.({req,res,body,state,receipt,json}))return;
       json({fulfillment:receipt});return;
     }
-    if(req.method==='GET' && (match=path.match(/^\/merchant\/v1\/customers\/([^/]+)\/accounts$/))) {json({accounts:state.accounts.filter(a=>a.customer_id===match[1]),secret:'LEAK'});return;}
-    if(path==='/merchant/v1/grants') {
+    if(req.method==='GET' && (match=path.match(/^\/access\/v1\/customers\/([^/]+)\/accounts$/))) {json({accounts:state.accounts.filter(a=>a.customer_id===match[1]),secret:'LEAK'});return;}
+    if(path==='/access/v1/grants') {
       if(req.method==='GET') {json({grants:state.grants.filter(g=>!url.searchParams.has('customer_id')||g.customer_id===url.searchParams.get('customer_id'))});return;}
       const owned=body.account_lease_id?state.inventory.find(a=>a.id===body.account_lease_id):null;
       if(body.account_lease_id) {
@@ -80,7 +80,7 @@ export async function fixture(t,options={}) {
       if(await options.afterGrant?.({req,res,body,state,grant,json}))return;
       json({grant},201);return;
     }
-    if(req.method==='PATCH' && (match=path.match(/^\/merchant\/v1\/grants\/([^/]+)$/))) {
+    if(req.method==='PATCH' && (match=path.match(/^\/access\/v1\/grants\/([^/]+)$/))) {
       const grant=state.grants.find(g=>g.id===match[1]);
       if(!grant) {json({error:{}},404);return;}
       if(grant.revision!==body.expected_revision) {json({error:{message:'SQL TOKEN LEAK'}},409);return;}
@@ -95,12 +95,12 @@ export async function fixture(t,options={}) {
     if(path.endsWith('/devices/approve') || (req.method==='DELETE' && path.includes('/devices/'))) {json({ok:true,secret:'LEAK'});return;}
     if(path.endsWith('/devices')) {json({devices:[{id:'device-1',name:'Laptop',platform:'windows',state:'approved',created_at:now,expires_at:now,token:'LEAK'}]});return;}
     if(path.endsWith('/usage')) {json({usage:{requests:1,errors:0,input_tokens:30,output_tokens:5,cache_read_input_tokens:0,cache_creation_input_tokens:0,cost_usd:4.2,unknown_usage:0,average_duration_ms:20,average_first_token_ms:3,body:'LEAK'},requests:[{id:123,time:now,model:'test-model',status:200,duration_ms:20,first_token_ms:3,count_only:false,stream:true,usage:{input_tokens:30,output_tokens:5,cache_creation_5m:7,cache_creation_1h:11,prompt:'LEAK'},usage_complete:true,cost_usd:4.2,grant_id:'grant-1',session_id:'session-1',raw_request:'LEAK',headers:{Authorization:'LEAK'}}],total:1});return;}
-    if(path==='/merchant/v1/keys') {
+    if(path==='/access/v1/keys') {
       if(req.method==='GET') {json({keys:state.keys});return;}
       const key={id:`key-${randomUUID()}`,name:body.name,scopes:body.scopes,expires_at:body.expires_at??null,created_at:now,revoked_at:null,prefix:'ccbm_test',token:'LEAK'};
       state.keys.push(key);json({key,token:'ccbm_once_only_test_token_value_123'});return;
     }
-    if(req.method==='DELETE' && path.startsWith('/merchant/v1/keys/')) {json({ok:true});return;}
+    if(req.method==='DELETE' && path.startsWith('/access/v1/keys/')) {json({ok:true});return;}
     if(path==='/bridge/v1/device/status' || path==='/bridge/v1/bindings') {
       json({id:'device-1',binding:'binding-1',device_id:'device-1',owner_user_id:'PRIVATE_CORE_USER',owner_username:'LEAK',state:'approved',selection_version:1,os:'windows',arch:'x64',expires_at:now,traffic:{version:1,timezone:'UTC',domains:['anthropic.com'],secret:'LEAK'},token:'LEAK'});return;
     }

@@ -9,7 +9,7 @@ export function publicPlan(row,admin=false) {
 export class Commerce {
  constructor(store,core,customers) {this.store=store;this.core=core;this.customers=customers;this.running=new Set();}
  async importPlans() {
-  const data=await this.core.request('GET','/merchant/v1/resources');
+  const data=await this.core.request('GET','/access/v1/resources');
   const resources=Array.isArray(data.resources)?data.resources:[];
   const now=new Date().toISOString();
   this.store.transaction(()=>{
@@ -35,7 +35,7 @@ export class Commerce {
   if(id && (body.expected_revision!==prior.revision || (body.resource_id!==undefined && body.resource_id!==prior.resource_id))) throw new HttpError(409,'plan_conflict','Refresh the plan; its resource cannot be changed.');
   const resourceId=prior?.resource_id || text(body.resource_id,'resource_id',150);
   if(body.status==='active') {
-   const data=await this.core.request('GET','/merchant/v1/resources');
+   const data=await this.core.request('GET','/access/v1/resources');
    const r=data.resources?.find(r=>r.id===resourceId);
    if(!r || r.kind!=='subscription' || r.status!=='active' || !r.surfaces?.includes('code')) throw new HttpError(409,'supply_unavailable','Supply cannot cover this term.');
   }
@@ -50,10 +50,10 @@ export class Commerce {
  }
  async catalog(admin,customerID,renewGrantID) {
   await this.importPlans();
-  const data=await this.core.request('GET','/merchant/v1/accounts');
+  const data=await this.core.request('GET','/access/v1/accounts');
   if(!Array.isArray(data.accounts))throw new HttpError(503,'invalid_core_response','Allocated-account inventory is unavailable.');
   let renewal;
-  if(renewGrantID){if(!customerID)throw new HttpError(409,'customer_not_ready','No customer account to renew.');const list=await this.core.request('GET',`/merchant/v1/grants?customer_id=${opaqueId(customerID)}`);renewal=list.grants?.find(g=>g.id===renewGrantID&&g.customer_id===customerID&&g.status==='active'&&Number.isFinite(Date.parse(g.expires_at)));if(!renewal)throw new HttpError(404,'grant_not_found','Renewal account not found.');}
+  if(renewGrantID){if(!customerID)throw new HttpError(409,'customer_not_ready','No customer account to renew.');const list=await this.core.request('GET',`/access/v1/grants?customer_id=${opaqueId(customerID)}`);renewal=list.grants?.find(g=>g.id===renewGrantID&&g.customer_id===customerID&&g.status==='active'&&Number.isFinite(Date.parse(g.expires_at)));if(!renewal)throw new HttpError(404,'grant_not_found','Renewal account not found.');}
   const held=new Set(this.store.db.prepare("SELECT account_lease_id FROM rentals WHERE status IN ('awaiting_payment','queued','review','refund_pending')").all().map(v=>v.account_lease_id));
   let plans=this.store.db.prepare(admin?'SELECT * FROM plans ORDER BY created_at DESC':"SELECT * FROM plans WHERE status='active' ORDER BY created_at DESC").all();
   if(renewal)plans=plans.filter(p=>p.resource_id===renewal.resource_id);
@@ -83,7 +83,7 @@ export class Commerce {
    let user=this.store.db.prepare('SELECT * FROM users WHERE id=?').get(userId);
    if(user.status!=='active'||user.core_pending) throw new HttpError(409,'customer_not_ready','Customer synchronization must finish first.');
    if(!user.core_customer_id) {await this.customers.synchronize(userId,authorize);user=this.store.db.prepare('SELECT * FROM users WHERE id=?').get(userId);}
-   const [supply,owned,existing]=await Promise.all([this.core.request('GET','/merchant/v1/resources'),this.core.request('GET','/merchant/v1/accounts'),this.core.request('GET',`/merchant/v1/grants?customer_id=${opaqueId(user.core_customer_id)}&resource_id=${opaqueId(plan.resource_id)}`)]);
+   const [supply,owned,existing]=await Promise.all([this.core.request('GET','/access/v1/resources'),this.core.request('GET','/access/v1/accounts'),this.core.request('GET',`/access/v1/grants?customer_id=${opaqueId(user.core_customer_id)}&resource_id=${opaqueId(plan.resource_id)}`)]);
    authorize();
    if(!Array.isArray(supply.resources)||!Array.isArray(owned.accounts)||!Array.isArray(existing.grants))throw new HttpError(503,'invalid_core_response','Core returned invalid inventory metadata.');
    const r=supply.resources.find(r=>r.id===plan.resource_id);
@@ -117,7 +117,7 @@ export class Commerce {
   try {
    const user=db.prepare('SELECT * FROM users WHERE id=?').get(row.user_id);
    if(action==='fulfill' && (user.status!=='active'||user.core_pending||user.core_customer_id!==row.customer_id)) throw new HttpError(409,'customer_not_ready','Customer is disabled or synchronization is pending.');
-   const data=await this.core.request('PUT',`/merchant/v1/fulfillments/${opaqueId(row.id)}`,{customer_id:row.customer_id,resource_id:row.resource_id,duration_days:row.duration_days,platform:row.platform,account_lease_id:row.account_lease_id,renew_grant_id:row.renew_grant_id,action});
+   const data=await this.core.request('PUT',`/access/v1/fulfillments/${opaqueId(row.id)}`,{customer_id:row.customer_id,resource_id:row.resource_id,duration_days:row.duration_days,platform:row.platform,account_lease_id:row.account_lease_id,renew_grant_id:row.renew_grant_id,action});
    const f=data.fulfillment;
    if(!f||f.order_id!==row.id||f.customer_id!==row.customer_id||f.resource_id!==row.resource_id||f.duration_days!==row.duration_days||f.platform!==row.platform||(f.account_lease_id||'')!==(row.account_lease_id||'')||(f.renew_grant_id||'')!==(row.renew_grant_id||'')||!['fulfilled','cancelled'].includes(f.status)||(f.status==='fulfilled'&&(!f.grant_id||!Number.isFinite(Date.parse(f.expires_at))))) throw new HttpError(503,'fulfillment_unconfirmed','Core fulfillment receipt is invalid.');
    this.store.transaction(()=>{
