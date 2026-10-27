@@ -1,5 +1,7 @@
+import { paymentCheckout } from './payment-checkout.js';
 import { normalizeRegistrationEmailSuffixDomain, isRegistrationEmailSuffixDomainValid, parseRegistrationEmailSuffixWhitelistInput } from './registration-policy.js';
-import { describePaymentCatalog, emptyPaymentCatalog } from './payment-catalog.js';
+import { mailSettingsView } from './mail-settings.js';
+import { paymentSettingsView } from './payment-settings.js';
 import { usageDetail } from './usage-detail.js';
 /* Standalone merchant client. Only /api on this origin; no stored credentials or demo data. */
 const app = document.getElementById('app');
@@ -135,7 +137,7 @@ async function api(path, {method = 'GET', body} = {}) {
     catch { throw Object.assign(new Error(write ? '服务器未返回可确认的结果。' : '服务器响应格式异常。'),{uncertain:write,status:response.status}); }
     if (!response.ok) {
       const code = data.error?.code;
-      const messages = {upstream_target_blocked:'此上游目标被服务器网络策略拒绝。私网或 HTTP 地址需由部署者设置 UPSTREAM_ALLOWED_ORIGINS。',upstream_identity_mismatch:'已有业务数据绑定了另一个上游身份，不能在这里直接切换。',upstream_protocol_mismatch:'上游协议不兼容或接入账户已失效。',upstream_verification_failed:'上游未能验证本站凭据，请检查地址、密钥及上级状态。',upstream_changed:'接入配置已变化，请刷新后重新核对。',upstream_environment_managed:'本站上游由服务端环境配置管理，网页不能覆盖。',insufficient_balance:'钱包余额不足，请先充值或选择在线支付。',plan_changed:'套餐价格或状态已更新，请刷新并重新确认。',plan_conflict:'套餐版本已变化，请刷新后再编辑。',supply_unavailable:'供给不可用或期限不足，暂时无法购买此套餐。',purchase_pending:'此资源已有待完成订单，请先在我的订单中核对。',purchase_conflict:'该请求编号已用于另一笔购买，请核对已有订单。',customer_not_ready:'客户正在停用或同步中，暂时不能开通使用权。',order_state:'订单状态已变化，请刷新核对；已交付订单不能在这里自动退款。',payment_amount_unavailable:'此价格超出当前在线支付范围，请使用余额或联系商户。',payment_outcome_unknown:'支付结果尚未确认，请查看已有订单，勿重复付款。',invalid_credentials:'邮箱或密码不正确，或此账户暂不可用。',invalid_csrf:'会话安全令牌已失效，请重新验证会话。',core_not_configured:'上游连接尚未配置，请联系管理员。',core_unavailable:'上游服务暂不可用，请稍后重试。',core_unavailable:'上游服务暂不可用，请稍后重试。',payment_disabled:'支付服务尚未配置，当前无法创建订单。',mail_disabled:'邮件服务尚未配置，当前无法验证邮箱或重置密码。',registration_disabled:'站点当前未开放自助注册。',email_suffix_not_allowed:'该邮箱域名不在允许注册范围内。',email_domain_registration_limit:'该邮箱域名不能再注册新账户。',integration_environment_managed:'这项服务由服务器环境配置管理，不能在页面里覆盖。',mail_unavailable:'邮件服务器拒绝了连接或认证。请核对主机、端口和凭据。',payment_pending:'仍有未完成的支付订单，暂不能更换支付凭据。',invalid_password:'密码不符合要求，或当前密码不正确。',not_provisioned:'尚未分配账号，请联系管理员。',core_sync_pending:'客户信息尚未与上游同步完成，请联系管理员核对。',invalid_code:'连接码无效或已过期，请在客户端重新发起连接。',not_copyable:'这把密钥创建时未保留原文，请撤销后重新签发。',admin_required:'此操作需要商户管理员权限。',account_changed:'账号状态已变化，请刷新后重新核对。',account_unavailable:'账号暂不可用，请刷新库存或联系平台管理员。',account_assigned:'该账号已分配，请先收回原客户授权。',invalid_expiry:'客户到期时间不能超过账号到期时间。',customer_not_ready:'请选择状态正常、没有待确认变更的客户。',user_busy:'客户变更正在处理中，请稍后核对。',rate_limited:'请求过于频繁，请稍后再试。'};
+      const messages = {upstream_target_blocked:'此上游目标被服务器网络策略拒绝。私网或 HTTP 地址需由部署者设置 UPSTREAM_ALLOWED_ORIGINS。',upstream_identity_mismatch:'已有业务数据绑定了另一个上游身份，不能在这里直接切换。',upstream_protocol_mismatch:'上游协议不兼容或接入账户已失效。',upstream_verification_failed:'上游未能验证本站凭据，请检查地址、密钥及上级状态。',upstream_changed:'接入配置已变化，请刷新后重新核对。',upstream_environment_managed:'本站上游由服务端环境配置管理，网页不能覆盖。',insufficient_balance:'钱包余额不足，请先充值或选择在线支付。',plan_changed:'套餐价格或状态已更新，请刷新并重新确认。',plan_conflict:'套餐版本已变化，请刷新后再编辑。',supply_unavailable:'供给不可用或期限不足，暂时无法购买此套餐。',purchase_pending:'此资源已有待完成订单，请先在我的订单中核对。',purchase_conflict:'该请求编号已用于另一笔购买，请核对已有订单。',customer_not_ready:'请选择状态正常、没有待确认变更的客户。',order_state:'订单状态已变化，请刷新核对；已交付订单不能在这里自动退款。',payment_amount_unavailable:'此价格超出当前在线支付范围，请使用余额或联系商户。',payment_outcome_unknown:'支付结果尚未确认，请查看已有订单，勿重复付款。',invalid_credentials:'邮箱或密码不正确，或此账户暂不可用。',invalid_csrf:'会话安全令牌已失效，请重新验证会话。',core_not_configured:'上游连接尚未配置，请联系管理员。',core_unavailable:'上游服务暂不可用，请稍后重试。',core_unavailable:'上游服务暂不可用，请稍后重试。',payment_disabled:'支付服务尚未配置或已停用，当前无法创建订单。',invalid_payment_method:'请选择当前可用的支付方式。',invalid_provider_config:'渠道参数或密钥格式无效，请检查必填字段、RSA 密钥和结算币种。',mail_disabled:'邮件服务尚未配置，当前无法验证邮箱或重置密码。',registration_disabled:'站点当前未开放自助注册。',email_suffix_not_allowed:'该邮箱域名不在允许注册范围内。',email_domain_registration_limit:'该邮箱域名不能再注册新账户。',integration_environment_managed:'这项服务由服务器环境配置管理，不能在页面里覆盖。',mail_unavailable:'邮件服务器拒绝了连接或认证。请核对主机、端口和凭据。',payment_pending:'仍有未完成的支付订单，暂不能更换支付凭据。',payment_pending_limit:'待支付订单数量已达上限，请先完成或核对已有订单。',payment_daily_limit:'今日支付额度已达上限，未确认订单也占用额度。',settings_changed:'配置已被其他操作更新，请刷新后重新确认。',mail_password_required:'修改 SMTP 主机、端口、用户名或 TLS 模式后，请重新输入密码。',mail_auth_failed:'SMTP 认证失败，请检查用户名、密码或邮箱授权码。',mail_timeout:'SMTP 连接超时，请检查主机、端口和服务器网络。',mail_tls_failed:'SMTP 加密连接失败，请检查 TLS 模式和证书。',mail_recipient_rejected:'SMTP 拒绝了测试收件人，请检查地址和中继权限。',payment_verification_unavailable:'支付服务无法验证，请检查密钥、环境和网络。',invalid_password:'密码不符合要求，或当前密码不正确。',not_provisioned:'尚未分配账号，请联系管理员。',core_sync_pending:'客户信息尚未与上游同步完成，请联系管理员核对。',invalid_code:'连接码无效或已过期，请在客户端重新发起连接。',not_copyable:'这把密钥创建时未保留原文，请撤销后重新签发。',admin_required:'此操作需要商户管理员权限。',account_changed:'账号状态已变化，请刷新后重新核对。',account_unavailable:'账号暂不可用，请刷新库存或联系平台管理员。',account_assigned:'该账号已分配，请先收回原客户授权。',invalid_expiry:'客户到期时间不能超过账号到期时间。',customer_not_ready:'请选择状态正常、没有待确认变更的客户。',user_busy:'客户变更正在处理中，请稍后核对。',rate_limited:'请求过于频繁，请稍后再试。'};
       const rejected = ['core_not_configured','payment_disabled','mail_disabled','registration_disabled'].includes(code);
       throw Object.assign(new Error(messages[code] || (typeof data.error?.message === 'string' ? data.error.message : '请求未完成，请稍后再试。')),
         {status:response.status,code,uncertain:write && !rejected && (response.status >= 500 || /unknown|uncertain|timeout/i.test(code || ''))});
@@ -1051,18 +1053,32 @@ async function usageView() {
     ],requests,'此区间暂无请求','换一个时间范围，或在获得权益并连接设备后开始使用。'),pager)));
 }
 function orderTable(orders, showCustomer = false) {
-  return table([...(showCustomer ? [{label:'客户标识',render:o => el('span',{class:'mono',text:o.user_id || '未提供'})}] : []),{label:'订单编号',render:o => el('span',{class:'mono',text:o.id})},{label:'用途',render:o=>o.rental_id?'套餐支付':'余额充值'},{label:'金额',render:o => money(o.amount_minor,o.currency)},{label:'支付状态',render:o => badge(o.status)},{label:'创建时间',render:o => date(o.created_at)},{label:'操作',render:o=>['creating','pending','unknown'].includes(o.status)?actionButton('核对支付',()=>api(`/api/${showCustomer?'admin':'me'}/payments/${encodeURIComponent(o.id)}/reconcile`,{method:'POST',body:{}})):'—'}],orders,'暂无支付订单','只有服务器创建的真实支付订单才会出现在这里。');
+  return table([...(showCustomer ? [{label:'客户标识',render:o => el('span',{class:'mono',text:o.user_id || '未提供'})}] : []),{label:'订单编号',render:o => el('span',{class:'mono',text:o.id})},{label:'支付方式',render:o=>({stripe:'Stripe',alipay:'支付宝',wxpay:'微信支付',airwallex:'Airwallex'}[o.payment_method]||'Stripe')},{label:'用途',render:o=>o.rental_id?'套餐支付':'余额充值'},{label:'金额',render:o => money(o.amount_minor,o.currency)},{label:'支付状态',render:o => badge(o.status)},{label:'创建时间',render:o => date(o.created_at)},{label:'操作',render:o=>['creating','pending','unknown'].includes(o.status)?el('div',{class:'button-row'},actionButton('核对支付',()=>api(`/api/${showCustomer?'admin':'me'}/payments/${encodeURIComponent(o.id)}/reconcile`,{method:'POST',body:{}})),showCustomer?null:el('a',{class:'btn small',href:'/wallet?order='+encodeURIComponent(o.id),text:'继续支付'})):'—'}],orders,'暂无支付订单','只有服务器创建的真实支付订单才会出现在这里。');
 }
 async function walletView() {
   const [data, catalog] = await Promise.all([api('/api/me/wallet'), api('/api/plans'+(new URLSearchParams(location.search).get('renew_grant_id')?'?renew_grant_id='+encodeURIComponent(new URLSearchParams(location.search).get('renew_grant_id')):'')).catch(error=>({plans:[],catalogError:error.message}))]);
-  const ledger = collection(data,'ledger');
-  const orders = collection(data,'orders');
   const plans = collection(catalog,'plans');
-  const enabled = state.public.features.payment === true;
+  const enabled = state.public.features.payment === true && state.public.features.recharge !== false;
   const result = el('div',{});
+  const balanceValue=el('div',{class:'amount',text:money(data.wallet?.balance_minor,data.wallet?.currency)});
+  const history=el('div',{class:'wallet-history'});
+  function paintWallet(snapshot) {
+    balanceValue.textContent=money(snapshot.wallet?.balance_minor,snapshot.wallet?.currency);
+    history.replaceChildren(
+      panel('最近支付订单','以服务端确认状态为准',orderTable(collection(snapshot,'orders'))),
+      panel('资金记录','所有金额使用人民币最小单位换算显示',table([
+        {label:'记录时间',render:r=>date(r.created_at)},
+        {label:'类型',render:r=>({stripe_credit:'Stripe 支付入账',payment_credit:'在线支付入账',rental_debit:'套餐购买扣款',rental_refund:'未交付退回余额'}[r.kind]||r.kind||'未提供')},
+        {label:'变动金额',render:r=>money(r.amount_minor,r.currency||snapshot.wallet?.currency)},
+        {label:'关联订单',render:r=>el('span',{class:'mono',text:r.rental_id||r.order_id||'—'})},
+      ],collection(snapshot,'ledger'),'暂无资金记录','没有发生过服务器确认的资金变动。')));
+  }
+  async function refreshWallet(){try{paintWallet(await api('/api/me/wallet'));}catch{balanceValue.textContent='—';}}
+
   const presets = ['50','100','200','500'];
   const form = el('form',{class:'recharge-form'},
-    field('充值金额（人民币元）','amount',{required:true,type:'number',min:'0.01',step:'0.01',inputmode:'decimal',placeholder:'0.00',disabled:!enabled,hint:'实际支付金额以 Stripe 收银台及服务器订单为准。'}),
+    field('支付方式','payment_method',{type:'select',required:true,disabled:!enabled,choices:(state.public.payment?.methods||[]).map(method=>({value:method.id,label:method.title}))}),
+    field('充值金额（人民币元）','amount',{required:true,type:'number',min:String((state.public.payment?.min_amount_minor || 1)/100),max:state.public.payment?.max_amount_minor?String(state.public.payment.max_amount_minor/100):undefined,step:'0.01',inputmode:'decimal',placeholder:'0.00',disabled:!enabled,hint:'实际支付金额以支付平台和服务器订单为准。'}),
     el('div',{class:'amount-choices'}, presets.map(amount => el('button',{type:'button',class:'amount-choice','data-amount':amount,disabled:!enabled,text:`¥${amount}`,onclick() {
       const input = form.querySelector('input[name=amount]');
       if (!input || input.disabled) return;
@@ -1070,41 +1086,33 @@ async function walletView() {
       input.dispatchEvent(new Event('input',{bubbles:true}));
       input.focus();
     }}))),
-    el('button',{class:'btn primary',type:'submit',disabled:!enabled},icon('wallet'),enabled ? '创建 Stripe 支付订单' : '在线支付未启用'));
+    el('button',{class:'btn primary',type:'submit',disabled:!enabled},icon('wallet'),enabled ? '创建支付订单' : '在线支付未启用'));
   form.querySelector('input[name=amount]')?.addEventListener('input', event => {
     for (const chip of form.querySelectorAll('.amount-choice')) chip.classList.toggle('on', chip.dataset.amount === event.currentTarget.value);
   });
   bindForm(form,async values => {
-    if (state.public.features.payment !== true) throw new Error('当前未启用在线支付。');
+    if (!enabled) throw new Error('当前未启用余额充值。');
     const amount = values.get('amount').trim(); if (!/^\d+(\.\d{1,2})?$/.test(amount)) throw new Error('请输入最多两位小数的有效金额。');
     const [whole,fraction = ''] = amount.split('.'); const minor = Number(whole)*100 + Number(fraction.padEnd(2,'0'));
     if (!Number.isSafeInteger(minor) || minor < 1) throw new Error('金额超出可处理范围。');
-    if (!await confirmAction('创建真实支付订单',`确认创建 ${money(minor)} 的 Stripe 支付订单？接下来会提供支付链接，不会在此页面自动扣款。`,'创建订单')) return CANCEL;
-    return api('/api/me/payments',{method:'POST',body:{amount_minor:minor}});
-  },(payment,message) => {
+    if (!await confirmAction('创建真实支付订单',`确认创建 ${money(minor)} 的支付订单？接下来会提供二维码或收银台，不会在此页面自动扣款。`,'创建订单')) return CANCEL;
+    return api('/api/me/payments',{method:'POST',body:{amount_minor:minor,payment_method:values.get('payment_method')}});
+  },async (payment,message) => {
     if (!payment.order?.id) throw Object.assign(new Error('订单创建结果不完整，请先刷新核对。'),{uncertain:true});
-    let url; try { url = new URL(payment.checkout_url); } catch { /* Invalid URLs stay inert. */ }
-    if (!url || !['http:','https:'].includes(url.protocol) || url.origin !== 'https://checkout.stripe.com' || url.username || url.password || /[\u0000-\u0020\u007f]/.test(payment.checkout_url) || typeof payment.checkout_url !== 'string') {
-      message.replaceChildren(notice('订单已记录，但支付链接不可安全使用',`订单 ${payment.order.id}。请联系管理员核对链接，不要重复创建订单。`,'warn')); return;
-    }
-    result.replaceChildren(notice('支付订单已创建，尚不代表已付款',`订单 ${payment.order.id} · ${money(payment.order.amount_minor,payment.order.currency)}。仅以服务器确认的状态为准。`),el('p',{class:'inline-info',text:`将前往外部收银台：${url.origin}`}),
-      el('div',{class:'button-row'},el('a',{class:'btn primary checkout-link',href:url.href,target:'_blank',rel:'noopener noreferrer',referrerpolicy:'no-referrer',text:'打开 Stripe 收银台 ↗'}),el('button',{class:'btn',type:'button',text:'查询订单状态',onclick:() => navigate(`/wallet?order=${encodeURIComponent(payment.order.id)}`)})));
+    result.replaceChildren(paymentCheckout(payment,{el,notice,errorNotice,api,onSettled:refreshWallet}));
+    await refreshWallet();
   });
   const root = el('div',{class:'page-content wallet-page'},
     el('div',{class:'wallet-top'},
-      panel('账户余额','以服务器账本为准',el('div',{class:'card-body'},el('div',{class:'balance-card'},el('p',{text:'可用余额 · CNY'}),el('div',{class:'amount',text:money(data.wallet?.balance_minor,data.wallet?.currency)}),el('p',{text:'余额不等于账号。购买并交付后，请在「我的账号」查看。'})))),
-      panel('在线充值','通过已配置的 Stripe Checkout 完成支付',el('div',{class:'card-body'},!enabled ? notice('支付服务尚未配置','暂时无法发起在线支付。请联系管理员；不会创建虚拟订单或显示模拟到账。','warn') : null,form,result))));
+      panel('账户余额','以服务器账本为准',el('div',{class:'card-body'},el('div',{class:'balance-card'},el('p',{text:'可用余额 · CNY'}),balanceValue,el('p',{text:'余额不等于账号。购买并交付后，请在「我的账号」查看。'})))),
+      panel('在线充值','选择已配置的支付方式，扫码或前往收银台',el('div',{class:'card-body'},!enabled ? notice('支付服务尚未配置','暂时无法发起在线支付。请联系管理员；不会创建虚拟订单或显示模拟到账。','warn') : null,state.public.payment?.help_text?notice('支付帮助',state.public.payment.help_text):null,form,result))));
   const orderId = new URLSearchParams(location.search).get('order');
   if (orderId) {
-    try { const payment = await api(`/api/me/payments/${encodeURIComponent(orderId)}`); if (!payment.order) throw new Error('订单信息缺失。'); root.prepend(panel('返回后的订单核对','回跳网址中的成功参数不会改变余额或订单状态',orderTable([payment.order]))); }
+    try { const payment = await api(`/api/me/payments/${encodeURIComponent(orderId)}`); if (!payment.order) throw new Error('订单信息缺失。'); root.prepend(panel('返回后的订单核对','回跳网址中的成功参数不会改变余额或订单状态',el('div',{},orderTable([payment.order]),paymentCheckout(payment,{el,notice,errorNotice,api})))); }
     catch (error) { root.prepend(errorNotice(error)); }
   }
-  root.append(catalog.catalogError?notice('订阅目录暂不可用',catalog.catalogError,'warn'):subscriptionPanel(plans), el('div',{class:'wallet-history'},
-    panel('最近支付订单','完成付款后，请刷新以获取服务端确认状态',orderTable(orders)),
-    panel('资金记录','所有金额使用人民币最小单位换算显示',table([
-      {label:'记录时间',render:r => date(r.created_at)}, {label:'类型',render:r => ({stripe_credit:'Stripe 支付入账',rental_debit:'套餐购买扣款',rental_refund:'未交付退回余额'}[r.kind] || r.kind || '未提供')},
-      {label:'变动金额',render:r => money(r.amount_minor,r.currency || data.wallet?.currency)}, {label:'关联订单',render:r => el('span',{class:'mono',text:r.rental_id || r.order_id || '—'})},
-    ],ledger,'暂无资金记录','没有发生过服务器确认的资金变动。'))));
+  paintWallet(data);
+  root.append(catalog.catalogError?notice('订阅目录暂不可用',catalog.catalogError,'warn'):subscriptionPanel(plans),history);
   return root;
 }
 async function profileView() {
@@ -1219,56 +1227,8 @@ function emailSuffixEditor(initial) {
 }
 
 
-function paymentMethodStatus(method) {
-  if (method.offered) return '前台会展示此支付方式。';
-  const reasons = {
-    disabled: '未启用，前台不展示。',
-    source_missing: '未选择来源，前台不展示。',
-    credentials_missing: '所选来源凭据不完整，前台不展示。',
-    not_collectable: '配置可以保存，但当前版本不能用此渠道收款，前台不展示。',
-  };
-  return reasons[method.reason] || '前台不展示。';
-}
-function paymentCatalogPayload(catalog, values) {
-  const methods = {}, providers = {};
-  for (const method of catalog.methods) methods[method.id] = { enabled: values.get(`method_${method.id}_enabled`) === 'on', source: values.get(`method_${method.id}_source`) || '' };
-  for (const provider of catalog.providers) {
-    const entry = { enabled: values.get(`provider_${provider.id}_enabled`) === 'on', clear_secrets: values.get(`provider_${provider.id}_clear`) === 'on' };
-    for (const item of provider.fields) entry[item.key] = values.get(`provider_${provider.id}_${item.key}`) ?? '';
-    providers[provider.id] = entry;
-  }
-  return { methods, providers };
-}
-function paymentCatalogForm(catalog) {
-  const form = el('form',{}, notice('只有已经能收款的渠道会出现在充值和购买里','启用后必须选择来源，并且该来源的必填凭据要齐全。支付宝、微信、易支付、随行付和 Airwallex 目前只能保存配置，不能创建支付单。','warn'));
-  for (const method of catalog.methods) {
-    form.append(
-      switchRow(`前台展示${method.title}`, '控制充值和购买是否展示此方式。未启用、未选来源或凭据不完整时不会展示。', `method_${method.id}_enabled`, method.enabled),
-      field(`${method.title}来源`, `method_${method.id}_source`, { type:'select', choices:[{value:'',label:'未配置'}, ...method.sources.map(source => ({value:source.id, label:source.collectable ? source.label : `${source.label}（当前不能收款）`}))], value:method.source || '', hint:'启用后必须选择一个来源。' }),
-      el('p',{class:'inline-info','data-method-status':method.id,text:paymentMethodStatus(method)}));
-  }
-  for (const provider of catalog.providers) {
-    const body = el('div',{},
-      switchRow(`启用${provider.title}`, '停用后可以先保存不完整的草稿。启用时必填项必须齐全。', `provider_${provider.id}_enabled`, provider.enabled),
-      switchRow(`清除${provider.title}密钥`, '仅在停用时生效。启用状态下不能清除密钥。', `provider_${provider.id}_clear`, false));
-    for (const item of provider.fields) {
-      body.append(field(item.label, `provider_${provider.id}_${item.key}`, item.options
-        ? {type:'select', choices:item.options.map(option => ({value:option.value, label:option.label})), value:item.value || '', hint:item.hint || (item.required ? '启用时必填。' : '可选。')}
-        : {type:item.sensitive ? 'password' : 'text', value:item.sensitive ? '' : (item.value || ''), autocomplete:item.sensitive ? 'new-password' : 'off', spellcheck:'false', placeholder:item.sensitive ? (item.configured ? '已配置，留空则保持不变' : '尚未配置') : '', hint:item.hint || (item.required ? '启用时必填。' : '可选。')}));
-    }
-    const enable = body.querySelector(`[name=provider_${provider.id}_enabled]`);
-    const clear = body.querySelector(`[name=provider_${provider.id}_clear]`);
-    enable.addEventListener('change', () => { if (enable.checked) clear.checked = false; });
-    clear.addEventListener('change', () => { if (clear.checked) enable.checked = false; });
-    form.append(el('details',{class:'provider-block'}, el('summary',{text:`${provider.title}${provider.collectable ? '' : ' · 当前不能收款'}`}), body));
-  }
-  form.append(el('button',{class:'btn primary',type:'submit',text:'保存支付方式'}));
-  return form;
-}
-
 async function settingsView() {
-  const [settings, connection, operations] = await Promise.all([api('/api/admin/settings'), api('/api/admin/connection'), api('/api/admin/operations')]);
-  const ready = operations.readiness;
+  const [settings, connection, mailData, paymentData] = await Promise.all([api('/api/admin/settings'), api('/api/admin/connection'), api('/api/admin/mail'), api('/api/admin/payment')]);
   const form = el('form',{},
     field('站点名称','name',{required:true,maxlength:100,value:settings.site?.name}),
     field('站点简介','description',{type:'textarea',maxlength:500,value:settings.site?.description}),
@@ -1346,98 +1306,15 @@ async function settingsView() {
     message.replaceChildren(notice('注册设置已保存','白名单和验证开关已由服务器确认。','success'));
   });
   const registration = el('div',{id:'registration',class:'settings-section'},panel('注册设置','控制用户注册和验证',el('div',{class:'card-body'},registrationForm)));
-  const mail = settings.mail || {};
-  const payment = settings.payment || {};
-  const mailForm = el('form',{},
-    mail.editable === false ? notice('邮件服务由环境变量管理','服务器已设置 SMTP_HOST 与 SMTP_FROM。这里只显示状态，不能在页面里覆盖或回显密码。','warn') : null,
-    field('SMTP 主机','host',{required:mail.editable!==false,value:mail.host||'',disabled:mail.editable===false,placeholder:'smtp.example.com',autocomplete:'off'}),
-    field('端口','port',{type:'number',required:mail.editable!==false,min:1,max:65535,value:mail.port||587,disabled:mail.editable===false,hint:'587 使用 STARTTLS；465 使用隐式 TLS。'}),
-    field('用户名','username',{value:mail.username||'',disabled:mail.editable===false,autocomplete:'off',hint:'可信中继可以不填。填写用户名时必须同时设置密码。'}),
-    field('密码','password',{type:'password',autocomplete:'new-password',spellcheck:'false',disabled:mail.editable===false,placeholder:mail.password_configured?'已配置，留空则保持不变':'SMTP 密码',hint:'密码只保存在服务端，刷新后不会回显。'}),
-    field('发件邮箱','from',{type:'email',required:mail.editable!==false,value:mail.from||'',disabled:mail.editable===false,maxlength:254}),
-    field('发件人名称','from_name',{value:mail.from_name||'',disabled:mail.editable===false,maxlength:80}),
-    switchRow('使用 TLS','非 465 端口在开启时要求 STARTTLS。','use_tls',mail.use_tls!==false),
-    el('div',{class:'button-row'}, mail.editable===false?null:el('button',{class:'btn primary',type:'submit',text:'保存邮件服务'}), el('button',{class:'btn',type:'button',text:'测试连接',onclick:async event => {
-      const button = event.currentTarget; button.disabled = true;
-      try { await api('/api/admin/mail/test',{method:'POST',body:{}}); mailForm.querySelector('.form-message').replaceChildren(notice('邮件服务器已响应','连接和认证通过。这不代表以后的每封邮件都能送达。','success')); }
-      catch (error) { mailForm.querySelector('.form-message').replaceChildren(errorNotice(error)); }
-      finally { button.disabled = false; }
-    }})));
-  bindForm(mailForm,async values => {
-    if (!await confirmAction('保存邮件服务','凭据只写入服务端数据库，不会回显。留空的密码保持原值。主机留空将清除页面中保存的邮件配置。','确认保存')) return CANCEL;
-    const host = values.get('host').trim();
-    return api('/api/admin/settings',{method:'PATCH',body:{mail:host?{host,port:Number(values.get('port')),username:values.get('username').trim(),password:values.get('password'),from:values.get('from').trim(),from_name:values.get('from_name').trim(),use_tls:values.get('use_tls')==='on'}:{host:''}}});
-  },(data,message) => {
-    if (!data.mail || !data.features) throw Object.assign(new Error('邮件配置更新结果不完整。'),{uncertain:true});
-    state.public.features = data.features;
-    mailForm.querySelector('[name=password]').value = '';
-    message.replaceChildren(notice(data.mail.configured?'邮件服务已保存':'已清除页面中的邮件配置',data.mail.configured?'现在可以开放需要验证的注册，并用「测试连接」核对服务器。':'环境变量未配置时，验证邮件和密码找回保持关闭。','success'));
-  });
-  const paymentForm = el('form',{},
-    payment.editable === false ? notice('支付服务由环境变量管理','服务器已设置 Stripe 密钥。这里不能覆盖或回显密钥。','warn') : notice('当前在线支付是 Stripe Checkout','保存的是服务端密钥和 Webhook 签名密钥。Stripe 是当前唯一会创建支付单的在线渠道。','warn'),
-    field('Stripe 密钥','secret_key',{type:'password',autocomplete:'new-password',spellcheck:'false',disabled:payment.editable===false,placeholder:payment.secret_configured?'已配置，留空则保持不变':'sk_test_ 或 sk_live_',hint:'必须与 Webhook 密钥同为测试或正式环境。'}),
-    field('Webhook 签名密钥','webhook_secret',{type:'password',autocomplete:'new-password',spellcheck:'false',disabled:payment.editable===false,placeholder:payment.webhook_configured?'已配置，留空则保持不变':'whsec_',hint:'回调地址：' + location.origin + (payment.webhook_path || '/api/webhooks/stripe')}),
-    el('p',{class:'inline-info',text:(payment.configured? (payment.live?'当前为正式环境密钥。':'当前为测试环境密钥。') : '尚未配置可收款的密钥。') + ' 有未完成订单时不能更换密钥。'}),
-    payment.editable===false?null:el('button',{class:'btn primary',type:'submit',text:'保存支付服务'}));
-  bindForm(paymentForm,async values => {
-    if (!await confirmAction('保存支付服务','密钥只写入服务端。两项都留空会清除页面中保存的支付配置。有未完成订单时服务器会拒绝更换。','确认保存')) return CANCEL;
-    return api('/api/admin/settings',{method:'PATCH',body:{payment:{secret_key:values.get('secret_key'),webhook_secret:values.get('webhook_secret')}}});
-  },(data,message) => {
-    if (!data.payment || !data.features) throw Object.assign(new Error('支付配置更新结果不完整。'),{uncertain:true});
-    state.public.features = data.features;
-    paymentForm.querySelector('[name=secret_key]').value = '';
-    paymentForm.querySelector('[name=webhook_secret]').value = '';
-    message.replaceChildren(notice(data.payment.configured?'支付服务已保存':'已清除页面中的支付配置','订单是否到账仍只以服务端核对结果为准。','success'));
-  });
-  const paymentCatalog = settings.payment?.catalog || describePaymentCatalog(emptyPaymentCatalog());
-  const catalogForm = paymentCatalogForm(paymentCatalog);
-  bindForm(catalogForm, async values => {
-    if (!await confirmAction('保存支付方式','将保存前台支付方式、来源和渠道凭据。密钥只写入服务端。还不能收款的渠道不会出现在充值或购买中。','确认保存')) return CANCEL;
-    const body = paymentCatalogPayload(paymentCatalog, values);
-    for (const method of paymentCatalog.methods) if (body.methods[method.id].enabled && !body.methods[method.id].source) throw new Error(`${method.title}已启用，请先选择支付来源。`);
-    return api('/api/admin/settings',{method:'PATCH',body:{payment_catalog:body}});
-  }, (data,message) => {
-    if (!data.payment?.catalog || !data.features) throw Object.assign(new Error('支付方式更新结果不完整。'),{uncertain:true});
-    state.public.features = data.features;
-    for (const method of data.payment.catalog.methods) {
-      const status = catalogForm.querySelector(`[data-method-status="${method.id}"]`);
-      if (status) status.textContent = paymentMethodStatus(method);
-      const source = catalogForm.querySelector(`[name=method_${method.id}_source]`);
-      if (source) source.value = method.source || '';
-      const enabled = catalogForm.querySelector(`[name=method_${method.id}_enabled]`);
-      if (enabled) enabled.checked = method.enabled === true;
-    }
-    for (const provider of data.payment.catalog.providers) {
-      const enabled = catalogForm.querySelector(`[name=provider_${provider.id}_enabled]`);
-      if (enabled) enabled.checked = provider.enabled === true;
-      const clear = catalogForm.querySelector(`[name=provider_${provider.id}_clear]`);
-      if (clear) clear.checked = false;
-      for (const item of provider.fields) {
-        const input = catalogForm.querySelector(`[name=provider_${provider.id}_${item.key}]`);
-        if (!input) continue;
-        if (item.sensitive) { input.value = ''; input.placeholder = item.configured ? '已配置，留空则保持不变' : '尚未配置'; }
-        else input.value = item.value || '';
-      }
-    }
-    message.replaceChildren(notice('支付方式已保存','密钥不会回显。还不能收款的渠道不会出现在充值或购买中。','success'));
-  });
-  const services = el('div',{id:'services',class:'settings-section'},
-    panel('邮件服务','配置后才能发送验证邮件和密码重置。只表示已保存，不表示每次投递都会成功。',el('div',{class:'card-body'},mailForm)),
-    panel('支付服务','配置 Stripe 后，成员可以创建在线支付订单。回跳地址不能当作到账。',el('div',{class:'card-body'},paymentForm)),
-        panel('支付方式','按前台可见方式选择来源，再保存对应渠道的凭据。缺凭据、未选来源或当前不能收款的渠道都不会展示给用户。',el('div',{class:'card-body'},catalogForm)),
-    panel('运行状态','这些状态来自当前进程，不是模拟结果。',el('div',{class:'card-body'},
-      [['上游连接',ready.core_configured],['邮件服务',ready.mail_configured],['在线支付',ready.payment_configured],['公开 HTTPS',ready.https]].map(([label,ok]) => el('p',{},label,'：',badge(ok ? 'active' : 'pending'))),
-      el('dl',{class:'detail-list'},
-        el('dt',{text:'邮箱验证'}),el('dd',{text:settings.features?.email_verification === true ? '已启用' : '未启用'}),
-        el('dt',{text:'密码找回'}),el('dd',{text:settings.features?.password_reset === true ? '已启用' : '未启用'}),
-        el('dt',{text:'钱包扣费'}),el('dd',{text:'按充值与套餐结算，不按 Token 扣余额'})),
-      el('p',{class:'inline-info',text:`数据库版本 ${ready.schema_version} · 同时转发上限 ${ready.runtime_limit}`}),
-      notice('密钥不回显','上游、邮件和 Stripe 密钥不会返回给浏览器。可选 Logo 会由浏览器向您填写的 HTTPS 地址请求图片。'))));
+  const settingsUI = {el,field,switchRow,panel,notice,errorNotice,bindForm,confirmAction,api,state,CANCEL};
+  const mailPage = mailSettingsView(settingsUI, mailData.mail);
+  const paymentPage = paymentSettingsView(settingsUI, paymentData.payment);
   const pages = [
     ['public','公开信息',el('section',{id:'public',class:'settings-section'},panel('公开站点信息','名称、简介、标识和注册开关会显示在登录页与工作台。',el('div',{class:'card-body'},form)))],
     ['registration','注册设置',registration],
     ['upstream','上游连接',upstream],
-    ['services','邮件与支付',services],
+    ['mail','邮件配置',mailPage],
+    ['payment','支付配置',paymentPage],
   ];
   const selected = new Set(pages.map(([id]) => id)).has(location.hash.slice(1)) ? location.hash.slice(1) : 'public';
   const tabs = {};
@@ -1461,7 +1338,7 @@ function purchaseDialog(plan) {
  const platforms=Array.isArray(plan.platforms)?plan.platforms:[];
  const form=el('form',{},notice('\u786e\u8ba4\u8ba2\u9605',`${plan.name} \u00b7 ${plan.duration_days} \u5929 \u00b7 ${money(plan.amount_minor)}\u3002\u6309 24 \u5c0f\u65f6\u8ba1\u4e00\u5929\uff0c\u4e0d\u81ea\u52a8\u7eed\u8d39\u3002\u8bf7\u5355\u9009\u4e00\u4e2a\u767b\u5f55\u5e73\u53f0\uff0c\u6709\u8d27\u624d\u80fd\u4e0b\u5355\u3002`),
   field('\u767b\u5f55\u5e73\u53f0','platform',{type:'select',required:true,choices:platforms.map(item=>({value:item.platform,label:`${item.label||item.platform} \u00b7 ${item.available>0?`\u6709\u8d27 ${item.available}`:'\u65e0\u8d27'}`})),value:platforms.find(item=>item.available>0)?.platform||''}),
-  field('\u652f\u4ed8\u65b9\u5f0f','payment_method',{type:'select',choices:[{value:'wallet',label:'\u94b1\u5305\u4f59\u989d'},...(state.public.features.payment?[{value:'stripe',label:'Stripe \u5728\u7ebf\u652f\u4ed8'}]:[])],value:'wallet'}),
+  field('支付方式','payment_method',{type:'select',choices:[{value:'wallet',label:'钱包余额'},...(state.public.payment?.methods||[]).map(method=>({value:method.id,label:method.title}))],value:'wallet'}),
   el('button',{type:'submit',class:'btn primary',text:'\u786e\u8ba4\u4e0b\u5355',disabled:!platforms.some(item=>item.available>0)}),el('a',{href:'/orders',class:'btn',text:'\u67e5\u770b\u5df2\u6709\u8ba2\u5355'}));
  const dialog=editorDialog('\u8d2d\u4e70\u8ba2\u9605',form);
  bindForm(form,async values=>{
@@ -1473,7 +1350,7 @@ function purchaseDialog(plan) {
  },data=>{
   if(!data.rental?.id)throw Object.assign(new Error('\u8ba2\u5355\u7ed3\u679c\u672a\u77e5\uff0c\u8bf7\u524d\u5f80\u8ba2\u5355\u6838\u5bf9\u3002'),{uncertain:true});
   const result=el('div',{class:'card-body'},badge(data.rental.status),el('p',{class:'mono',text:data.rental.id}),notice('\u8ba2\u5355\u5df2\u8bb0\u5f55','\u652f\u4ed8\u6210\u529f\u4e0d\u7b49\u4e8e\u4ea4\u4ed8\u5b8c\u6210\u3002\u4ea4\u4ed8\u540e\u8d26\u53f7\u4f1a\u8fdb\u5165\u6211\u7684\u8d26\u53f7\u3002'),el('a',{class:'btn',href:'/accounts',text:'\u67e5\u770b\u6211\u7684\u8d26\u53f7'}),el('a',{class:'btn',href:'/orders',text:'\u67e5\u770b\u8ba2\u5355'}));
-  if(data.checkout_url){const url=new URL(data.checkout_url);if(url.origin==='https://checkout.stripe.com'&&!url.username&&!url.password)result.append(el('a',{class:'btn primary',href:url.href,target:'_blank',rel:'noopener noreferrer',referrerpolicy:'no-referrer',text:'\u6253\u5f00 Stripe \u6536\u94f6\u53f0'}));}
+  if(data.payment)result.append(paymentCheckout(data.payment,{el,notice,errorNotice,api}));
   form.replaceWith(result);
  });
  return dialog;
@@ -1527,7 +1404,7 @@ async function rentalsView() {
  const columns=[{label:'订单 / 套餐',render:o=>el('div',{},el('strong',{text:o.name}),el('p',{class:'mono muted',text:o.id}))},...(admin?[{label:'客户',render:o=>el('span',{class:'mono',text:o.user_id})}]:[]),{label:'价格 / 租期',render:o=>`${money(o.amount_minor)} / ${o.duration_days} 天`},{label:'交付状态',render:o=>el('div',{},badge(o.status),o.last_error?el('p',{class:'muted',text:o.last_error}):null)},{label:'已交付期限',render:o=>date(o.expires_at)},{label:'操作',render:o=>{
   const actions=el('div',{class:'button-row'});
   if(o.payment_order_id&&o.payment_status!=='paid')actions.append(actionButton('核对支付',()=>api(`/api/${admin?'admin':'me'}/payments/${encodeURIComponent(o.payment_order_id)}/reconcile`,{method:'POST',body:{}})));
-  if(o.checkout_url){let u;try{u=new URL(o.checkout_url);}catch{}if(u?.origin==='https://checkout.stripe.com'&&!u.username&&!u.password)actions.append(el('a',{class:'btn small',href:u.href,target:'_blank',rel:'noopener noreferrer',text:'继续支付'}));}
+  if(!admin&&o.payment_order_id&&o.status==='awaiting_payment')actions.append(el('a',{class:'btn small',href:'/wallet?order='+encodeURIComponent(o.payment_order_id),text:'继续支付'}));
   if(admin&&['queued','review','refund_pending'].includes(o.status))for(const action of (o.status==='refund_pending'?['refund']:['retry','refund']))actions.append(actionButton(action==='retry'?'重新核对':'退回余额',async()=>{
    if(!await confirmAction(action==='retry'?'重新核对订单':'退回未交付款项',action==='retry'?'将按原订单编号核对上游回执，不重复增加租期。':'仅在上游确认没有交付后，将订单全额退回本站余额，不是支付渠道原路退款。','确认执行',action==='refund'))return CANCEL;
    return api(`/api/admin/rentals/${encodeURIComponent(o.id)}/resolve`,{method:'POST',body:{action,expected_revision:o.revision}});
@@ -1549,7 +1426,7 @@ async function operationsView() {
  return el('div',{class:'page-content'},
  el('div',{class:'stats-grid'},stat('待同步客户',number(tasks.length),'本页最多列出 100 个','users'),stat('待确认支付',number(data.payments_pending),'包括结果未知的订单','wallet'),stat('待核对交付',number(data.rentals.filter(r=>['review','refund_pending'].includes(r.status)).reduce((n,r)=>n+r.count,0)),'可在销售与交付处理','receipt')),
  panel('客户同步待办','停用尚未确认时，本站会暂停该客户的新运行请求，直到上游确认。',table([{label:'客户',render:u=>u.display_name},{label:'状态',render:u=>badge(u.status)},{label:'提示',render:u=>u.sync_error||'等待同步'},{label:'操作',render:u=>actionButton('重新核对',()=>api(`/api/admin/users/${encodeURIComponent(u.id)}${u.core_customer_id?'':'/provision'}`,{method:u.core_customer_id?'PATCH':'POST',body:{}}))}],tasks,'没有待同步客户','当前没有持久化客户同步待办。')),
- el('p',{class:'inline-info'},'邮件、支付和公开地址是否已配置，请在',el('a',{href:'/admin/settings#services',text:'站点设置'}),'中查看。'),el('a',{class:'btn',href:'/admin/rentals?status=review',text:'处理交付待办 →'}));
+ el('p',{class:'inline-info'},'邮件、支付和公开地址是否已配置，请在',el('a',{href:'/admin/settings#payment',text:'站点设置'}),'中查看。'),el('a',{class:'btn',href:'/admin/rentals?status=review',text:'处理交付待办 →'}));
 }
 
 

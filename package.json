@@ -9,9 +9,11 @@
   "scripts": {
     "start": "node --env-file-if-exists=.env src/main.js",
     "test": "node --test tests/server/*.test.js",
-    "test:browser": "node --test tests/browser/*.test.mjs"
+    "test:browser": "node --test --test-concurrency=1 tests/browser/*.test.mjs"
   },
   "dependencies": {
-    "nodemailer": "10.2.1"
+    "@airwallex/components-sdk": "1.36.0",
+    "nodemailer": "10.2.1",
+    "qrcode": "1.5.4"
   }
 }

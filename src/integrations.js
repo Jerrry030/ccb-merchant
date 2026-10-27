@@ -1,5 +1,4 @@
 import { HttpError, fields, text, email } from './security.js';
-import { normalizePaymentCatalog } from '../public/payment-catalog.js';
 import { isRegistrationEmailSuffixAllowed, isRegistrationEmailSuffixDomainValid, normalizeRegistrationEmailSuffixDomain, toCanonicalRegistrationEmailSuffix } from '../public/registration-policy.js';
 
 const HOST = /^(?:localhost|[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+)$/;
@@ -29,19 +28,6 @@ export function readSite(store) {
   return JSON.parse(store.db.prepare("SELECT value FROM settings WHERE key='site'").get().value);
 }
 
-export function readServices(store) {
-  const row = store.db.prepare("SELECT value FROM settings WHERE key='services'").get();
-  if (!row) return { mail: null, stripe: null, payment_catalog: normalizePaymentCatalog(null) };
-  try {
-    const value = JSON.parse(row.value);
-    return { mail: value?.mail || null, stripe: value?.stripe || null, payment_catalog: normalizePaymentCatalog(value?.payment_catalog) };
-  } catch { return { mail: null, stripe: null, payment_catalog: normalizePaymentCatalog(null) }; }
-}
-
-export function writeServices(store, services) {
-  store.db.prepare('INSERT INTO settings(key,value) VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value').run('services', JSON.stringify({ mail: services.mail, stripe: services.stripe, payment_catalog: normalizePaymentCatalog(services.payment_catalog) }));
-}
-
 export function strictEmailSuffixWhitelist(items) {
   if (!Array.isArray(items) || items.length > 50 || items.some(item => typeof item !== 'string')) throw new HttpError(400, 'invalid_input', 'Invalid email domain whitelist.');
   const seen = new Set();
@@ -68,7 +54,7 @@ export function registrationView(saved) {
   };
 }
 
-export function publicSettings(saved, mail, stripe, upstreamUrl) {
+export function publicSettings(saved, mail, payment, upstreamUrl) {
   const registration = registrationView(saved);
   const mailOn = Boolean(mail);
   return {
@@ -81,7 +67,8 @@ export function publicSettings(saved, mail, stripe, upstreamUrl) {
       registration: Boolean(saved.registration_enabled && (registration.email_verification_enabled ? mailOn : true)),
       email_verification: Boolean(registration.email_verification_enabled && mailOn),
       password_reset: mailOn,
-      payment: Boolean(stripe),
+      payment: payment.configured,
+      recharge: payment.configured && payment.recharge_enabled,
       token_billing: false,
       term_rentals: Boolean(upstreamUrl),
     },
@@ -93,10 +80,10 @@ function formatFrom(from, fromName) {
   return `"${fromName.replace(/["\\]/g, '')}" <${from}>`;
 }
 
-export function effectiveMail(config, store) {
+export function effectiveMail(config, store, draft) {
   if (config.mail) return { ...config.mail, source: 'environment' };
-  const stored = readServices(store).mail;
-  if (!stored?.host || !stored.from) return null;
+  const stored = draft === undefined ? JSON.parse(store.db.prepare("SELECT value FROM settings WHERE key='mail'").get().value).config : draft;
+  if (!stored?.host || !stored.from || stored.enabled === false) return null;
   const port = stored.port;
   return {
     host: stored.host, port, secure: port === 465, requireTLS: stored.use_tls !== false && port !== 465,
@@ -106,18 +93,13 @@ export function effectiveMail(config, store) {
   };
 }
 
-export function effectiveStripe(config, store) {
-  if (config.stripe) return { ...config.stripe, webhook_secret: config.stripe.webhookSecret, source: 'environment' };
-  const stored = readServices(store).stripe;
-  if (!stored?.secret || !stored.webhook_secret) return null;
-  return { secret: stored.secret, webhookSecret: stored.webhook_secret, webhook_secret: stored.webhook_secret, live: stored.secret.startsWith('sk_live_'), source: 'settings' };
-}
-
 export function describeMail(config, store) {
   const env = Boolean(config.mail);
   const mail = effectiveMail(config, store);
-  const stored = readServices(store).mail;
+  const record = JSON.parse(store.db.prepare("SELECT value FROM settings WHERE key='mail'").get().value);
+  const stored = record.config;
   return {
+    revision: record.revision, enabled: env || stored?.enabled !== false,
     configured: Boolean(mail),
     source: env ? 'environment' : mail ? 'settings' : 'none',
     editable: !env,
@@ -131,23 +113,9 @@ export function describeMail(config, store) {
   };
 }
 
-export function describeStripe(config, store) {
-  const env = Boolean(config.stripe);
-  const stripe = effectiveStripe(config, store);
-  return {
-    configured: Boolean(stripe),
-    source: env ? 'environment' : stripe ? 'settings' : 'none',
-    editable: !env,
-    live: stripe ? stripe.live === true : null,
-    secret_configured: Boolean(stripe?.secret),
-    webhook_configured: Boolean(stripe?.webhookSecret || stripe?.webhook_secret),
-    webhook_path: '/api/webhooks/stripe',
-  };
-}
-
 export function applyMailUpdate(current, input) {
   if (input === null || typeof input !== 'object' || Array.isArray(input)) throw new HttpError(400, 'invalid_input', 'Invalid mail configuration.');
-  fields(input, ['host', 'port', 'username', 'password', 'from', 'from_name', 'use_tls'], input.host === '' ? ['host'] : ['host', 'port', 'from', 'use_tls']);
+  fields(input, ['enabled', 'host', 'port', 'username', 'password', 'from', 'from_name', 'use_tls'], input.host === '' ? ['host'] : ['host', 'port', 'from', 'use_tls']);
   if (input.host === '') return null;
   const host = hostName(input.host);
   const port = input.port;
@@ -156,24 +124,13 @@ export function applyMailUpdate(current, input) {
   const fromName = input.from_name === undefined || input.from_name === '' ? '' : text(input.from_name, 'from name', 80, 1);
   const useTls = flag(input.use_tls, 'use_tls');
   const username = input.username === undefined || input.username === '' ? '' : text(input.username, 'smtp username', 200);
+  if (input.password !== undefined && typeof input.password !== 'string') throw new HttpError(400, 'invalid_input', 'Invalid SMTP password.');
+  if (input.password && !username) throw new HttpError(400, 'invalid_input', 'SMTP password requires a username.');
+  const retained = username && !input.password && current?.pass;
+  if (retained && (host !== current.host || port !== current.port || username !== current.user || useTls !== (current.use_tls !== false))) throw new HttpError(400, 'mail_password_required', 'Enter the password again when changing the SMTP destination, user or TLS mode.');
   const password = username ? (input.password ? secretText(input.password, 'smtp password') : current?.pass || '') : '';
   if (username && !password) throw new HttpError(400, 'invalid_input', 'SMTP username and password must both be set, or neither.');
-  return { host, port, user: username, pass: password, from, from_name: fromName, use_tls: useTls };
-}
-
-export function applyStripeUpdate(current, input) {
-  if (input === null || typeof input !== 'object' || Array.isArray(input)) throw new HttpError(400, 'invalid_input', 'Invalid payment configuration.');
-  fields(input, ['secret_key', 'webhook_secret']);
-  const secret = input.secret_key ? secretText(input.secret_key, 'stripe secret') : current?.secret || '';
-  const webhook = input.webhook_secret ? secretText(input.webhook_secret, 'stripe webhook secret') : current?.webhook_secret || '';
-  if (!secret && !webhook) return null;
-  if (!secret || !webhook) throw new HttpError(400, 'invalid_input', 'Stripe secret and webhook secret must both be configured.');
-  if (!/^sk_(live|test)_/.test(secret) || !webhook.startsWith('whsec_')) throw new HttpError(400, 'invalid_input', 'Invalid Stripe server credentials.');
-  return { secret, webhook_secret: webhook };
-}
-
-export function stripeSecretsDiffer(current, next) {
-  return (current?.secret || '') !== (next?.secret || '') || (current?.webhook_secret || '') !== (next?.webhook_secret || '');
+  return { enabled: input.enabled === undefined ? true : flag(input.enabled, 'enabled'), host, port, user: username, pass: password, from, from_name: fromName, use_tls: useTls };
 }
 
 export function assertCanRegister(store, address) {

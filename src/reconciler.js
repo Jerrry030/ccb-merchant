@@ -16,8 +16,8 @@ export class Reconciler {
     this.customers.locks.add(u.id);
     try {await this.customers.synchronize(u.id);} catch {} finally {this.customers.locks.delete(u.id);}
    }
-   if(this.payments.config.stripe) {
-    const orders=db.prepare("SELECT id FROM orders WHERE status IN ('creating','pending','unknown') AND stripe_session_id IS NOT NULL AND next_check_at<=? ORDER BY next_check_at LIMIT 10").all(now);
+   {
+    const orders=db.prepare("SELECT id FROM orders WHERE status IN ('creating','pending','unknown') AND (provider_reference IS NOT NULL OR provider IN ('alipay','wxpay','easypay','suixingpay')) AND next_check_at<=? ORDER BY next_check_at LIMIT 10").all(now);
     for(const o of orders) {if(this.stopped)return;db.prepare('UPDATE orders SET next_check_at=? WHERE id=?').run(Date.now()+60000,o.id);try{await this.payments.reconcile(o.id);}catch{}}
    }
    const pending=db.prepare("SELECT id FROM rentals WHERE status IN ('queued','review','refund_pending') AND attempts<8 AND next_attempt_at<=? ORDER BY created_at,id LIMIT 10").all(Date.now());

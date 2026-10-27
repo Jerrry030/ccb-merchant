@@ -9,9 +9,12 @@ import { Store, publicUser, publicOrder, publicRental } from './store.js';
 import { Auth } from './auth.js';
 import { Upstream, project, schemas, scopes } from './upstream.js';
 import { Payments } from './payments.js';
-import { createMailer, verifyMail } from './mail.js';
-import { readSite, readServices, writeServices, publicSettings, effectiveMail, effectiveStripe, describeMail, describeStripe, applyMailUpdate, applyStripeUpdate, stripeSecretsDiffer, registrationView, strictEmailSuffixWhitelist } from './integrations.js';
-import { describePaymentCatalog, parsePaymentCatalog } from '../public/payment-catalog.js';
+import { createMailer, testMail } from './mail.js';
+import { readSite, publicSettings, effectiveMail, describeMail, applyMailUpdate, registrationView, strictEmailSuffixWhitelist } from './integrations.js';
+import QRCode from 'qrcode';
+import { PaymentProvider } from './payment-providers.js';
+import { paymentProviders, parsePaymentCatalog } from '../public/payment-catalog.js';
+import { readPaymentSettings, describePayment, applyPaymentUpdate } from './payment-settings.js';
 import { proxyRuntime } from './runtime.js';
 import { HttpError, fields, text, email, opaqueId, expiry, passwordHash, readBody, respond, requestBoundary } from './security.js';
 
@@ -46,17 +49,22 @@ function collection(value,schema) {
 
 export function createMerchant(config, options={}) {
   const store=new Store(config), core=new Upstream(config,store);
-  const mailNow=()=>effectiveMail(config,store);
-  const stripeNow=()=>effectiveStripe(config,store);
-  const mailerNow=()=>options.mailer || (mailNow() ? createMailer({...config, mail:mailNow()}) : null);
-  const auth=new Auth(config,store,mailerNow), payments=new Payments(config,store,options.paymentTransport,stripeNow);
+  const mailerNow=()=>options.mailer || (effectiveMail(config,store) ? createMailer({...config, mail:effectiveMail(config,store)}) : null);
+  const auth=new Auth(config,store,mailerNow), payments=new Payments(config,store,options.paymentTransport);
   const access=new Access(store,core);
   const customers=new Customers(store,core), commerce=new Commerce(store,core,customers);
   const reconciler=new Reconciler(store,customers,payments,commerce,options.reconcileIntervalMs??config.reconcileIntervalMs);
   const lockedUsers=customers.locks;
   let runtimeInFlight=0;
-  const settings=()=>{ const value=publicSettings(readSite(store), mailNow(), stripeNow(), config.upstreamUrl); value.site.public_origin=config.publicOrigin; if(config.homePreviewSample) value.features.home_preview=true; return value; };
-  const adminSettings=()=>({...settings(), connection:{configured:Boolean(config.upstreamUrl)}, mail:describeMail(config,store), payment:{...describeStripe(config,store), catalog:describePaymentCatalog(readServices(store).payment_catalog)}, registration:registrationView(readSite(store))});
+  const settings=()=>{
+    const payment=describePayment(config,store);
+    const value=publicSettings(readSite(store),effectiveMail(config,store),payment,config.upstreamUrl);
+    value.site.public_origin=config.publicOrigin;
+    value.payment={currency:'CNY',min_amount_minor:payment.min_amount_minor,max_amount_minor:payment.max_amount_minor,help_text:payment.help_text,methods:payment.methods.filter(method=>method.offered).map(method=>({id:method.id,title:method.title}))};
+    if(config.homePreviewSample) value.features.home_preview=true;
+    return value;
+  };
+  const adminSettings=()=>({...settings(), connection:{configured:Boolean(config.upstreamUrl)}, registration:registrationView(readSite(store))});
   async function connection() {
     if(!config.upstreamUrl) return {configured:false,available:false};
     try {
@@ -114,12 +122,24 @@ export function createMerchant(config, options={}) {
         try { await proxyRuntime(req,res,core,store,url,access); } finally { runtimeInFlight--; }
         return;
       }
-      if(route==='POST /api/webhooks/stripe') {
-        store.throttle(`webhook:${req.socket.remoteAddress}`,300,60000);
-        const raw=await readBody(req,1024*1024,false);
-        respond(res,200,await payments.webhook(raw,req.headers['stripe-signature'])); return;
+      const hook=path.match(/^\/api\/webhooks\/(stripe|alipay|wxpay|easypay|suixingpay|airwallex)(?:\/([A-Za-z0-9_-]{1,100}))?$/);
+      if(hook) {
+        if(req.method!=='POST'&&!(req.method==='GET'&&['alipay','easypay'].includes(hook[1])))throw new HttpError(405,'method_not_allowed','Unsupported notification method.');
+        store.throttle('webhook:'+req.socket.remoteAddress,300,60000);
+        const raw=req.method==='GET'?Buffer.from(url.search.slice(1)):await readBody(req,1024*1024,false);
+        const headers=new Headers();for(const [key,value] of Object.entries(req.headers))if(typeof value==='string')headers.set(key,value);
+        await payments.webhook(hook[1],raw,headers,hook[2]);
+        if(['alipay','easypay','suixingpay'].includes(hook[1])){res.writeHead(200,{'Content-Type':'text/plain; charset=utf-8'});res.end('success');}
+        else respond(res,200,hook[1]==='wxpay'?{code:'SUCCESS',message:'成功'}:{ok:true});
+        return;
       }
-      if(path==='/api/webhooks/stripe') throw new HttpError(405,'method_not_allowed','POST required.');
+      if(path==='/airwallex-checkout.html')res.setHeader('Content-Security-Policy',"default-src 'self'; script-src 'self' https://static.airwallex.com https://static-demo.airwallex.com; connect-src 'self' https://api.airwallex.com https://api-demo.airwallex.com https://checkout.airwallex.com https://checkout-demo.airwallex.com https://static.airwallex.com https://static-demo.airwallex.com; frame-src https://checkout.airwallex.com https://checkout-demo.airwallex.com; img-src 'self' data: https://static.airwallex.com https://static-demo.airwallex.com; style-src 'self' 'unsafe-inline'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action https://checkout.airwallex.com https://checkout-demo.airwallex.com");
+      if(['/vendor/airwallex-sdk.mjs','/vendor/airwallex-tracker.mjs'].includes(path)&&['GET','HEAD'].includes(req.method)) {
+        const sdk=path.endsWith('sdk.mjs');
+        let source=await readFile(new URL(sdk?'../node_modules/@airwallex/components-sdk/lib/index.mjs':'../node_modules/@airwallex/airtracker/lib/index.mjs',import.meta.url),'utf8');
+        if(sdk)source=source.replace("from '@airwallex/airtracker'","from '/vendor/airwallex-tracker.mjs'");
+        res.writeHead(200,{'Content-Type':'text/javascript; charset=utf-8'});res.end(req.method==='HEAD'?undefined:source);return;
+      }
       if(!path.startsWith('/api/')) { await staticFile(req,res,path); return; }
       store.throttle(`api:${req.socket.remoteAddress}`,300,60000);
       if(route==='GET /api/public') {
@@ -192,8 +212,8 @@ export function createMerchant(config, options={}) {
           respond(res,200,{wallet:store.wallet(user.id),ledger,orders}); return;
         }
         case 'POST /api/me/payments': {
-          fields(body,['amount_minor'],['amount_minor']); store.throttle(`checkout:${user.id}`,10,60000);
-          respond(res,201,await payments.create(user.id,body.amount_minor)); return;
+          fields(body,['amount_minor','payment_method'],['amount_minor']); store.throttle(`checkout:${user.id}`,10,60000);
+          respond(res,201,await payments.create(user.id,body.amount_minor,{method:body.payment_method,clientIp:(req.socket.remoteAddress||'').replace('::ffff:','')})); return;
         }
         case 'GET /api/plans':
         case 'GET /api/admin/plans': {respond(res,200,{plans:await commerce.catalog(path.startsWith('/api/admin/'),user.core_customer_id,url.searchParams.get('renew_grant_id'))});return;}
@@ -210,17 +230,24 @@ export function createMerchant(config, options={}) {
         case 'POST /api/admin/plans': respond(res,201,{plan:await commerce.savePlan(null,body,()=>auth.require(req,true))});return;
         case 'POST /api/me/rentals': {
           store.throttle(`rental:${user.id}`,10,60000);
-          if(body.payment_method==='stripe' && !stripeNow()) throw new HttpError(503,'payment_disabled','Payments are not configured.');
-          if(body.payment_method==='stripe') {
+          if(body.payment_method!=='wallet') {
+            const prior=store.db.prepare('SELECT id FROM rentals WHERE user_id=? AND request_id=?').get(user.id,body.request_id||'');
             const plan=store.db.prepare('SELECT amount_minor FROM plans WHERE id=?').get(body.plan_id || '');
-            if(plan&&(plan.amount_minor<config.paymentMin||plan.amount_minor>config.paymentMax)) throw new HttpError(409,'payment_amount_unavailable','This price is outside the configured online payment range; use wallet balance or contact support.');
+            if(!prior && plan) payments.validateIntent(user.id,plan.amount_minor,false,body.payment_method);
           }
           const result=await commerce.purchase(user.id,body,()=>auth.require(req));
           let checkout=null;
-          if(result.created && body.payment_method==='stripe') checkout=await payments.create(user.id,result.rental.amount_minor,result.rental.id);
-          else if(!result.created && result.rental.status==='awaiting_payment') checkout=store.db.prepare('SELECT checkout_url FROM orders WHERE rental_id=?').get(result.rental.id);
+          if(result.created && body.payment_method!=='wallet') {
+            try { checkout=await payments.create(user.id,result.rental.amount_minor,{rentalId:result.rental.id,method:body.payment_method,clientIp:(req.socket.remoteAddress||'').replace('::ffff:','')}); }
+            catch(error) {
+              // Release stock only if no payment request was durably admitted. Unknown outcomes stay reserved.
+              store.db.prepare("UPDATE rentals SET status='cancelled',last_error='payment_not_admitted',revision=revision+1 WHERE id=? AND status='awaiting_payment' AND NOT EXISTS (SELECT 1 FROM orders WHERE rental_id=?)").run(result.rental.id,result.rental.id);
+              throw error;
+            }
+          }
+          else if(!result.created && result.rental.status==='awaiting_payment') {const row=store.db.prepare('SELECT * FROM orders WHERE rental_id=?').get(result.rental.id);if(row)checkout=payments.checkout(row);}
           if(body.payment_method==='wallet') await commerce.deliver(result.rental.id);
-          respond(res,result.created?201:200,{rental:publicRental(store.db.prepare('SELECT * FROM rentals WHERE id=?').get(result.rental.id)),checkout_url:checkout?.checkout_url || null});return;
+          respond(res,result.created?201:200,{rental:publicRental(store.db.prepare('SELECT * FROM rentals WHERE id=?').get(result.rental.id)),payment:checkout});return;
         }
         case 'GET /api/me/rentals':
         case 'GET /api/admin/rentals': {
@@ -230,33 +257,77 @@ export function createMerchant(config, options={}) {
           const sql=where.length?` WHERE ${where.join(' AND ')}`:'';
           const total=store.db.prepare(`SELECT count(*) AS n FROM rentals${sql}`).get(...args).n;
           const rows=store.db.prepare(`SELECT * FROM rentals${sql} ORDER BY created_at DESC,id DESC LIMIT ? OFFSET ?`).all(...args,query.limit,query.offset);
-          respond(res,200,{rentals:rows.map(row=>{const payment=store.db.prepare('SELECT * FROM orders WHERE rental_id=?').get(row.id);return {...publicRental(row),payment_order_id:payment?.id||null,payment_status:payment?.status||null,checkout_url:row.status==='awaiting_payment'?payment?.checkout_url||null:null};}),total,limit:query.limit,offset:query.offset});return;
+          respond(res,200,{rentals:rows.map(row=>{const payment=store.db.prepare('SELECT * FROM orders WHERE rental_id=?').get(row.id);return {...publicRental(row),payment_order_id:payment?.id||null,payment_status:payment?.status||null};}),total,limit:query.limit,offset:query.offset});return;
         }
         case 'GET /api/admin/operations': {
           const pending=store.db.prepare("SELECT * FROM users WHERE core_pending IS NOT NULL OR (provision_name IS NOT NULL AND core_customer_id IS NULL) ORDER BY created_at LIMIT 100").all().map(publicUser);
           const totals=store.db.prepare('SELECT status,count(*) AS count FROM rentals GROUP BY status').all();
           const paymentsPending=store.db.prepare("SELECT count(*) AS n FROM orders WHERE status IN ('creating','pending','unknown')").get().n;
-          respond(res,200,{pending_customers:pending,rentals:totals,payments_pending:paymentsPending,worker:{interval_ms:config.reconcileIntervalMs,max_attempts:8},readiness:{core_configured:Boolean(config.upstreamUrl),mail_configured:Boolean(mailNow()),payment_configured:Boolean(stripeNow()),https:config.secureCookies,schema_version:store.db.prepare('PRAGMA user_version').get().user_version,runtime_limit:config.runtimeMaxInFlight}});return;
+          respond(res,200,{pending_customers:pending,rentals:totals,payments_pending:paymentsPending,worker:{interval_ms:config.reconcileIntervalMs,max_attempts:8},readiness:{core_configured:Boolean(config.upstreamUrl),mail_configured:Boolean(effectiveMail(config,store)),payment_configured:describePayment(config,store).configured,https:config.secureCookies,schema_version:store.db.prepare('PRAGMA user_version').get().user_version,runtime_limit:config.runtimeMaxInFlight}});return;
         }
         case 'GET /api/admin/connection': respond(res,200,{...await connection(),upstream_url:config.upstreamUrl,public_origin:config.publicOrigin,environment_managed:config.upstreamEnvironment,revision:core.revision}); return;
         case 'POST /api/admin/upstream': {
           store.throttle(`upstream-config:${user.id}`,10,60000);
           respond(res,200,await core.configure(body,()=>auth.require(req,true)));return;
         }
+        case 'GET /api/admin/mail': respond(res,200,{mail:describeMail(config,store),features:settings().features}); return;
+        case 'PATCH /api/admin/mail': {
+          fields(body,['expected_revision','mail'],['expected_revision','mail']);
+          if(config.mail) throw new HttpError(409,'integration_environment_managed','Mail is managed by the environment.');
+          store.transaction(()=>{
+            const record=JSON.parse(store.db.prepare("SELECT value FROM settings WHERE key='mail'").get().value);
+            if(body.expected_revision!==record.revision) throw new HttpError(409,'settings_changed','Mail configuration changed; reload before saving.');
+            const mail=applyMailUpdate(record.config,body.mail);
+            store.db.prepare("UPDATE settings SET value=? WHERE key='mail'").run(JSON.stringify({revision:record.revision+1,config:mail}));
+            store.audit(user.id,'site.mail_update',null);
+          });
+          respond(res,200,{mail:describeMail(config,store),features:settings().features}); return;
+        }
         case 'POST /api/admin/mail/test': {
-          fields(body,[]);
-          const mail=mailNow();
-          if(!mail && !options.mailer) throw new HttpError(503,'mail_disabled','Email delivery is not configured.');
-          if(!options.mailer) {
-            try { await verifyMail(mail); }
-            catch { throw new HttpError(503,'mail_unavailable','The mail server rejected the connection or credentials.'); }
+          fields(body,['mail','recipient']);
+          store.throttle('mail-test:'+user.id,5,60000);
+          let mail=effectiveMail(config,store);
+          if(body.mail!==undefined) {
+            if(config.mail) throw new HttpError(409,'integration_environment_managed','Test environment-managed mail without overriding it.');
+            const record=JSON.parse(store.db.prepare("SELECT value FROM settings WHERE key='mail'").get().value);
+            const draft=applyMailUpdate(record.config,body.mail);
+            // Test the draft even when its delivery switch is currently off; never save it.
+            mail=effectiveMail(config,store,draft?{...draft,enabled:true}:null);
           }
-          store.audit(user.id,'site.mail_test',null);
-          respond(res,200,{ok:true}); return;
+          if(!mail) throw new HttpError(400,'mail_disabled','Fill in SMTP settings before testing.');
+          const recipient=body.recipient!==undefined?email(body.recipient):undefined;
+          const result=await testMail(mail,recipient,options.mailTransportFactory);
+          store.audit(user.id,recipient?'site.mail_test_send':'site.mail_test_connection',null);
+          respond(res,200,result); return;
+        }
+        case 'GET /api/admin/payment': respond(res,200,{payment:describePayment(config,store),features:settings().features}); return;
+        case 'PATCH /api/admin/payment': {
+          store.transaction(()=>{
+            const value=applyPaymentUpdate(config,store,body);
+            store.db.prepare("UPDATE settings SET value=? WHERE key='payment'").run(JSON.stringify(value));
+            store.audit(user.id,'site.payment_update',null);
+          });
+          respond(res,200,{payment:describePayment(config,store),features:settings().features}); return;
+        }
+        case 'POST /api/admin/payment/test': {
+          fields(body,['provider','config'],['provider']);
+          store.throttle('payment-test:'+user.id,5,60000);
+          if(!Object.hasOwn(paymentProviders,body.provider))throw new HttpError(400,'invalid_input','Unknown provider.');
+          if(config.stripe&&body.provider==='stripe'&&body.config!==undefined)throw new HttpError(409,'integration_environment_managed','Stripe credentials are environment managed.');
+          if(body.config!==undefined)fields(body.config,paymentProviders[body.provider].fields.map(field=>field.key));
+          const current=readPaymentSettings(config,store);
+          const parsed=parsePaymentCatalog(current,{providers:{[body.provider]:{...(body.config||{}),enabled:false}}});
+          if(!parsed.ok)throw new HttpError(400,'invalid_input',parsed.message);
+          const configuration=parsed.value.providers[body.provider];
+          // Connection checks may use an unsaved Stripe key before its webhook is entered.
+          for(const field of paymentProviders[body.provider].fields)if(field.required&&!configuration[field.key]&&!(body.provider==='stripe'&&field.key==='webhook_secret'))throw new HttpError(400,'invalid_provider_config','Required provider settings are missing.');
+          let result;try{result=await new PaymentProvider(body.provider,configuration,options.paymentTransport,config.publicOrigin).test();}catch(error){if(error instanceof HttpError&&error.status===400)throw error;throw new HttpError(503,'payment_verification_unavailable','Payment provider verification failed.');}
+          store.audit(user.id,'site.payment_test',body.provider);
+          respond(res,200,result);return;
         }
         case 'GET /api/admin/settings': respond(res,200,adminSettings()); return;
         case 'PATCH /api/admin/settings': {
-          fields(body,['name','description','support_email','registration_enabled','logo_url','accent_color','email_suffix_whitelist','email_verification_enabled','email_domain_quota_enabled','mail','payment','payment_catalog']);
+          fields(body,['name','description','support_email','registration_enabled','logo_url','accent_color','email_suffix_whitelist','email_verification_enabled','email_domain_quota_enabled']);
           const saved=readSite(store);
           if(body.name!==undefined) saved.name=text(body.name,'name',100);
           if(body.description!==undefined) saved.description=text(body.description,'description',1000,0);
@@ -271,25 +342,8 @@ export function createMerchant(config, options={}) {
           if(body.email_verification_enabled!==undefined) { if(typeof body.email_verification_enabled!=='boolean') throw new HttpError(400,'invalid_input','email_verification_enabled must be boolean.'); saved.email_verification_enabled=body.email_verification_enabled; }
           if(body.email_domain_quota_enabled!==undefined) { if(typeof body.email_domain_quota_enabled!=='boolean') throw new HttpError(400,'invalid_input','email_domain_quota_enabled must be boolean.'); saved.email_domain_quota_enabled=body.email_domain_quota_enabled; }
           if(body.email_suffix_whitelist!==undefined) saved.email_suffix_whitelist=strictEmailSuffixWhitelist(body.email_suffix_whitelist);
-          const services=readServices(store);
-          if(body.mail!==undefined) {
-            if(config.mail) throw new HttpError(409,'integration_environment_managed','Mail is managed by the server environment and cannot be changed here.');
-            services.mail=applyMailUpdate(services.mail, body.mail);
-          }
-          if(body.payment!==undefined) {
-            if(config.stripe) throw new HttpError(409,'integration_environment_managed','Payment is managed by the server environment and cannot be changed here.');
-            const next=applyStripeUpdate(services.stripe, body.payment);
-            if(stripeSecretsDiffer(services.stripe, next) && store.db.prepare("SELECT count(*) AS n FROM orders WHERE status IN ('creating','pending','unknown')").get().n) throw new HttpError(409,'payment_pending','Wait until in-progress payments finish before changing Stripe credentials.');
-            services.stripe=next;
-          }
-          if(body.payment_catalog!==undefined) {
-            const parsed=parsePaymentCatalog(services.payment_catalog, body.payment_catalog);
-            if(!parsed.ok) throw new HttpError(400,'invalid_input',parsed.message);
-            services.payment_catalog=parsed.value;
-          }
           store.transaction(()=>{
             store.db.prepare("UPDATE settings SET value=? WHERE key='site'").run(JSON.stringify(saved));
-            if(body.mail!==undefined || body.payment!==undefined || body.payment_catalog!==undefined) writeServices(store, services);
             store.audit(user.id,'site.update',null);
           });
           respond(res,200,adminSettings()); return;
@@ -386,10 +440,20 @@ export function createMerchant(config, options={}) {
         if(row.rental_id)await commerce.deliver(row.rental_id);
         respond(res,200,{order});return;
       }
+      if(req.method==='GET'&&(match=path.match(/^\/api\/me\/payments\/([^/]+)\/(qr\.svg|checkout)$/))) {
+        const row=store.db.prepare('SELECT * FROM orders WHERE id=? AND user_id=?').get(match[1],user.id);
+        if(!row)throw new HttpError(404,'order_not_found','Order not found.');
+        if(!['pending','creating','unknown'].includes(row.status))throw new HttpError(409,'order_state','This checkout is no longer payable.');
+        const data=store.openPayment(row.checkout_data,'checkout:'+row.id);
+        if(match[2]==='checkout') {if(!data.airwallex)throw new HttpError(404,'not_found','No embedded checkout.');respond(res,200,data.airwallex);return;}
+        if(!data.qr)throw new HttpError(404,'not_found','This order has no QR code.');
+        const svg=await QRCode.toString(data.qr,{type:'svg',width:280,margin:2,errorCorrectionLevel:'M'});
+        res.writeHead(200,{'Content-Type':'image/svg+xml; charset=utf-8'});res.end(svg);return;
+      }
       if(req.method==='GET' && (match=path.match(/^\/api\/me\/payments\/([^/]+)$/))) {
         const order=store.db.prepare('SELECT * FROM orders WHERE id=? AND user_id=?').get(decodeURIComponent(opaqueId(match[1])),user.id);
         if(!order) throw new HttpError(404,'order_not_found','Order not found.');
-        respond(res,200,{order:publicOrder(order)}); return;
+        respond(res,200,payments.checkout(order)); return;
       }
       if(req.method==='DELETE' && (match=path.match(/^\/api\/me\/devices\/([^/]+)$/))) {
         customerReady(); fields(body,[]);

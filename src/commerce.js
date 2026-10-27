@@ -68,7 +68,7 @@ export class Commerce {
   const requestId=text(body.request_id,'request_id',100);
   const platform=text(body.platform,'platform',40);
   const renewGrant=body.renew_grant_id?decodeURIComponent(opaqueId(body.renew_grant_id)):'';
-  if(!/^[A-Za-z0-9_./-]{1,40}$/.test(platform)||!/^[A-Za-z0-9_-]{16,100}$/.test(requestId)||!['wallet','stripe'].includes(body.payment_method)||!Number.isSafeInteger(body.expected_revision)) throw new HttpError(400,'invalid_purchase','Invalid purchase intent.');
+  if(!/^[A-Za-z0-9_./-]{1,40}$/.test(platform)||!/^[A-Za-z0-9_-]{16,100}$/.test(requestId)||!['wallet','stripe','alipay','wxpay','airwallex'].includes(body.payment_method)||!Number.isSafeInteger(body.expected_revision)) throw new HttpError(400,'invalid_purchase','Invalid purchase intent.');
   const replay=this.store.db.prepare('SELECT * FROM rentals WHERE user_id=? AND request_id=?').get(userId,requestId);
   if(replay) {
    if(replay.plan_id!==body.plan_id||replay.plan_revision!==body.expected_revision||replay.payment_method!==body.payment_method||replay.platform!==platform||(replay.renew_grant_id||'')!==renewGrant) throw new HttpError(409,'purchase_conflict','Request identity already belongs to a different purchase.');

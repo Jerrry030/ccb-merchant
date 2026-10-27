@@ -113,11 +113,12 @@ export async function fixture(t,options={}) {
   const config=loadConfig({UPSTREAM_URL:`http://127.0.0.1:${fakeCore.address().port}`,UPSTREAM_API_KEY:upstreamKey,UPSTREAM_TIMEOUT_MS:'500',...options.env},root);
   if(options.publicDir)config.publicDir=options.publicDir;
   if(options.withoutCore) {config.upstreamUrl=null;config.upstreamKey='';config.upstreamEnvironment=false;}
-  let app=createMerchant(config,{reconcileIntervalMs:0,mailer:options.mailer??null,paymentTransport:options.paymentTransport,onError:options.onError});
+  let app=createMerchant(config,{reconcileIntervalMs:0,mailer:options.mailer??null,mailTransportFactory:options.mailTransportFactory,paymentTransport:options.paymentTransport,onError:options.onError});
   app.server.listen(0,'127.0.0.1'); await once(app.server,'listening');
   config.port=app.server.address().port; config.publicOrigin=`http://127.0.0.1:${config.port}`;config.publicHost=`127.0.0.1:${config.port}`;
   const request=async(method,path,body,actor={})=>{
-    const headers={...(body!==undefined?{'Content-Type':'application/json','Content-Length':String(Buffer.byteLength(JSON.stringify(body)))}:{}),...(actor.cookie?{Cookie:actor.cookie}:{}),...(actor.csrf?{'X-CSRF-Token':actor.csrf}:{}),...(!['GET','HEAD'].includes(method) && !actor.native?{Origin:config.publicOrigin}:{}),...actor.headers};
+    const encoded=body===undefined?undefined:actor.raw===true?body:JSON.stringify(body);
+    const headers={...(body!==undefined?{'Content-Type':'application/json','Content-Length':String(Buffer.byteLength(encoded))}:{}),...(actor.cookie?{Cookie:actor.cookie}:{}),...(actor.csrf?{'X-CSRF-Token':actor.csrf}:{}),...(!['GET','HEAD'].includes(method) && !actor.native?{Origin:config.publicOrigin}:{}),...actor.headers};
     return await new Promise((resolve,reject)=>{
       const call=httpRequest(config.publicOrigin,{method,path,headers,agent:false},response=>{
         const chunks=[];
@@ -128,13 +129,13 @@ export async function fixture(t,options={}) {
           resolve({status:response.statusCode,data,raw,headers:responseHeaders,cookie:responseHeaders.get('set-cookie')?.split(';')[0],csrf:data?.csrf_token});
         });
       });
-      call.on('error',reject);call.end(body===undefined?undefined:JSON.stringify(body));
+      call.on('error',reject);call.end(encoded);
     });
   };
   const setupToken=(await readFile(app.store.setupFile,'utf8')).trim();
   const f={root,config,state,fakeCore,request,setupToken,get store(){return app.store;},get server(){return app.server;},get reconciler(){return app.reconciler;},async restart(){
     app.server.closeAllConnections(); await new Promise(resolve=>app.server.close(resolve));app.store.db.close();
-    app=createMerchant(config,{reconcileIntervalMs:0,mailer:options.mailer??null,paymentTransport:options.paymentTransport});
+    app=createMerchant(config,{reconcileIntervalMs:0,mailer:options.mailer??null,mailTransportFactory:options.mailTransportFactory,paymentTransport:options.paymentTransport});
     app.server.listen(config.port,'127.0.0.1');await once(app.server,'listening');
   }};
   t.after(async()=>{app.server.closeAllConnections();fakeCore.closeAllConnections();await Promise.all([new Promise(resolve=>app.server.close(resolve)),new Promise(resolve=>fakeCore.close(resolve))]);app.store.db.close();const actual=await realpath(root), inside=relative(await realpath(tmpdir()),actual);if(inside.startsWith('..')||isAbsolute(inside)||!basename(actual).startsWith('ccb-merchant-test-')) throw new Error('Refusing cleanup outside isolated test root');await rm(actual,{recursive:true,force:true});});
@@ -157,7 +158,7 @@ export function stripeFixture() {
     return Response.json(sessions.get(url.split('/').at(-1))||{error:'missing'});
   };
   const event=(sessionId,{id=`evt_${randomUUID().replaceAll('-','')}`,type='checkout.session.completed',timestamp=Math.floor(Date.now()/1000),secret='whsec_test_fixture',mutate}={})=>{
-    const payload={id,type,livemode:false,data:{object:{id:sessionId}}}; if(mutate) mutate(payload);
+    const payload={id,type,livemode:false,data:{object:structuredClone(sessions.get(sessionId)||{id:sessionId})}}; if(mutate) mutate(payload);
     const raw=JSON.stringify(payload), signature=`t=${timestamp},v1=${createHmac('sha256',secret).update(`${timestamp}.${raw}`).digest('hex')}`;
     return {raw,signature,payload};
   };

@@ -25,7 +25,7 @@ test('bootstrap secret stays private, one-time setup rotates cookie and cannot b
   const before=await f.request('GET','/api/public');
   assert.equal(before.data.setup_required,true);assert.equal(before.raw.includes(f.setupToken),false);
   assert.equal(before.data.site.public_origin,f.config.publicOrigin);
-  assert.deepEqual(before.data.features,{registration:false,email_verification:false,password_reset:false,payment:false,token_billing:false,term_rentals:false});
+  assert.deepEqual(before.data.features,{registration:false,email_verification:false,password_reset:false,payment:false,recharge:false,token_billing:false,term_rentals:false});
   assert.equal((await f.request('GET','/data/setup.secret')).status,404);
   assert.equal((await f.request('GET','/src/server.js')).status,404);
   assert.equal((await f.request('POST','/api/setup',{...credentials,setup_token:'incorrect'})).status,403);
@@ -89,8 +89,8 @@ test('unconfigured email/payment stay safely disabled and never create simulated
   const overview=await f.request('GET','/api/me/overview',undefined,admin);
   assert.deepEqual(overview.data.connection,{configured:false,available:false});assert.equal(overview.data.usage,null);
   assert.deepEqual((await f.request('GET','/api/me/wallet',undefined,admin)).data.wallet,{balance_minor:0,currency:'CNY'});
-  const settings=await f.request('GET','/api/admin/settings',undefined,admin);
-  assert.equal(settings.data.mail.configured,false);assert.equal(settings.data.payment.configured,false);
+  const mail=await f.request('GET','/api/admin/mail',undefined,admin), payment=await f.request('GET','/api/admin/payment',undefined,admin);
+  assert.equal(mail.data.mail.configured,false);assert.equal(payment.data.payment.configured,false);
 });
 
 test('registration requires verification; tokens are hashed, expire, single-use and resets revoke all sessions',async t=>{

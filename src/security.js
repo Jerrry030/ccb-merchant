@@ -81,7 +81,7 @@ export function requestBoundary(req, config, pathname) {
     if (req.headers.origin !== undefined) throw new HttpError(403, 'native_only', 'Runtime endpoints are for native clients only.');
     return;
   }
-  if (pathname === '/api/webhooks/stripe') return;
+  if (/^\/api\/webhooks\/(stripe|alipay|wxpay|easypay|suixingpay|airwallex)(?:\/[A-Za-z0-9_-]{1,100})?$/.test(pathname)) return;
   if (['GET', 'HEAD'].includes(req.method)) {
     if (pathname.startsWith('/api/') && req.headers['sec-fetch-site'] === 'cross-site') throw new HttpError(403, 'cross_site', 'Cross-site request rejected.');
     return;

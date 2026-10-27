@@ -1,109 +1,113 @@
-import { createHmac, randomUUID } from 'node:crypto';
-import { HttpError, digest, equalSecret } from './security.js';
+import { randomUUID } from 'node:crypto';
+import { HttpError, digest } from './security.js';
 import { publicOrder } from './store.js';
+import { readPaymentSettings, describePayment } from './payment-settings.js';
+import { paymentMethods } from '../public/payment-catalog.js';
+import { PaymentProvider, notificationOrder, validateProviderConfig } from './payment-providers.js';
 
 export class Payments {
-  constructor(config, store, transport=fetch, stripeOf=null) { this.config=config; this.store=store; this.transport=transport; this.stripeOf=stripeOf; }
-  get stripe() { return this.stripeOf ? this.stripeOf() : this.config.stripe; }
-  async stripeRequest(method,path,form,key) {
-    if (!this.stripe) throw new HttpError(503,'payment_disabled','Payments are not configured.');
-    try {
-      const response=await this.transport(`https://api.stripe.com/v1${path}`, { method,headers:{ Authorization:`Bearer ${this.stripe.secret}`, ...(form ? {'Content-Type':'application/x-www-form-urlencoded'}:{}), ...(key?{'Idempotency-Key':key}:{}) },body:form?.toString(),signal:AbortSignal.timeout(15000),redirect:'error' });
-      if (!response.ok) { await response.body?.cancel(); throw new Error('Stripe rejected'); }
-      const chunks=[]; let size=0;
-      for await (const chunk of response.body) { size+=chunk.length; if(size>1048576) throw new Error('Stripe response limit'); chunks.push(chunk); }
-      return JSON.parse(Buffer.concat(chunks).toString('utf8'));
-    } catch { throw new HttpError(503,method==='GET'?'payment_verification_unavailable':'payment_outcome_unknown',method==='GET'?'Payment confirmation unavailable; webhook may retry safely.':'Checkout creation outcome is unknown. Check your orders; no automatic retry was made.'); }
+  constructor(config,store,transport){this.config=config;this.store=store;this.transport=transport;}
+  validateIntent(userId,amount,recharge,method) {
+    const settings=describePayment(this.config,this.store),available=settings.methods.filter(item=>item.offered);
+    if(!settings.configured||(recharge&&!settings.recharge_enabled))throw new HttpError(503,'payment_disabled','New payments are disabled.');
+    if(method===undefined&&available.length===1)method=available[0].id;
+    const selected=available.find(item=>item.id===method);
+    if(!selected)throw new HttpError(400,'invalid_payment_method','Select an available payment method.');
+    if(!Number.isSafeInteger(amount)||amount<settings.min_amount_minor||amount>settings.max_amount_minor)throw new HttpError(400,'invalid_amount','Amount outside the configured online payment range.');
+    const pending=this.store.db.prepare("SELECT count(*) AS n FROM orders WHERE user_id=? AND status IN ('creating','pending','unknown')").get(userId).n;
+    if(pending>=settings.max_pending_orders)throw new HttpError(409,'payment_pending_limit','Finish existing orders before creating another payment.');
+    const start=new Date().toISOString().slice(0,10)+'T00:00:00.000Z';
+    const used=this.store.db.prepare("SELECT coalesce(sum(amount_minor),0) AS n FROM orders WHERE user_id=? AND created_at>=? AND status NOT IN ('failed','expired')").get(userId,start).n;
+    if(settings.daily_limit_minor&&used+amount>settings.daily_limit_minor)throw new HttpError(409,'payment_daily_limit','Daily payment limit reached, including pending reservations.');
+    const provider=paymentMethods[selected.id].sources.find(source=>source.id===selected.source).provider;
+    const configuration=readPaymentSettings(this.config,this.store).providers[provider];
+    validateProviderConfig(provider,configuration);
+    return {settings,method:selected.id,provider,configuration};
   }
-  async create(userId,amount,rentalId=null) {
-    if (!this.stripe) throw new HttpError(503,'payment_disabled','Payments are not configured.');
-    if (!Number.isSafeInteger(amount) || amount<this.config.paymentMin || amount>this.config.paymentMax) throw new HttpError(400,'invalid_amount',`Amount must be integer minor units between ${this.config.paymentMin} and ${this.config.paymentMax}.`);
+  provider(order) {
+    const configuration=this.store.openPayment(order.provider_config,order.id);
+    validateProviderConfig(order.provider,configuration);
+    return new PaymentProvider(order.provider,configuration,this.transport,this.config.publicOrigin);
+  }
+  checkout(order) {
+    const data=this.store.openPayment(order.checkout_data,'checkout:'+order.id);
+    // The Airwallex intent secret is owner-scoped, encrypted at rest, and only
+    // returned by the dedicated checkout endpoint, never in lists or audit data.
+    return {order:publicOrder(order),checkout_url:data.url||null,checkout_origin:data.url?new URL(data.url).origin:null,qr_available:Boolean(data.qr),checkout_path:data.airwallex?'/airwallex-checkout.html?order='+encodeURIComponent(order.id):null};
+  }
+  async create(userId,amount,{rentalId=null,method,clientIp='127.0.0.1'}={}) {
     const rental=rentalId?this.store.db.prepare('SELECT * FROM rentals WHERE id=? AND user_id=?').get(rentalId,userId):null;
-    if(rentalId && (!rental || rental.status!=='awaiting_payment' || rental.payment_method!=='stripe' || rental.amount_minor!==amount)) throw new HttpError(409,'order_state','Invalid rental checkout.');
-    const id=randomUUID(), now=new Date().toISOString();
-    this.store.db.prepare("INSERT INTO orders(id,user_id,amount_minor,currency,status,created_at,updated_at,rental_id) VALUES (?,?,?,'CNY','creating',?,?,?)").run(id,userId,amount,now,now,rentalId);
-    this.store.audit(userId,'checkout.create',id,'pending');
-    const form=new URLSearchParams({ mode:'payment', client_reference_id:id,
-      'metadata[order_id]':id,'metadata[user_id]':userId,
-      'line_items[0][price_data][currency]':'cny', 'line_items[0][price_data][product_data][name]':rental?`${rental.name} · ${rental.duration_days} days`:'Merchant wallet credit',
-      'line_items[0][price_data][unit_amount]':String(amount),'line_items[0][quantity]':'1',
-      success_url:`${this.config.publicOrigin}/${rental?'orders':'wallet'}?order=${id}`,cancel_url:`${this.config.publicOrigin}/${rental?'orders':'wallet'}?order=${id}` });
-    if(rental) form.set('payment_method_types[0]','card');
+    if(rentalId&&(!rental||rental.status!=='awaiting_payment'||rental.payment_method==='wallet'||rental.amount_minor!==amount||rental.payment_method!==method))throw new HttpError(409,'order_state','Invalid rental checkout.');
+    const id=randomUUID().replaceAll('-',''),now=new Date().toISOString();let intent;
+    this.store.transaction(()=>{
+      intent=this.validateIntent(userId,amount,!rentalId,method);
+      this.store.db.prepare("INSERT INTO orders(id,user_id,amount_minor,currency,status,created_at,updated_at,rental_id,provider,payment_method,provider_config,checkout_data) VALUES (?,?,?,'CNY','creating',?,?,?,?,?,?,?)").run(id,userId,amount,now,now,rentalId,intent.provider,intent.method,this.store.sealPayment(intent.configuration,id),this.store.sealPayment({},'checkout:'+id));
+      this.store.audit(userId,'checkout.create',id,'pending');
+    });
+    const order=this.store.db.prepare('SELECT * FROM orders WHERE id=?').get(id);
     try {
-      const session=await this.stripeRequest('POST','/checkout/sessions',form,`merchant-order-${id}`);
-      let checkout;
-      try { checkout=new URL(session.url); } catch { throw new Error('Missing checkout URL'); }
-      if (!/^cs_[A-Za-z0-9_]+$/.test(session.id) || checkout.protocol!=='https:' || checkout.hostname!=='checkout.stripe.com' || checkout.username || checkout.password) throw new Error('Unexpected Checkout response');
-      this.store.db.prepare("UPDATE orders SET stripe_session_id=?,checkout_url=?,status=CASE WHEN status IN ('paid','expired','failed') THEN status ELSE 'pending' END,updated_at=? WHERE id=? AND (stripe_session_id IS NULL OR stripe_session_id=?)").run(session.id,checkout.href,new Date().toISOString(),id,session.id);
-      return { order:publicOrder(this.store.db.prepare('SELECT * FROM orders WHERE id=?').get(id)),checkout_url:checkout.href };
-    } catch(error) {
+      const result=await this.provider(order).create(order,{subject:rental?rental.name+' · '+rental.duration_days+' days':intent.settings.product_name,clientIp,expiresAt:Math.floor(Date.now()/1000)+Math.min(86400,intent.settings.order_timeout_minutes*60+30)});
+      if(result.qr&&(typeof result.qr!=='string'||result.qr.length>4096||!/^https:\/\/|^weixin:\/\/wxpay\/bizpayurl\?|^alipays:\/\//.test(result.qr)))throw new Error('Invalid payment QR payload');
+      if(!result.url&&!result.qr&&!result.airwallex)throw new Error('Missing checkout instructions');
+      const changed=this.store.db.prepare("UPDATE orders SET provider_reference=coalesce(?,provider_reference),checkout_data=?,status=CASE WHEN status IN ('paid','expired','failed') THEN status ELSE 'pending' END,updated_at=? WHERE id=? AND (provider_reference IS NULL OR ? IS NULL OR provider_reference=?)").run(result.reference||null,this.store.sealPayment(result,'checkout:'+id),new Date().toISOString(),id,result.reference||null,result.reference||null);
+      if(changed.changes!==1)throw new Error('Conflicting provider identity');
+      return this.checkout(this.store.db.prepare('SELECT * FROM orders WHERE id=?').get(id));
+    }catch {
       this.store.db.prepare("UPDATE orders SET status='unknown',updated_at=? WHERE id=? AND status='creating'").run(new Date().toISOString(),id);
-      if(error instanceof HttpError) throw error;
-      throw new HttpError(503,'payment_outcome_unknown','Checkout outcome is unknown. Check your orders before starting another payment.');
+      throw new HttpError(503,'payment_outcome_unknown','Payment creation outcome is unknown; inspect the existing order. No automatic retry was made.');
     }
   }
-  async webhook(raw,signature) {
-    if (!this.stripe) throw new HttpError(503,'payment_disabled','Payments are not configured.');
-    if (typeof signature!=='string' || signature.length>2048) throw new HttpError(400,'invalid_signature','Invalid webhook signature.');
-    const parts=signature.split(',').map(s=>s.trim().split('='));
-    const timestamps=parts.filter(([k])=>k==='t'), signatures=parts.filter(([k])=>k==='v1').map(([,v])=>v);
-    const timestamp=Number(timestamps[0]?.[1]);
-    const expected=createHmac('sha256',this.stripe.webhookSecret).update(`${timestamp}.`).update(raw).digest('hex');
-    if(timestamps.length!==1 || !Number.isSafeInteger(timestamp) || Math.abs(Date.now()/1000-timestamp)>300 || !signatures.some(sig=>equalSecret(sig,expected))) throw new HttpError(400,'invalid_signature','Invalid or expired webhook signature.');
-    let event; try { event=JSON.parse(raw.toString('utf8')); } catch { throw new HttpError(400,'invalid_event','Invalid webhook payload.'); }
-    if(typeof event.id!=='string' || !/^evt_[A-Za-z0-9_]{1,200}$/.test(event.id) || event.livemode!==this.stripe.live) throw new HttpError(400,'invalid_event','Invalid webhook environment.');
-    const bodyDigest=digest(raw);
-    const previous=this.store.db.prepare('SELECT digest FROM webhook_events WHERE id=?').get(event.id);
-    if(previous) { if(previous.digest!==bodyDigest) throw new HttpError(409,'event_conflict','Webhook event identity conflict.'); return {ok:true}; }
-    const relevant=['checkout.session.completed','checkout.session.async_payment_succeeded','checkout.session.async_payment_failed','checkout.session.expired'];
-    if(!relevant.includes(event.type)) return {ok:true};
-    const reported=event.data?.object;
-    if(!reported || !/^cs_[A-Za-z0-9_]+$/.test(reported.id || '')) throw new HttpError(400,'invalid_event','Invalid Checkout session.');
-    // The signed event is notification, not a browser-provided claim. Re-read the session server-to-server.
-    const session=await this.stripeRequest('GET',`/checkout/sessions/${encodeURIComponent(reported.id)}`);
-    if(session.id!==reported.id) throw new HttpError(409,'payment_mismatch','Checkout session identity mismatch.');
-    this.confirm(session,{id:event.id,digest:bodyDigest,type:event.type});
-    return {ok:true};
+  async webhook(provider,raw,headers,selectedOrder) {
+    let id;
+    try{
+      if(provider==='wxpay'&&!selectedOrder){
+        const current=readPaymentSettings(this.config,this.store).providers.wxpay;
+        validateProviderConfig('wxpay',current);
+        const decoded=new PaymentProvider('wxpay',current,this.transport,this.config.publicOrigin).decodeWxNotification(raw.toString('utf8'),headers);
+        if(!decoded.data)return;
+        id=decoded.data.out_trade_no;
+      }else id=selectedOrder||notificationOrder(provider,raw.toString('utf8'));
+    }catch{throw new HttpError(400,'invalid_signature','Invalid payment notification.');}
+    const order=typeof id==='string'?this.store.db.prepare('SELECT * FROM orders WHERE id=? AND provider=?').get(id,provider):null;
+    if(!order)throw new HttpError(400,'invalid_signature','Unrecognized payment notification.');
+    const adapter=this.provider(order);let notification;
+    try{notification=adapter.notification(raw.toString('utf8'),headers,order);}catch(error){if(error instanceof HttpError&&error.status===409)throw error;throw new HttpError(400,'invalid_signature','Invalid payment signature or payload.');}
+    if(!notification)return;
+    const event={id:provider+':'+notification.eventId,digest:digest(raw),type:notification.eventType};
+    const prior=this.store.db.prepare('SELECT digest FROM webhook_events WHERE id=?').get(event.id);
+    if(prior){if(prior.digest!==event.digest)throw new HttpError(409,'event_conflict','Webhook event identity conflict.');return;}
+    let observation;
+    try{observation=await adapter.query(order,notification.reference||order.provider_reference);}catch(error){if(error instanceof HttpError&&error.code==='payment_mismatch')throw error;throw new HttpError(503,'payment_verification_unavailable','Provider confirmation unavailable; notification may retry safely.');}
+    if(notification.reference&&observation.reference!==notification.reference)throw new HttpError(409,'payment_mismatch','Notification and query identities differ.');
+    if(event.type==='checkout.session.async_payment_failed'&&observation.status==='pending')observation.status='failed';
+    this.confirm(order,observation,event);
   }
   async reconcile(orderId) {
     const order=this.store.db.prepare('SELECT * FROM orders WHERE id=?').get(orderId);
-    if(!order) throw new HttpError(404,'order_not_found','Order not found.');
-    if(!order.stripe_session_id) throw new HttpError(409,'payment_outcome_unknown','No confirmed session ID. Wait for the signed webhook; do not create another payment for this order.');
-    const session=await this.stripeRequest('GET',`/checkout/sessions/${encodeURIComponent(order.stripe_session_id)}`);
-    if(session.id!==order.stripe_session_id) throw new HttpError(409,'payment_mismatch','Checkout session identity mismatch.');
-    this.confirm(session);
+    if(!order)throw new HttpError(404,'order_not_found','Order not found.');
+    try{const result=await this.provider(order).query(order);this.confirm(order,result);}catch(error){if(error instanceof HttpError)throw error;throw new HttpError(503,'payment_verification_unavailable','Provider confirmation unavailable.');}
     return publicOrder(this.store.db.prepare('SELECT * FROM orders WHERE id=?').get(orderId));
   }
-  confirm(session,event=null) {
-    const order=this.store.db.prepare('SELECT * FROM orders WHERE id=?').get(session.metadata?.order_id || '');
-    if(!order || session.mode!=='payment' || session.livemode!==this.stripe.live || session.client_reference_id!==order.id || session.metadata?.user_id!==order.user_id || session.currency!=='cny' || session.amount_total!==order.amount_minor || (order.stripe_session_id && order.stripe_session_id!==session.id)) throw new HttpError(409,'payment_mismatch','Checkout session does not match the immutable order.');
+  confirm(order,observation,event=null) {
     const now=new Date().toISOString();
     this.store.transaction(()=>{
-      if(event) {
-        const recorded=this.store.db.prepare('SELECT digest FROM webhook_events WHERE id=?').get(event.id);
-        if(recorded) { if(recorded.digest!==event.digest) throw new HttpError(409,'event_conflict','Webhook event identity conflict.'); return; }
-      }
+      if(event){const recorded=this.store.db.prepare('SELECT digest FROM webhook_events WHERE id=?').get(event.id);if(recorded){if(recorded.digest!==event.digest)throw new HttpError(409,'event_conflict','Webhook event identity conflict.');return;}}
       const current=this.store.db.prepare('SELECT * FROM orders WHERE id=?').get(order.id);
-      if(current.stripe_session_id && current.stripe_session_id!==session.id) throw new HttpError(409,'payment_mismatch','Checkout session identity conflict.');
+      if(current.provider_reference&&observation.reference&&current.provider_reference!==observation.reference)throw new HttpError(409,'payment_mismatch','Provider transaction identity conflict.');
       const credit=this.store.db.prepare('SELECT reference FROM ledger WHERE order_id=?').get(order.id);
-      if(credit && credit.reference!==session.id) throw new HttpError(409,'payment_mismatch','Ledger reference conflict.');
-      const paid=session.payment_status==='paid' && session.status==='complete';
-      if(paid) {
-        if(!credit && !Number.isSafeInteger(this.store.wallet(order.user_id).balance_minor+order.amount_minor)) throw new HttpError(409,'wallet_limit','Wallet safe-integer limit reached; credit requires operator review.');
-        this.store.db.prepare("INSERT INTO ledger(id,user_id,order_id,amount_minor,currency,kind,reference,created_at) VALUES (?,?,?,?,'CNY','stripe_credit',?,?) ON CONFLICT(order_id) DO NOTHING").run(randomUUID(),order.user_id,order.id,order.amount_minor,session.id,now);
-        if(order.rental_id) {
-          const rental=this.store.db.prepare('SELECT * FROM rentals WHERE id=?').get(order.rental_id);
-          // A late confirmed payment after an earlier terminal unpaid observation is
-          // kept as wallet credit for review, never silently reactivates a cancelled sale.
-          if(rental.status!=='cancelled') this.store.fundRental(rental);
-          else this.store.db.prepare("UPDATE rentals SET last_error='late_payment_wallet_credit',updated_at=? WHERE id=?").run(now,rental.id);
-        }
+      const receipt=order.provider==='stripe'?observation.reference:order.provider+':'+observation.reference;
+      if(credit&&observation.reference&&credit.reference!==receipt)throw new HttpError(409,'payment_mismatch','Ledger reference conflict.');
+      const paid=observation.status==='paid';
+      if(paid){
+        if(!observation.reference)throw new HttpError(409,'payment_mismatch','Paid receipt has no transaction identity.');
+        if(!credit&&!Number.isSafeInteger(this.store.wallet(order.user_id).balance_minor+order.amount_minor))throw new HttpError(409,'wallet_limit','Wallet safe integer limit reached.');
+        this.store.db.prepare("INSERT INTO ledger(id,user_id,order_id,amount_minor,currency,kind,reference,created_at) VALUES (?,?,?,?,'CNY',?,?,?) ON CONFLICT(order_id) DO NOTHING").run(randomUUID(),order.user_id,order.id,order.amount_minor,order.provider==='stripe'?'stripe_credit':'payment_credit',receipt,now);
+        if(order.rental_id){const rental=this.store.db.prepare('SELECT * FROM rentals WHERE id=?').get(order.rental_id);if(rental.status!=='cancelled')this.store.fundRental(rental);else this.store.db.prepare("UPDATE rentals SET last_error='late_payment_wallet_credit',updated_at=? WHERE id=?").run(now,rental.id);}
       }
-      const next=paid?'paid':session.status==='expired'?'expired':event?.type==='checkout.session.async_payment_failed'?'failed':'pending';
-      this.store.db.prepare("UPDATE orders SET stripe_session_id=?,status=CASE WHEN status='paid' THEN status ELSE ? END,next_check_at=?,updated_at=? WHERE id=?").run(session.id,next,Date.now()+60000,now,order.id);
-      if(order.rental_id && current.status!=='paid' && ['expired','failed'].includes(next)) this.store.db.prepare("UPDATE rentals SET status='cancelled',last_error='payment_unpaid',revision=revision+1,updated_at=? WHERE id=? AND status='awaiting_payment'").run(now,order.rental_id);
-      this.store.audit(null,event?'checkout.webhook':'checkout.reconcile',order.id,next);
-      if(event) this.store.db.prepare('INSERT INTO webhook_events VALUES (?,?,?)').run(event.id,event.digest,now);
+      this.store.db.prepare("UPDATE orders SET provider_reference=coalesce(?,provider_reference),status=CASE WHEN status='paid' THEN status ELSE ? END,next_check_at=?,updated_at=? WHERE id=?").run(observation.reference,observation.status,Date.now()+60000,now,order.id);
+      if(order.rental_id&&current.status!=='paid'&&['expired','failed'].includes(observation.status))this.store.db.prepare("UPDATE rentals SET status='cancelled',last_error='payment_unpaid',revision=revision+1,updated_at=? WHERE id=? AND status='awaiting_payment'").run(now,order.rental_id);
+      this.store.audit(null,event?'checkout.webhook':'checkout.reconcile',order.id,observation.status);
+      if(event)this.store.db.prepare('INSERT INTO webhook_events VALUES (?,?,?)').run(event.id,event.digest,now);
     });
   }
 }

@@ -71,11 +71,13 @@ test('admin uses the same layout and sees only genuine empty data/configuration'
 });
 
 
-test('payment settings show configurable sources but not uncollectable checkout methods', async t => {
+test('payment settings show supported sources without configuration-only warnings', async t => {
   const h = await harness(t); await login(h,'admin');
   await h.page.getByRole('link',{name:'站点设置',exact:true}).click();
-  await h.page.getByRole('tab',{name:'邮件与支付',exact:true}).click();
-  await h.page.getByText('不能创建支付单',{exact:false}).waitFor();
+  await h.page.getByRole('tab',{name:'支付配置',exact:true}).click();
+  assert.equal(await h.page.getByRole('tab',{name:'邮件配置',exact:true}).count(),1);
+  assert.equal(await h.page.getByRole('tab',{name:'邮件与支付',exact:true}).count(),0);
+  await h.page.getByRole('tab',{name:'前台方式',exact:true}).click();
   await h.page.getByLabel('支付宝来源',{exact:true}).waitFor();
   await h.page.getByLabel('微信支付来源',{exact:true}).waitFor();
   assert.equal(await h.page.getByRole('button',{name:'保存支付方式',exact:true}).count(),1);
@@ -162,14 +164,14 @@ test('last-admin error is actionable and never locally changes the current role'
 test('ambiguous write is not retried or reported successful',async t => {
   const h = await harness(t,{features:{payment:true}}); await login(h); await h.page.goto(h.fixture.origin+'/wallet');
   h.fixture.state.disconnected.add('/api/me/payments'); await h.page.getByLabel('充值金额（人民币元）').fill('12.34');
-  await h.page.getByRole('button',{name:'创建 Stripe 支付订单',exact:true}).click(); await h.page.getByRole('button',{name:'创建订单',exact:true}).click();
-  await h.page.getByText('操作结果尚未确认',{exact:true}).waitFor(); assert.equal(await h.page.getByRole('button',{name:'创建 Stripe 支付订单',exact:true}).isDisabled(),true);
+  await h.page.getByRole('button',{name:'创建支付订单',exact:true}).click(); await h.page.getByRole('button',{name:'创建订单',exact:true}).click();
+  await h.page.getByText('操作结果尚未确认',{exact:true}).waitFor(); assert.equal(await h.page.getByRole('button',{name:'创建支付订单',exact:true}).isDisabled(),true);
   assert.equal(h.fixture.state.requests.filter(r => r.path === '/api/me/payments').length,1); assert.equal(h.fixture.state.orders.length,0);
 });
 
 test('unsafe checkout URL is inert and amount is sent as integer minor units',async t => {
   const h = await harness(t,{features:{payment:true},checkoutUrl:'javascript:globalThis.checkoutLeak=true'}); await login(h); await h.page.goto(h.fixture.origin+'/wallet');
-  await h.page.getByLabel('充值金额（人民币元）').fill('12.34'); await h.page.getByRole('button',{name:'创建 Stripe 支付订单',exact:true}).click(); await h.page.getByRole('button',{name:'创建订单',exact:true}).click();
+  await h.page.getByLabel('充值金额（人民币元）').fill('12.34'); await h.page.getByRole('button',{name:'创建支付订单',exact:true}).click(); await h.page.getByRole('button',{name:'创建订单',exact:true}).click();
   await h.page.getByText('订单已记录，但支付链接不可安全使用',{exact:true}).waitFor(); assert.equal(await h.page.locator('a[href^="javascript:"]').count(),0);
   assert.equal(h.fixture.state.requests.find(r => r.path === '/api/me/payments').body.amount_minor,1234); assert.equal(await h.page.evaluate(() => globalThis.checkoutLeak),undefined);
   await h.page.goto(h.fixture.origin+'/wallet?order=order-1&success=true'); await h.page.getByRole('heading',{name:'返回后的订单核对',exact:true}).waitFor(); assert.equal(await h.page.getByText('已支付',{exact:true}).count(),0); assert.equal(h.fixture.state.orders[0].status,'pending');
@@ -177,8 +179,8 @@ test('unsafe checkout URL is inert and amount is sent as integer minor units',as
 
 test('valid checkout is an explicit external link, never an automatic redirect or charge',async t => {
   const h = await harness(t,{features:{payment:true}}); await login(h); await h.page.goto(h.fixture.origin+'/wallet');
-  await h.page.getByLabel('充值金额（人民币元）').fill('20.00'); await h.page.getByRole('button',{name:'创建 Stripe 支付订单',exact:true}).click(); await h.page.getByRole('button',{name:'创建订单',exact:true}).click();
-  const link = h.page.getByRole('link',{name:'打开 Stripe 收银台 ↗',exact:true}); await link.waitFor(); assert.equal(await link.getAttribute('target'),'_blank'); assert.equal(await link.getAttribute('rel'),'noopener noreferrer'); assert.equal(new URL(h.page.url()).origin,h.fixture.origin);
+  await h.page.getByLabel('充值金额（人民币元）').fill('20.00'); await h.page.getByRole('button',{name:'创建支付订单',exact:true}).click(); await h.page.getByRole('button',{name:'创建订单',exact:true}).click();
+  const link = h.page.getByRole('link',{name:'前往支付收银台 ↗',exact:true}); await link.waitFor(); assert.equal(await link.getAttribute('target'),'_blank'); assert.equal(await link.getAttribute('rel'),'noopener noreferrer'); assert.equal(new URL(h.page.url()).origin,h.fixture.origin);
 });
 
 test('API failures are not converted into empty success and malicious display text is inert',async t => {
@@ -229,8 +231,18 @@ test('settings save only public fields; profile password update returns to authe
 });
 
 test('loading is visible and expired sessions explicitly request fresh login',async t => {
-  const h = await harness(t); await login(h); h.fixture.state.delays.set('/api/me/grants',600);
-  await h.page.getByRole('link',{name:'我的账号',exact:true}).click(); await h.page.getByText('正在读取最新数据…',{exact:true}).waitFor(); await h.page.getByText('还没有账号',{exact:true}).waitFor();
+  const h = await harness(t); await login(h);
+  let release;
+  const responseGate = new Promise(resolve => { release = resolve; });
+  t.after(() => release());
+  // Hold the actual accounts request until the loading state has been observed.
+  // A delay on the retired grants endpoint only sampled a scheduling race.
+  await h.page.route(h.fixture.origin + '/api/me/accounts',async route => { await responseGate; await route.continue(); });
+  await h.page.getByRole('link',{name:'我的账号',exact:true}).click();
+  try { await h.page.getByText('正在读取最新数据…',{exact:true}).waitFor(); }
+  finally { release(); }
+  await h.page.getByText('还没有账号',{exact:true}).waitFor();
+  await h.page.unroute(h.fixture.origin + '/api/me/accounts');
   h.fixture.state.sessions.clear(); await h.page.getByRole('link',{name:'我的账号',exact:true}).click(); await h.page.getByText('登录已失效',{exact:true}).waitFor();
   await h.page.getByRole('button',{name:'重新登录',exact:true}).click(); await h.page.getByRole('heading',{name:'欢迎回来',exact:true}).waitFor();
   await h.page.getByLabel('电子邮箱',{exact:true}).fill(fixtureAccounts.member.email); await h.page.getByLabel('密码',{exact:true}).fill(fixtureAccounts.member.password); await h.page.getByRole('button',{name:'登录工作台',exact:true}).click(); await h.page.getByRole('heading',{name:'我的账号',exact:true}).first().waitFor();
@@ -239,6 +251,6 @@ test('loading is visible and expired sessions explicitly request fresh login',as
 test('unsafe return targets and non-Stripe HTTPS checkout origins are never navigated',async t => {
   const h = await harness(t,{features:{payment:true},checkoutUrl:'https://untrusted.invalid/checkout'}); await login(h,'member','/login?next=https%3A%2F%2Funtrusted.invalid%2Fsteal');
   assert.equal(new URL(h.page.url()).pathname,'/'); await h.page.goto(h.fixture.origin+'/wallet'); await h.page.getByLabel('充值金额（人民币元）').fill('20.00');
-  await h.page.getByRole('button',{name:'创建 Stripe 支付订单',exact:true}).click(); await h.page.getByRole('button',{name:'创建订单',exact:true}).click(); await h.page.getByText('订单已记录，但支付链接不可安全使用',{exact:true}).waitFor();
-  assert.equal(await h.page.getByRole('link',{name:'打开 Stripe 收银台 ↗',exact:true}).count(),0);
+  await h.page.getByRole('button',{name:'创建支付订单',exact:true}).click(); await h.page.getByRole('button',{name:'创建订单',exact:true}).click(); await h.page.getByText('订单已记录，但支付链接不可安全使用',{exact:true}).waitFor();
+  assert.equal(await h.page.getByRole('link',{name:'前往支付收银台 ↗',exact:true}).count(),0);
 });

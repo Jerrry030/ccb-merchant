@@ -129,3 +129,17 @@ test('late payment after a confirmed expired order is visible wallet credit, not
  await f.reconciler.run();const row=f.store.db.prepare('SELECT * FROM rentals WHERE id=?').get(purchase.data.rental.id);
  assert.equal(row.status,'cancelled');assert.equal(row.last_error,'late_payment_wallet_credit');assert.equal(f.state.grants.length,0);assert.equal(f.store.wallet(user.id).balance_minor,1500);
 });
+
+
+test('disabling recharge does not disable online term purchases or replay of admitted orders',async t=>{
+ const {f,admin,member,plan,stripe}=await shop(t);
+ const updated=await f.request('PATCH','/api/admin/payment',{expected_revision:1,recharge_enabled:false},admin);
+ assert.equal(updated.status,200);assert.equal(updated.data.features.payment,true);assert.equal(updated.data.features.recharge,false);
+ assert.equal((await f.request('POST','/api/me/payments',{amount_minor:300},member)).data.error.code,'payment_disabled');
+ const body={plan_id:plan.id,expected_revision:plan.revision,payment_method:'stripe',platform:'MacOS/arm64',request_id:randomUUID()};
+ const purchase=await f.request('POST','/api/me/rentals',body,member);
+ assert.equal(purchase.status,201);assert.match(purchase.data.payment.checkout_url,/^https:\/\/checkout.stripe.com/);
+ assert.equal(new URLSearchParams(stripe.calls.findLast(call=>call.options.method==='POST').options.body).get('payment_method_types[0]'),'card');
+ assert.equal((await f.request('PATCH','/api/admin/payment',{expected_revision:2,enabled:false},admin)).status,200);
+ const replay=await f.request('POST','/api/me/rentals',body,member);assert.equal(replay.status,200);assert.equal(replay.data.payment.checkout_url,purchase.data.payment.checkout_url);
+});

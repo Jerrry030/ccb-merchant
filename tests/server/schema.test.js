@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { DatabaseSync } from 'node:sqlite';
-import { mkdtemp,rm,realpath,cp,readFile } from 'node:fs/promises';
+import { mkdtemp,rm,realpath,cp,readFile,rename } from 'node:fs/promises';
 import { join,relative,isAbsolute,basename } from 'node:path';
 import { tmpdir } from 'node:os';
 import { Store } from '../../src/store.js';
@@ -10,7 +10,7 @@ test('fresh schema has the current ledger and local API tables, and reopen prese
  const data=await mkdtemp(join(tmpdir(),'ccb-schema-'));
  t.after(async()=>{const actual=await realpath(data),inside=relative(await realpath(tmpdir()),actual);if(inside.startsWith('..')||isAbsolute(inside)||!basename(actual).startsWith('ccb-schema-'))throw new Error('Unsafe fixture cleanup');await rm(actual,{recursive:true,force:true});});
  const config={dataDir:data,siteName:'Schema fixture'};let store=new Store(config);
- assert.equal(store.db.prepare('PRAGMA application_id').get().application_id,1128481357);assert.equal(store.db.prepare('PRAGMA user_version').get().user_version,4);
+ assert.equal(store.db.prepare('PRAGMA application_id').get().application_id,1128481357);assert.equal(store.db.prepare('PRAGMA user_version').get().user_version,5);
  const tables=store.db.prepare("SELECT name FROM sqlite_schema WHERE type='table'").all().map(v=>v.name);
  for(const name of ['users','ledger','rentals','plans','access_accounts','access_keys','access_grants','access_devices'])assert.ok(tables.includes(name),name);
  assert.ok(store.db.prepare('PRAGMA table_info(access_keys)').all().some(column=>column.name==='token'));
@@ -53,5 +53,22 @@ test('recognized version-2 preview data upgrades additively without changing use
  const db=new DatabaseSync(join(data,'merchant.sqlite'));
  let schema=await readFile(new URL('../../src/schema.sql',import.meta.url),'utf8');schema=schema.replace("  platform TEXT NOT NULL DEFAULT '',\n",'').replace(',payment_method,platform ON rentals',',payment_method ON rentals').replace('PRAGMA user_version=4','PRAGMA user_version=2');
  db.exec(schema);db.prepare("INSERT INTO users(id,email,display_name,password_hash,role,status,created_at) VALUES('kept','kept@example.test','Kept','fixture','admin','active','2026-10-26')").run();db.prepare("INSERT INTO settings VALUES('setup_complete','true')").run();db.prepare("INSERT INTO orders(id,user_id,amount_minor,currency,status,created_at,updated_at) VALUES('payment','kept',100,'CNY','paid','2026-10-26','2026-10-26')").run();db.prepare("INSERT INTO ledger(id,user_id,order_id,amount_minor,currency,kind,reference,created_at) VALUES('entry','kept','payment',100,'CNY','stripe_credit','test','2026-10-26')").run();db.close();
- const store=new Store({dataDir:data,siteName:'Upgrade fixture'});assert.equal(store.wallet('kept').balance_minor,100);assert.equal(store.db.prepare('SELECT id FROM users').get().id,'kept');assert.equal(store.db.prepare('PRAGMA user_version').get().user_version,4);assert.ok(store.db.prepare('PRAGMA table_info(rentals)').all().some(c=>c.name==='account_lease_id'));store.db.close();
+ const store=new Store({dataDir:data,siteName:'Upgrade fixture'});assert.equal(store.wallet('kept').balance_minor,100);assert.equal(store.db.prepare('SELECT id FROM users').get().id,'kept');assert.equal(store.db.prepare('PRAGMA user_version').get().user_version,5);assert.ok(store.db.prepare('PRAGMA table_info(rentals)').all().some(c=>c.name==='account_lease_id'));store.db.close();
+});
+
+
+test('v4 payment migration preserves receipts and credentials, requires draft activation, and refuses a missing encryption key',async t=>{
+ const data=await mkdtemp(join(tmpdir(),'ccb-schema-'));
+ t.after(async()=>{const actual=await realpath(data),inside=relative(await realpath(tmpdir()),actual);if(inside.startsWith('..')||isAbsolute(inside)||!basename(actual).startsWith('ccb-schema-'))throw new Error('Unsafe fixture cleanup');await rm(actual,{recursive:true,force:true});});
+ const config={dataDir:data,siteName:'Payment upgrade'},db=new DatabaseSync(join(data,'merchant.sqlite'));
+ db.exec(await readFile(new URL('../../src/schema.sql',import.meta.url),'utf8'));
+ db.exec("INSERT INTO users(id,email,display_name,password_hash,role,status,created_at) VALUES('owner','owner@example.test','Owner','fixture','admin','active','2026-10-26'); INSERT INTO settings VALUES('setup_complete','true'); INSERT INTO orders(id,user_id,amount_minor,currency,status,stripe_session_id,checkout_url,created_at,updated_at) VALUES('legacy','owner',1234,'CNY','paid','cs_test_legacy','https://checkout.stripe.com/pay/legacy','2026-10-26','2026-10-26'); INSERT INTO ledger(id,user_id,order_id,amount_minor,currency,kind,reference,created_at) VALUES('receipt','owner','legacy',1234,'CNY','stripe_credit','cs_test_legacy','2026-10-26');");
+ db.prepare('INSERT INTO settings VALUES(?,?)').run('services',JSON.stringify({stripe:{secret:'sk_test_legacy',webhook_secret:'whsec_legacy'},payment_catalog:{providers:{easypay:{enabled:true,pid:'10001',pkey:'preserved-fixture-key',api_base:'https://easy.example.test'}},methods:{alipay:{enabled:true,source:'easypay_alipay'}}}}));db.close();
+ let store=new Store(config);const order=store.db.prepare('SELECT * FROM orders').get();assert.equal(order.provider,'stripe');assert.equal(order.provider_reference,'cs_test_legacy');assert.equal(store.wallet('owner').balance_minor,1234);
+ assert.equal(store.openPayment(order.provider_config,order.id).secret_key,'sk_test_legacy');assert.throws(()=>store.openPayment(order.provider_config,'another-order'));
+ assert.equal(store.openPayment(order.checkout_data,'checkout:legacy').url,'https://checkout.stripe.com/pay/legacy');
+ const saved=JSON.parse(store.db.prepare("SELECT value FROM settings WHERE key='payment'").get().value);assert.equal(saved.providers.easypay.pkey,'preserved-fixture-key');assert.equal(saved.providers.easypay.enabled,false);assert.equal(saved.providers.stripe.enabled,true);
+ assert.deepEqual(store.db.prepare('PRAGMA foreign_key_check').all(),[]);assert.throws(()=>store.db.prepare("UPDATE orders SET provider='easypay'").run(),/immutable_order/);assert.throws(()=>store.db.prepare('DELETE FROM ledger').run(),/immutable_ledger/);
+ store.db.close();const key=join(data,'payment.key'),backup=join(data,'payment.key.saved');await rename(key,backup);assert.throws(()=>new Store(config),/missing payment encryption key/);await rename(backup,key);
+ store=new Store(config);assert.equal(store.wallet('owner').balance_minor,1234);store.db.close();
 });

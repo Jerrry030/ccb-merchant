@@ -1,5 +1,7 @@
 /** Isolated contract fixture. Never imported by the production application. */
 import http from 'node:http';
+import { defaultPaymentSettings } from '../../src/payment-settings.js';
+import { describePaymentCatalog } from '../../public/payment-catalog.js';
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { resolve, dirname } from 'node:path';
@@ -18,9 +20,10 @@ export async function startFixture(options = {}) {
     public: {site:{name:'紫序工作台',description:'一个安静、高效的 Code 工作空间。',support_email:'support@example.test',currency:'CNY',logo_url:'https://untrusted.invalid/tracking.svg'},features:{registration:false,email_verification:false,password_reset:false,payment:false,token_billing:false,...options.features},setup_required:options.setupRequired || false},
     users:[{id:'admin-1',email:fixtureAccounts.admin.email,display_name:'测试管理员',role:'admin',status:'active',core_customer_id:'customer-admin',created_at:now},{id:'member-1',email:fixtureAccounts.member.email,display_name:options.displayName || '测试成员',role:'member',status:'active',core_customer_id:'customer-member',created_at:now}],
     connection:{configured:Boolean(options.connected),available:Boolean(options.connected),...(options.connected ? {merchant:{id:'merchant-fixture',name:'独立测试商户'},scopes:['resources.read','customers.read','customers.write','grants.read','grants.write','devices.read','devices.write','usage.read','runtime','keys.manage']} : {})},
-    pending:options.pending || [], delays:new Map(), resources:options.resources || [], grants:options.grants || [],devices:options.devices || [],orders:[],ledger:[],events:[],
+    pending:options.pending || [], resources:options.resources || [], grants:options.grants || [],devices:options.devices || [],orders:[],ledger:[],events:[],
     checkoutUrl:options.checkoutUrl || 'https://checkout.stripe.com/c/pay/fixture-only', grantConflict:false,
   };
+  state.public.payment={currency:'CNY',min_amount_minor:1,max_amount_minor:1000000,help_text:'',methods:state.public.features.payment?[{id:'stripe',title:'Stripe 收银台'}]:[]};
   let origin;
   const server = http.createServer(async (req,res) => {
     const url = new URL(req.url,origin); const path = url.pathname;
@@ -28,7 +31,7 @@ export async function startFixture(options = {}) {
     try {
       if (!path.startsWith('/api/')) {
         if (!['GET','HEAD'].includes(req.method)) return reply(405,'method_not_allowed','Method not allowed.');
-        const asset = {'/app.js':['app.js','text/javascript; charset=utf-8'],'/payment-catalog.js':['payment-catalog.js','text/javascript; charset=utf-8'],'/usage-detail.js':['usage-detail.js','text/javascript; charset=utf-8'],'/registration-policy.js':['registration-policy.js','text/javascript; charset=utf-8'],'/styles.css':['styles.css','text/css; charset=utf-8'],'/mark.svg':['mark.svg','image/svg+xml']}[path] || ['index.html','text/html; charset=utf-8'];
+        const asset = {'/app.js':['app.js','text/javascript; charset=utf-8'],'/payment-checkout.js':['payment-checkout.js','text/javascript; charset=utf-8'],'/mail-settings.js':['mail-settings.js','text/javascript; charset=utf-8'],'/payment-settings.js':['payment-settings.js','text/javascript; charset=utf-8'],'/payment-catalog.js':['payment-catalog.js','text/javascript; charset=utf-8'],'/usage-detail.js':['usage-detail.js','text/javascript; charset=utf-8'],'/registration-policy.js':['registration-policy.js','text/javascript; charset=utf-8'],'/styles.css':['styles.css','text/css; charset=utf-8'],'/mark.svg':['mark.svg','image/svg+xml']}[path] || ['index.html','text/html; charset=utf-8'];
         const body = await readFile(resolve(publicRoot,asset[0]));
         res.writeHead(200,{'Content-Type':asset[1],'Cache-Control':'no-store','Referrer-Policy':'no-referrer','Content-Security-Policy':"default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'"});
         return res.end(body);
@@ -40,7 +43,6 @@ export async function startFixture(options = {}) {
       // Only synthetic fixture payloads live in this in-memory inspection log.
       const loggedBody = {...body}; for (const key of ['password','current_password','new_password','setup_token','token']) if (key in loggedBody) loggedBody[key] = '[redacted]';
       state.requests.push({method:req.method,path,query:url.search,body:loggedBody,csrf:req.headers['x-csrf-token'],origin:req.headers.origin,authenticated:Boolean(user)});
-      if (state.delays.has(path)) await new Promise(resolve => setTimeout(resolve,state.delays.get(path)));
       if (state.disconnected.has(path)) { state.disconnected.delete(path); res.writeHead(200,{'Content-Type':'application/json'}); res.write('{"incomplete":'); setTimeout(() => res.destroy(),20); return; }
       const failure = state.failures.get(path);
       if (failure) { if (!failure.repeat) state.failures.delete(path); return reply(failure.status,failure.code,failure.message); }
@@ -125,7 +127,12 @@ export async function startFixture(options = {}) {
       if (path === '/api/admin/settings' && req.method === 'PATCH') {
         Object.assign(state.public.site,{name:body.name,description:body.description,support_email:body.support_email}); state.public.features.registration = body.registration_enabled; return reply(200,{site:state.public.site,features:state.public.features});
       }
-      if (path === '/api/admin/settings') return reply(200,{site:state.public.site,features:state.public.features,connection:{configured:state.connection.configured},mail:{configured:state.public.features.email_verification},payment:{configured:state.public.features.payment}});
+      if (path === '/api/admin/mail') return reply(200,{mail:{revision:1,configured:false,editable:true,enabled:true,port:587,use_tls:true},features:state.public.features});
+      if (path === '/api/admin/payment') {
+        const settings=defaultPaymentSettings({});
+        return reply(200,{payment:{...settings,...describePaymentCatalog(settings),configured:state.public.features.payment},features:state.public.features});
+      }
+      if (path === '/api/admin/settings') return reply(200,{site:state.public.site,features:state.public.features,connection:{configured:state.connection.configured}});
       return reply(404,'not_found','Fixture endpoint is not part of the contract.');
     } catch { if (!res.headersSent) reply(500,'fixture_error','Fixture could not complete the request.'); else res.end(); }
   });

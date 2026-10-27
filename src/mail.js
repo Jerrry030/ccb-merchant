@@ -1,4 +1,5 @@
 import nodemailer from 'nodemailer';
+import { HttpError } from './security.js';
 
 function transportOptions(mail) {
   return { host:mail.host, port:mail.port, secure:mail.secure===true, requireTLS:mail.requireTLS===true, auth:mail.auth, pool:false, connectionTimeout:10000, greetingTimeout:10000, socketTimeout:15000, logger:false, debug:false, tls:{ rejectUnauthorized:true }, disableFileAccess:true, disableUrlAccess:true };
@@ -16,9 +17,23 @@ export function createMailer(config) {
   };
 }
 
-export async function verifyMail(mail) {
-  const transport = nodemailer.createTransport(transportOptions(mail));
-  try { await transport.verify(); }
-  catch { throw Object.assign(new Error('SMTP verification failed'), { code: 'mail_unavailable' }); }
-  finally { transport.close(); }
+export async function testMail(mail, recipient, transportFactory = nodemailer.createTransport) {
+  const transport = transportFactory(transportOptions(mail));
+  try {
+    if (recipient) {
+      const result = await transport.sendMail({
+        from: mail.from, to: recipient, subject: 'SMTP 测试邮件',
+        text: '这是一封用于验证当前 SMTP 配置的测试邮件。收到邮件说明本次投递成功。此测试不会保存配置或修改注册设置。',
+        disableFileAccess: true, disableUrlAccess: true,
+      });
+      if (!result.accepted?.some(address => address.toLowerCase() === recipient.toLowerCase())) throw new HttpError(503, 'mail_recipient_rejected', 'SMTP rejected the test recipient.');
+      return { ok: true, mode: 'send', recipient };
+    }
+    await transport.verify();
+    return { ok: true, mode: 'connection' };
+  } catch (error) {
+    if (error instanceof HttpError) throw error;
+    const code = error.code === 'EAUTH' ? 'mail_auth_failed' : error.code === 'ETIMEDOUT' ? 'mail_timeout' : ['CERT_HAS_EXPIRED', 'DEPTH_ZERO_SELF_SIGNED_CERT', 'ERR_TLS_CERT_ALTNAME_INVALID'].includes(error.code) ? 'mail_tls_failed' : 'mail_unavailable';
+    throw new HttpError(503, code, 'SMTP test failed. Check the connection, TLS settings and credentials.');
+  } finally { transport.close(); }
 }
