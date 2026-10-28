@@ -23,7 +23,7 @@ test('shipped merchant inventory has operator-allocated accounts and no upstream
  page.on('pageerror',error=>errors.push(error.message));page.setDefaultTimeout(12000);
  await context.route('**/*',route=>new URL(route.request().url()).origin===f.config.publicOrigin?route.continue():route.abort());
  await page.goto(f.config.publicOrigin+'/login');
- await page.getByLabel('电子邮箱',{exact:true}).fill('admin@example.test');await page.getByLabel('密码',{exact:true}).fill(password);await page.getByRole('button',{name:'登录工作台',exact:true}).click();
+ await page.getByLabel('电子邮箱',{exact:true}).fill('admin@example.test');await page.getByLabel('密码',{exact:true}).fill(password);await page.getByRole('button',{name:'登录',exact:true}).click();
  await page.getByRole('link',{name:'账号库存',exact:true}).click();
  await page.getByText('Account 1',{exact:true}).waitFor();
  assert.equal(await page.getByRole('button',{name:/采购账号|续购|充值|入账/}).count(),0);
@@ -52,10 +52,10 @@ test('shipped merchant inventory has operator-allocated accounts and no upstream
  await row.getByRole('button',{name:'分配客户',exact:true}).click();await page.getByLabel('客户',{exact:true}).selectOption(member.data.user.id);await page.getByRole('button',{name:'确认分配',exact:true}).click();await page.getByRole('dialog').waitFor({state:'hidden'});
  f.state.accounts.filter(a=>a.state==='available').forEach(a=>a.device_name='本机 Laptop');
  await page.getByRole('button',{name:'退出登录',exact:true}).click();await page.getByRole('dialog').getByRole('button',{name:'退出登录',exact:true}).click();
- await page.getByLabel('电子邮箱',{exact:true}).fill('member@example.test');await page.getByLabel('密码',{exact:true}).fill(password);await page.getByRole('button',{name:'登录工作台',exact:true}).click();
- await page.getByRole('link',{name:'我的账号',exact:true}).click();await page.getByRole('link',{name:'开始使用',exact:true}).waitFor();assert.equal(await page.getByRole('link',{name:'充值/订阅',exact:true}).count(),0);await page.getByRole('link',{name:'更换设备',exact:true}).click();await page.getByRole('heading',{name:'更换设备',exact:true}).waitFor();await page.getByText('本机 Laptop',{exact:true}).waitFor();assert.equal(await page.getByText('另一账号的设备',{exact:true}).count(),0);
+ await page.getByLabel('电子邮箱',{exact:true}).fill('member@example.test');await page.getByLabel('密码',{exact:true}).fill(password);await page.getByRole('button',{name:'登录',exact:true}).click();
+ await page.getByRole('link',{name:'我的账号',exact:true}).click();await page.locator('.account-card').getByRole('link',{name:'开始使用',exact:true}).waitFor();assert.equal(await page.getByRole('navigation',{name:'主导航'}).getByRole('link',{name:'开始使用',exact:true}).count(),1);assert.equal(await page.getByRole('link',{name:'充值/订阅',exact:true}).count(),0);await page.getByRole('link',{name:'更换设备',exact:true}).click();await page.getByRole('heading',{name:'更换设备',exact:true}).waitFor();await page.getByText('本机 Laptop',{exact:true}).waitFor();assert.equal(await page.getByText('另一账号的设备',{exact:true}).count(),0);
  await page.getByRole('button',{name:'撤销连接',exact:true}).click();await page.getByRole('dialog').getByRole('button',{name:'撤销连接',exact:true}).click();await page.getByText('还没有连接设备',{exact:true}).waitFor();assert.equal(f.state.deviceReleased,true);
- await page.getByRole('link',{name:'开始使用',exact:true}).click();await page.getByRole('heading',{name:'开始使用',exact:true}).waitFor();
+ await page.locator('#page-content').getByRole('link',{name:'开始使用',exact:true}).click();await page.getByRole('heading',{name:'开始使用',exact:true}).waitFor();
  assert.deepEqual(errors,[]);
 });
 
@@ -68,7 +68,7 @@ test('a lost manual-delivery response freezes the intent and reconciliation neve
  const browser=await chromium.launch({headless:true,...(process.env.PLAYWRIGHT_EXECUTABLE_PATH?{executablePath:process.env.PLAYWRIGHT_EXECUTABLE_PATH}:{})});t.after(()=>browser.close());
  const page=await browser.newPage();page.setDefaultTimeout(10000);const errors=[];page.on('pageerror',error=>errors.push(error.message));
  await page.route('**/*',route=>new URL(route.request().url()).origin===f.config.publicOrigin?route.continue():route.abort());
- await page.goto(f.config.publicOrigin+'/login');await page.getByLabel('电子邮箱',{exact:true}).fill('admin@example.test');await page.getByLabel('密码',{exact:true}).fill(password);await page.getByRole('button',{name:'登录工作台',exact:true}).click();await page.getByRole('link',{name:'账号库存',exact:true}).click();
+ await page.goto(f.config.publicOrigin+'/login');await page.getByLabel('电子邮箱',{exact:true}).fill('admin@example.test');await page.getByLabel('密码',{exact:true}).fill(password);await page.getByRole('button',{name:'登录',exact:true}).click();await page.getByRole('link',{name:'账号库存',exact:true}).click();
  await page.getByRole('button',{name:'分配客户',exact:true}).first().click();await page.getByLabel('客户',{exact:true}).selectOption(member.data.user.id);await page.getByRole('button',{name:'确认分配',exact:true}).click();await page.getByRole('button',{name:'核对分配结果',exact:true}).waitFor();assert.equal(await page.getByLabel('客户',{exact:true}).isDisabled(),true);
  await page.getByRole('button',{name:'核对分配结果',exact:true}).click();await page.getByRole('dialog').waitFor({state:'hidden'});await page.getByText('Pending customer',{exact:true}).waitFor();assert.equal(f.state.requests.filter(r=>r.method==='POST'&&r.path==='/access/v1/grants').length,1);assert.equal(f.state.grants.length,1);assert.deepEqual(errors,[]);
 });

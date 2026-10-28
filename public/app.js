@@ -10,15 +10,15 @@ const CANCEL = Symbol('cancel');
 const authRoutes = new Set(['/login', '/setup', '/register', '/verify', '/forgot', '/reset']);
 const navigation = [
   { path: '/', title: '首页', icon: 'overview', description: '查看账单与用量。参考费用只供核对，不会从钱包扣费。' },
-  { path: '/connect',hidden:true, title: '开始使用', icon: 'terminal', description: '安装 CCB、登录本站并确认设备，然后在项目目录开始工作。' },
+  { path: '/connect', title: '开始使用', icon: 'terminal', description: '安装 CCB、登录并确认设备，然后在项目目录开始工作。' },
   { path: '/accounts', title: '我的账号', icon: 'layers', description: '查看已分配或订阅交付的账号、额度和正在使用的设备。' },
   { path: '/devices',hidden:true, title: '我的设备', icon: 'monitor', description: '每个账号最多绑定 1 台设备。换机请先撤销旧设备，再连接新设备。' },
   { path: '/usage', title: '使用记录', icon: 'chart', description: '查看请求与 Token。参考成本只供核对，不会从钱包扣费。' },
   { path: '/wallet',hidden:true, title: '充值/订阅', icon: 'wallet', description: '充值人民币余额，或购买固定期限订阅。购买时选择一个登录平台，并查看是否有货。' },
   { path: '/profile', title: '个人设置', icon: 'user', description: '查看账户信息，维护您的登录安全。' },
   { path: '/orders', title:'我的订单', icon:'receipt', description:'核对套餐支付、开通、续期及退回余额。' },
-  { path:'/admin/upstream',title:'上游接入',icon:'link',admin:true,hidden:true,description:'连接直接上级，核对本站账户与可用资源。' },
-  { path:'/admin/access',hidden:true,title:'API 接入',icon:'key',admin:true,description:'管理直接接入本站的客户、密钥和资源范围。' },
+  { path:'/admin/upstream',title:'上游接入',icon:'link',admin:true,hidden:true,description:'连接直接上级，核对账户与可用资源。' },
+  { path:'/admin/access',hidden:true,title:'API 接入',icon:'key',admin:true,description:'管理直接接入的客户、密钥和资源范围。' },
   { path: '/admin/customers', title: '客户管理', icon: 'users', admin: true, description: '管理客户资料，在账号库存中为客户分配账号。' },
   { path:'/admin/inventory',title:'账号库存',icon:'layers',admin:true,description:'查看平台管理员分配的账号、有效期和客户分配状态。每个账号最多绑定 1 台设备。' },
   { path:'/admin/plans',hidden:true,title:'套餐管理',icon:'layers',admin:true,description:'只为订阅分组设置有效期和金额。普通分组不在这里出售。' },
@@ -107,7 +107,7 @@ function artwork() {
 }
 function brand() {
   return el('a', {class:'brand',href:state.user ? '/' : '/login'}, el('span',{class:'brand-mark'},state.public?.site?.logo_url ? el('img',{src:state.public.site.logo_url,alt:'',referrerpolicy:'no-referrer',class:'brand-logo'}) : icon('code')),
-    el('span',{},el('span',{class:'brand-name',text:state.public?.site?.name || 'CCB 工作台'}),el('span',{class:'brand-caption',text:'商户工作台'})));
+    el('span',{},el('span',{class:'brand-name',text:state.public?.site?.name || 'CCB'})));
 }
 function themeButton(className = '') {
   const button = el('button',{class:`icon-button ${className}`,type:'button',onclick:() => {
@@ -124,7 +124,7 @@ catch { document.documentElement.dataset.theme = 'light'; }
 
 async function api(path, {method = 'GET', body} = {}) {
   const url = new URL(path, location.origin);
-  if (url.origin !== location.origin || !url.pathname.startsWith('/api/') || url.username || url.password) throw new Error('仅允许访问本站 API。');
+  if (url.origin !== location.origin || !url.pathname.startsWith('/api/') || url.username || url.password) throw new Error('仅允许访问当前接口。');
   const write = method !== 'GET';
   const controller = new AbortController(); const timer = setTimeout(() => controller.abort(),20000);
   let response;
@@ -137,7 +137,7 @@ async function api(path, {method = 'GET', body} = {}) {
     catch { throw Object.assign(new Error(write ? '服务器未返回可确认的结果。' : '服务器响应格式异常。'),{uncertain:write,status:response.status}); }
     if (!response.ok) {
       const code = data.error?.code;
-      const messages = {upstream_target_blocked:'此上游目标被服务器网络策略拒绝。私网或 HTTP 地址需由部署者设置 UPSTREAM_ALLOWED_ORIGINS。',upstream_identity_mismatch:'已有业务数据绑定了另一个上游身份，不能在这里直接切换。',upstream_protocol_mismatch:'上游协议不兼容或接入账户已失效。',upstream_verification_failed:'上游未能验证本站凭据，请检查地址、密钥及上级状态。',upstream_changed:'接入配置已变化，请刷新后重新核对。',upstream_environment_managed:'本站上游由服务端环境配置管理，网页不能覆盖。',insufficient_balance:'钱包余额不足，请先充值或选择在线支付。',plan_changed:'套餐价格或状态已更新，请刷新并重新确认。',plan_conflict:'套餐版本已变化，请刷新后再编辑。',supply_unavailable:'供给不可用或期限不足，暂时无法购买此套餐。',purchase_pending:'此资源已有待完成订单，请先在我的订单中核对。',purchase_conflict:'该请求编号已用于另一笔购买，请核对已有订单。',customer_not_ready:'请选择状态正常、没有待确认变更的客户。',order_state:'订单状态已变化，请刷新核对；已交付订单不能在这里自动退款。',payment_amount_unavailable:'此价格超出当前在线支付范围，请使用余额或联系商户。',payment_outcome_unknown:'支付结果尚未确认，请查看已有订单，勿重复付款。',invalid_credentials:'邮箱或密码不正确，或此账户暂不可用。',invalid_csrf:'会话安全令牌已失效，请重新验证会话。',core_not_configured:'上游连接尚未配置，请联系管理员。',core_unavailable:'上游服务暂不可用，请稍后重试。',core_unavailable:'上游服务暂不可用，请稍后重试。',payment_disabled:'支付服务尚未配置或已停用，当前无法创建订单。',invalid_payment_method:'请选择当前可用的支付方式。',invalid_provider_config:'渠道参数或密钥格式无效，请检查必填字段、RSA 密钥和结算币种。',mail_disabled:'邮件服务尚未配置，当前无法验证邮箱或重置密码。',registration_disabled:'站点当前未开放自助注册。',email_suffix_not_allowed:'该邮箱域名不在允许注册范围内。',email_domain_registration_limit:'该邮箱域名不能再注册新账户。',integration_environment_managed:'这项服务由服务器环境配置管理，不能在页面里覆盖。',mail_unavailable:'邮件服务器拒绝了连接或认证。请核对主机、端口和凭据。',payment_pending:'仍有未完成的支付订单，暂不能更换支付凭据。',payment_pending_limit:'待支付订单数量已达上限，请先完成或核对已有订单。',payment_daily_limit:'今日支付额度已达上限，未确认订单也占用额度。',settings_changed:'配置已被其他操作更新，请刷新后重新确认。',mail_password_required:'修改 SMTP 主机、端口、用户名或 TLS 模式后，请重新输入密码。',mail_auth_failed:'SMTP 认证失败，请检查用户名、密码或邮箱授权码。',mail_timeout:'SMTP 连接超时，请检查主机、端口和服务器网络。',mail_tls_failed:'SMTP 加密连接失败，请检查 TLS 模式和证书。',mail_recipient_rejected:'SMTP 拒绝了测试收件人，请检查地址和中继权限。',payment_verification_unavailable:'支付服务无法验证，请检查密钥、环境和网络。',invalid_password:'密码不符合要求，或当前密码不正确。',not_provisioned:'尚未分配账号，请联系管理员。',core_sync_pending:'客户信息尚未与上游同步完成，请联系管理员核对。',invalid_code:'连接码无效或已过期，请在客户端重新发起连接。',not_copyable:'这把密钥创建时未保留原文，请撤销后重新签发。',admin_required:'此操作需要商户管理员权限。',account_changed:'账号状态已变化，请刷新后重新核对。',account_unavailable:'账号暂不可用，请刷新库存或联系平台管理员。',account_assigned:'该账号已分配，请先收回原客户授权。',invalid_expiry:'客户到期时间不能超过账号到期时间。',customer_not_ready:'请选择状态正常、没有待确认变更的客户。',user_busy:'客户变更正在处理中，请稍后核对。',rate_limited:'请求过于频繁，请稍后再试。'};
+      const messages = {upstream_target_blocked:'此上游目标被服务器网络策略拒绝。私网或 HTTP 地址需由部署者设置 UPSTREAM_ALLOWED_ORIGINS。',upstream_identity_mismatch:'已有业务数据绑定了另一个上游身份，不能在这里直接切换。',upstream_protocol_mismatch:'上游协议不兼容或接入账户已失效。',upstream_verification_failed:'上游未能验证接入凭据，请检查地址、密钥及上级状态。',upstream_changed:'接入配置已变化，请刷新后重新核对。',upstream_environment_managed:'上游由服务端环境配置管理，网页不能覆盖。',insufficient_balance:'钱包余额不足，请先充值或选择在线支付。',plan_changed:'套餐价格或状态已更新，请刷新并重新确认。',plan_conflict:'套餐版本已变化，请刷新后再编辑。',supply_unavailable:'供给不可用或期限不足，暂时无法购买此套餐。',purchase_pending:'此资源已有待完成订单，请先在我的订单中核对。',purchase_conflict:'该请求编号已用于另一笔购买，请核对已有订单。',customer_not_ready:'客户正在停用或同步中，暂时不能开通使用权。',order_state:'订单状态已变化，请刷新核对；已交付订单不能在这里自动退款。',payment_amount_unavailable:'此价格超出当前在线支付范围，请使用余额或联系商户。',payment_outcome_unknown:'支付结果尚未确认，请查看已有订单，勿重复付款。',invalid_credentials:'邮箱或密码不正确，或此账户暂不可用。',invalid_csrf:'会话安全令牌已失效，请重新验证会话。',core_not_configured:'上游连接尚未配置，请联系管理员。',core_unavailable:'上游服务暂不可用，请稍后重试。',core_unavailable:'上游服务暂不可用，请稍后重试。',payment_disabled:'支付服务尚未配置或已停用，当前无法创建订单。',invalid_payment_method:'请选择当前可用的支付方式。',invalid_provider_config:'渠道参数或密钥格式无效，请检查必填字段、RSA 密钥和结算币种。',mail_disabled:'邮件服务尚未配置，当前无法验证邮箱或重置密码。',registration_disabled:'站点当前未开放自助注册。',email_suffix_not_allowed:'该邮箱域名不在允许注册范围内。',email_domain_registration_limit:'该邮箱域名不能再注册新账户。',integration_environment_managed:'这项服务由服务器环境配置管理，不能在页面里覆盖。',mail_unavailable:'邮件服务器拒绝了连接或认证。请核对主机、端口和凭据。',payment_pending:'仍有未完成的支付订单，暂不能更换支付凭据。',payment_pending_limit:'待支付订单数量已达上限，请先完成或核对已有订单。',payment_daily_limit:'今日支付额度已达上限，未确认订单也占用额度。',settings_changed:'配置已被其他操作更新，请刷新后重新确认。',mail_password_required:'修改 SMTP 主机、端口、用户名或 TLS 模式后，请重新输入密码。',mail_auth_failed:'SMTP 认证失败，请检查用户名、密码或邮箱授权码。',mail_timeout:'SMTP 连接超时，请检查主机、端口和服务器网络。',mail_tls_failed:'SMTP 加密连接失败，请检查 TLS 模式和证书。',mail_recipient_rejected:'SMTP 拒绝了测试收件人，请检查地址和中继权限。',payment_verification_unavailable:'支付服务无法验证，请检查密钥、环境和网络。',invalid_password:'密码不符合要求，或当前密码不正确。',not_provisioned:'尚未分配账号，请联系管理员。',core_sync_pending:'客户信息尚未与上游同步完成，请联系管理员核对。',invalid_code:'连接码无效或已过期，请在客户端重新发起连接。',not_copyable:'这把密钥创建时未保留原文，请撤销后重新签发。',admin_required:'此操作需要商户管理员权限。',account_changed:'账号状态已变化，请刷新后重新核对。',account_unavailable:'账号暂不可用，请刷新库存或联系平台管理员。',account_assigned:'该账号已分配，请先收回原客户授权。',invalid_expiry:'客户到期时间不能超过账号到期时间。',customer_not_ready:'请选择状态正常、没有待确认变更的客户。',user_busy:'客户变更正在处理中，请稍后核对。',rate_limited:'请求过于频繁，请稍后再试。'};
       const rejected = ['core_not_configured','payment_disabled','mail_disabled','registration_disabled'].includes(code);
       throw Object.assign(new Error(messages[code] || (typeof data.error?.message === 'string' ? data.error.message : '请求未完成，请稍后再试。')),
         {status:response.status,code,uncertain:write && !rejected && (response.status >= 500 || /unknown|uncertain|timeout/i.test(code || ''))});
@@ -162,7 +162,7 @@ async function api(path, {method = 'GET', body} = {}) {
     }
     return data;
   } catch (error) {
-    if (!response) throw Object.assign(new Error(write ? '连接中断或超时，操作可能已被服务器接收。' : '暂时无法连接本站服务，请检查网络后重试。'),{uncertain:write});
+    if (!response) throw Object.assign(new Error(write ? '连接中断或超时，操作可能已被服务器接收。' : '暂时无法连接服务，请检查网络后重试。'),{uncertain:write});
     throw error;
   } finally { clearTimeout(timer); }
 }
@@ -284,7 +284,7 @@ function stat(label, value, note, symbol) {
 }
 
 async function bootstrap() {
-  app.replaceChildren(el('main',{id:'main',class:'boot'},el('div',{class:'spinner','aria-hidden':'true'}),el('p',{role:'status',text:'正在连接工作台…'})));
+  app.replaceChildren(el('main',{id:'main',class:'boot'},el('div',{class:'spinner','aria-hidden':'true'}),el('p',{role:'status',text:'正在连接…'})));
   const query = new URLSearchParams(location.search);
   if (location.pathname === '/connect' && query.has('code')) { state.code = query.get('code').slice(0,128); history.replaceState({},'','/connect'); }
   if (['/verify','/reset'].includes(location.pathname) && query.has('token')) { state.token = query.get('token').slice(0,4096); history.replaceState({},'',location.pathname); }
@@ -297,7 +297,7 @@ async function bootstrap() {
     catch (error) { if (error.status !== 401) throw error; state.user = null; state.csrf = null; }
     render();
   } catch (error) {
-    app.replaceChildren(el('main',{id:'main',class:'boot'},brand(),notice('工作台暂时不可用',error.message,'error'),el('button',{class:'btn',type:'button',text:'重新连接',onclick:bootstrap})));
+    app.replaceChildren(el('main',{id:'main',class:'boot'},brand(),notice('暂时无法连接',error.message,'error'),el('button',{class:'btn',type:'button',text:'重新连接',onclick:bootstrap})));
   }
 }
 function shell(route) {
@@ -310,7 +310,7 @@ function shell(route) {
   }
   nav.addEventListener('click',event => { if (event.target.closest('a')) root.classList.remove('menu-open'); });
   const logout = el('button',{class:'icon-button',type:'button','aria-label':'退出登录',onclick:async () => {
-    if (!await confirmAction('退出登录','确定退出当前工作台会话吗？','退出登录')) return;
+    if (!await confirmAction('退出登录','确定退出当前登录吗？','退出登录')) return;
     logout.disabled = true;
     try { await api('/api/auth/logout',{method:'POST'}); state.user = null; state.csrf = null; state.returnTo = '/'; state.code = ''; state.token = ''; navigate('/login',true); }
     catch (error) { document.getElementById('page-feedback')?.replaceChildren(errorNotice(error)); logout.disabled = false; }
@@ -325,10 +325,10 @@ function shell(route) {
   root.addEventListener('keydown',event => { if (event.key === 'Escape') { root.classList.remove('menu-open'); menu.setAttribute('aria-expanded','false'); menu.focus(); } });
   const content = el('div',{class:'page-content',id:'page-content','aria-busy':'true'},el('div',{class:'loading',role:'status'},el('div',{class:'spinner','aria-hidden':'true'}),'正在读取最新数据…'));
   root.append(el('div',{class:'workspace'},el('header',{class:'topbar'},menu,
-    el('div',{class:'breadcrumb'},el('span',{text:'工作台'}),el('span',{'aria-hidden':'true',text:'/'}),el('strong',{text:route.title})),
-    el('div',{class:'top-actions'},el('span',{class:'top-label',text:'本站独立运营'}),themeButton(),badge(state.user.role))),
+    el('div',{class:'breadcrumb'},el('span',{text:state.public.site.name}),el('span',{'aria-hidden':'true',text:'/'}),el('strong',{text:route.title})),
+    el('div',{class:'top-actions'},themeButton(),badge(state.user.role))),
     el('main',{id:'main',class:'main',tabindex:'-1'},el('div',{class:'page-heading'},el('div',{},el('span',{class:'eyebrow',text:route.admin ? '商户管理' : '工作空间'}),el('h1',{text:route.title})),el('button',{class:'btn',type:'button',onclick:() => render()},icon('refresh'),'刷新')),
-      el('div',{id:'page-feedback'}),content,el('footer',{class:'page-footer'},el('span',{text:`${state.public.site.name} · 独立商户工作台`}),el('span',{text:'用量可核对 · 密钥留在服务端'})))));
+      el('div',{id:'page-feedback'}),content,el('footer',{class:'page-footer'},el('span',{text:`${state.public.site.name}`}),el('span',{text:'用量可核对 · 密钥留在服务端'})))));
   app.replaceChildren(root); return content;
 }
 async function render() {
@@ -342,13 +342,13 @@ async function render() {
     renderAuth(path); return;
   }
   if (authRoutes.has(path)) { navigate(state.returnTo || '/',true); return; }
-  const route = navigation.find(item => item.path === path) || {path,title:'页面不存在',description:'此地址不在工作台导航中。'};
+  const route = navigation.find(item => item.path === path) || {path,title:'页面不存在',description:'此地址不在导航中。'};
   document.title = `${route.title} · ${state.public.site.name}`;
   const content = shell(route);
   try {
     let result;
     if (route.admin && state.user.role !== 'admin') result = emptyState('没有管理权限','此页面仅供服务端确认的商户管理员访问。','shield',el('a',{class:'btn primary',href:'/',text:'返回首页'}));
-    else if (!views[path]) result = emptyState('没有找到此页面','请使用侧栏导航访问工作台。','info',el('a',{class:'btn',href:'/',text:'返回首页'}));
+    else if (!views[path]) result = emptyState('没有找到此页面','请使用侧栏导航。','info',el('a',{class:'btn',href:'/',text:'返回首页'}));
     else result = await views[path]();
     if (ticket !== state.view) return;
     content.replaceChildren(result); content.removeAttribute('aria-busy');
@@ -364,16 +364,16 @@ async function render() {
 function renderAuth(path) {
   const features = state.public.features;
   const labels = {
-    '/login':['欢迎回来','使用本站账户登录。','登录工作台'],
-    '/setup':['初始化工作台','使用本机的一次性初始化令牌创建管理员。令牌、上游密钥和管理员密码是三项不同凭证。','创建管理员'],
-    '/register':['创建您的账户','注册只创建本站账户。资源需要管理员另行分配。','创建账户'],
+    '/login':['欢迎回来','使用邮箱和密码登录。','登录'],
+    '/setup':['初始化','使用本机的一次性初始化令牌创建管理员。令牌、上游密钥和管理员密码是三项不同凭证。','创建管理员'],
+    '/register':['创建您的账户','注册只创建登录账户。资源需要管理员另行分配。','创建账户'],
     '/verify':['验证电子邮箱','提交邮件中的验证令牌，完成账户验证。','确认验证'],
     '/forgot':['找回您的密码','输入注册邮箱。如果账户符合条件，我们会发送重置邮件。','发送重置邮件'],
     '/reset':['设置新密码','使用重置邮件中的令牌，为账户设置一个新密码。','重置密码'],
   };
   const [title,description,submitLabel] = labels[path];
   document.title = `${title} · ${state.public.site.name}`;
-  const inner = el('div',{class:'auth-form'},el('span',{class:'eyebrow',text:'本站账户'}),el('h1',{text:title}),el('p',{class:'auth-description',text:description}));
+  const inner = el('div',{class:'auth-form'},el('h1',{text:title}),el('p',{class:'auth-description',text:description}));
   const disabled = (path === '/setup' && !state.public.setup_required) || (path === '/register' && features.registration !== true) || (path === '/verify' && features.email_verification !== true) || (['/forgot','/reset'].includes(path) && features.password_reset !== true);
   if (disabled) inner.append(notice('此功能当前不可用',path === '/setup' ? '站点已完成初始化，请直接登录。' : '管理员尚未启用此功能或相关服务尚未配置。','warn'),el('div',{class:'auth-links'},el('a',{href:'/login',text:'返回登录'})));
   else {
@@ -415,8 +415,7 @@ function renderAuth(path) {
     inner.append(links);
   }
   if (path === '/login' && state.returnTo.startsWith('/connect')) inner.append(notice('登录后继续开始使用','我们会在登录后返回开始使用页面。登录本身不会授权设备。'));
-  inner.append(el('p',{class:'auth-footer',text:'会话由服务端验证 · 上游密钥不会出现在此页'}));
-  app.replaceChildren(el('main',{class:'auth-page',id:'main'},el('aside',{class:'auth-art'},brand(),el('div',{class:'auth-art-copy'},el('span',{class:'eyebrow',text:'独立工作台'}),el('h1',{},'管理权益、设备与用量。'),el('p',{text:state.public.site.description || '集中查看 Code 权益、已连接的设备和用量。'}),artwork()),el('p',{class:'auth-bottom',text:'由本站独立提供服务'})),el('section',{class:'auth-form-side'},themeButton('auth-theme'),inner)));
+  app.replaceChildren(el('main',{class:'auth-page',id:'main'},el('aside',{class:'auth-art'},brand(),el('div',{class:'auth-art-copy'},el('h1',{},'管理权益、设备与用量。'),el('p',{text:state.public.site.description || '集中查看 Code 权益、已连接的设备和用量。'}),artwork())),el('section',{class:'auth-form-side'},themeButton('auth-theme'),inner)));
 }
 
 function homePreview() {
@@ -798,7 +797,7 @@ function resetLabel(item, recover) {
 async function devicesView() {
   const accountId=new URLSearchParams(location.search).get('account_id');
   const devices = collection(await api('/api/me/devices'),'devices').filter(d=>!accountId||d.current_grant_id===accountId);
-  return el('div',{class:'page-content'},panel(accountId?'更换设备':'连接的设备',accountId?'先撤销旧设备连接，确认成功后再连接新设备。不会自动抢占或踢掉旧设备。':'从 CCB 客户端获取连接码后，在本站确认设备',table([
+  return el('div',{class:'page-content'},panel(accountId?'更换设备':'连接的设备',accountId?'先撤销旧设备连接，确认成功后再连接新设备。不会自动抢占或踢掉旧设备。':'从 CCB 客户端获取连接码后，在这里确认设备',table([
     {label:'设备',render:d => el('div',{},el('strong',{text:d.name || '未命名设备'}),el('span',{class:'table-sub',text:d.platform || '未知平台'}))},
     {label:'状态',render:d => badge(d.state)}, {label:'最近活动',render:d => date(d.last_seen)}, {label:'到期时间',render:d => date(d.expires_at)},
     {label:'操作',render:d => actionButton('撤销连接',async () => await confirmAction('撤销设备连接',`确认撤销「${d.name || '此设备'}」？此操作会阻止新的执行请求。`,'撤销连接',true) ? api(`/api/me/devices/${encodeURIComponent(d.id)}`,{method:'DELETE'}) : CANCEL,{danger:true})},
@@ -840,7 +839,7 @@ async function connectView() {
     el('li',{},el('h3',{text:'选择账号，开始项目'}),el('p',{},'在项目目录运行 ccb。还没选账号时会列出账号供你选择，之后用 ',el('code',{text:'ccb account'}),' 切换。'),commandBlock('启动命令','ccb')));
   const reference = el('dl',{class:'connection-reference','aria-label':'常用命令'});
   for (const [name, command] of [['继续上次会话','ccb -c'],['切换账号','ccb account'],['检查连接','ccb status'],['设备续期','ccb login --renew'],['更新 Claude Code','ccb update']]) reference.append(el('div',{},el('dt',{text:name}),el('dd',{},el('code',{text:command}))));
-  const guide = panel('安装与登录','安装客户端、登录本站、确认设备，然后在项目目录开始。',el('div',{class:'card-body'},steps,reference));
+  const guide = panel('安装与登录','安装客户端、登录、确认设备，然后在项目目录开始。',el('div',{class:'card-body'},steps,reference));
   const pairing = Boolean(state.code);
   return el('div',{class:pairing ? 'connect-layout confirmation-first' : 'connect-layout'},selected?notice('当前账号：'+selected.name,'设备确认后终端会选择此账号。不会抢占旧设备；商户站当前提供 Code。'):null,...(pairing ? [approval, guide] : [guide, approval]));
 }
@@ -1243,7 +1242,7 @@ async function settingsView() {
     switchRow('允许用户自助注册','关闭后不能自助注册。邮箱验证开启时，还需要先配好邮件服务。','registration_enabled',settings.registration?.enabled ?? settings.features?.registration === true),
     el('button',{class:'btn primary',type:'submit',text:'保存公开设置'}));
   bindForm(form,async values => {
-    if (!await confirmAction('保存站点公开设置','将修改本站展示信息与注册开关。不会修改上游密钥、邮件或支付凭据。','确认保存')) return CANCEL;
+    if (!await confirmAction('保存站点公开设置','将修改展示信息与注册开关。不会修改上游密钥、邮件或支付凭据。','确认保存')) return CANCEL;
     return api('/api/admin/settings',{method:'PATCH',body:{name:values.get('name').trim(),description:values.get('description').trim(),support_email:values.get('support_email').trim(),logo_url:values.get('logo_url').trim(),accent_color:values.get('accent_color'),registration_enabled:values.get('registration_enabled') === 'on'}});
   },(data,message) => {
     if (!data.site || !data.features) throw Object.assign(new Error('站点设置更新结果不完整。'),{uncertain:true});
@@ -1253,12 +1252,12 @@ async function settingsView() {
     message.replaceChildren(notice('公开设置已保存','展示信息和注册开关已由服务器确认。','success'));
   });
   const upstream = el('div',{id:'upstream',class:'settings-section'});
-  upstream.append(notice('使用直接上级发给本站的密钥','初始化令牌只用于创建管理员。不要填写平台管理员密钥，也不要填写上级自己的接入密钥。','warn'));
-  upstream.append(panel('上游接入','地址和权限来自本站服务端，密钥原文不会返回。',el('div',{class:'card-body'},
+  upstream.append(notice('使用直接上级签发的密钥','初始化令牌只用于创建管理员。不要填写平台管理员密钥，也不要填写上级自己的接入密钥。','warn'));
+  upstream.append(panel('上游接入','地址和权限来自服务端，密钥原文不会返回。',el('div',{class:'card-body'},
     el('div',{class:'connection-box'},el('div',{class:'button-row'},icon('link'),el('strong',{text:'上游服务连接'}),el('span',{class:`badge ${connection.available === true ? 'good' : 'warn'}`,text:connection.configured === true ? (connection.available === true ? '已连接' : '已配置 · 暂不可用') : '未配置'}))),
     connection.error ? notice('上游暂不可用',`请核对接地址、密钥和允许的来源。服务端状态：${connection.error}`,'warn') : null,
     el('dl',{class:'detail-list'},
-      el('dt',{text:'本站公开地址'}),el('dd',{class:'mono',text:connection.public_origin || location.origin}),
+      el('dt',{text:'公开地址'}),el('dd',{class:'mono',text:connection.public_origin || location.origin}),
       el('dt',{text:'上游地址'}),el('dd',{'data-upstream-summary':'url',class:'mono',text:connection.upstream_url || '未配置'}),
       el('dt',{text:'上游用户'}),el('dd',{'data-upstream-summary':'name',text:connection.user?.name || '尚未核实'}),
       el('dt',{text:'连接状态'}),el('dd',{'data-upstream-summary':'status'},badge(connection.available ? 'active' : 'pending'))),
@@ -1271,7 +1270,7 @@ async function settingsView() {
     const output = el('div',{});
     const upstreamForm = el('form',{},
       field('上游服务地址','url',{required:true,type:'url',value:connection.upstream_url || '',placeholder:'https://your-provider.example',hint:'只填写协议、域名和可选端口。私网或 HTTP 地址需由部署者在 UPSTREAM_ALLOWED_ORIGINS 中明确允许。'}),
-      field('上游接入密钥','api_key',{required:true,type:'password',autocomplete:'off',spellcheck:'false',placeholder:'ccbk_…',hint:'由直接上级单独签发给本站。不会写入浏览器存储。'}),
+      field('上游接入密钥','api_key',{required:true,type:'password',autocomplete:'off',spellcheck:'false',placeholder:'ccbk_…',hint:'由直接上级单独签发。不会写入浏览器存储。'}),
       field('接入操作','action',{type:'select',choices:[{value:'verify',label:'仅验证，不保存'},{value:'save',label:'验证并保存'}],value:'verify'}),
       el('button',{type:'submit',class:'btn primary',text:'执行接入检查'}));
     bindForm(upstreamForm,async values => {
@@ -1292,7 +1291,7 @@ async function settingsView() {
     });
     upstream.append(panel('上游接入配置','先验证身份与权限，再保存。网络拒绝或验证失败不会替换当前配置。',el('div',{class:'card-body'},upstreamForm,output)));
   }
-  upstream.append(el('a',{href:'/',class:'btn',text:'稍后配置，返回工作台'}));
+  upstream.append(el('a',{href:'/',class:'btn',text:'稍后配置，返回首页'}));
   const suffixes = emailSuffixEditor(settings.registration?.email_suffix_whitelist || settings.site?.registration_email_suffix_whitelist || []);
   const registrationForm = el('form',{},
     el('p',{class:'field-title',text:'邮箱域名白名单'}),
@@ -1315,7 +1314,7 @@ async function settingsView() {
   const mailPage = mailSettingsView(settingsUI, mailData.mail);
   const paymentPage = paymentSettingsView(settingsUI, paymentData.payment);
   const pages = [
-    ['public','公开信息',el('section',{id:'public',class:'settings-section'},panel('公开站点信息','名称、简介、标识和注册开关会显示在登录页与工作台。',el('div',{class:'card-body'},form)))],
+    ['public','公开信息',el('section',{id:'public',class:'settings-section'},panel('公开站点信息','名称、简介、标识和注册开关会显示在登录页和各页面。',el('div',{class:'card-body'},form)))],
     ['registration','注册设置',registration],
     ['upstream','上游连接',upstream],
     ['mail','邮件配置',mailPage],
@@ -1411,7 +1410,7 @@ async function rentalsView() {
   if(o.payment_order_id&&o.payment_status!=='paid')actions.append(actionButton('核对支付',()=>api(`/api/${admin?'admin':'me'}/payments/${encodeURIComponent(o.payment_order_id)}/reconcile`,{method:'POST',body:{}})));
   if(!admin&&o.payment_order_id&&o.status==='awaiting_payment')actions.append(el('a',{class:'btn small',href:'/wallet?order='+encodeURIComponent(o.payment_order_id),text:'继续支付'}));
   if(admin&&['queued','review','refund_pending'].includes(o.status))for(const action of (o.status==='refund_pending'?['refund']:['retry','refund']))actions.append(actionButton(action==='retry'?'重新核对':'退回余额',async()=>{
-   if(!await confirmAction(action==='retry'?'重新核对订单':'退回未交付款项',action==='retry'?'将按原订单编号核对上游回执，不重复增加租期。':'仅在上游确认没有交付后，将订单全额退回本站余额，不是支付渠道原路退款。','确认执行',action==='refund'))return CANCEL;
+   if(!await confirmAction(action==='retry'?'重新核对订单':'退回未交付款项',action==='retry'?'将按原订单编号核对上游回执，不重复增加租期。':'仅在上游确认没有交付后，将订单全额退回余额，不是支付渠道原路退款。','确认执行',action==='refund'))return CANCEL;
    return api(`/api/admin/rentals/${encodeURIComponent(o.id)}/resolve`,{method:'POST',body:{action,expected_revision:o.revision}});
   },{danger:action==='refund'}));
   return actions;
@@ -1430,22 +1429,22 @@ async function operationsView() {
  const tasks=collection(data,'pending_customers');
  return el('div',{class:'page-content'},
  el('div',{class:'stats-grid'},stat('待同步客户',number(tasks.length),'本页最多列出 100 个','users'),stat('待确认支付',number(data.payments_pending),'包括结果未知的订单','wallet'),stat('待核对交付',number(data.rentals.filter(r=>['review','refund_pending'].includes(r.status)).reduce((n,r)=>n+r.count,0)),'可在销售与交付处理','receipt')),
- panel('客户同步待办','停用尚未确认时，本站会暂停该客户的新运行请求，直到上游确认。',table([{label:'客户',render:u=>u.display_name},{label:'状态',render:u=>badge(u.status)},{label:'提示',render:u=>u.sync_error||'等待同步'},{label:'操作',render:u=>actionButton('重新核对',()=>api(`/api/admin/users/${encodeURIComponent(u.id)}${u.core_customer_id?'':'/provision'}`,{method:u.core_customer_id?'PATCH':'POST',body:{}}))}],tasks,'没有待同步客户','当前没有持久化客户同步待办。')),
+ panel('客户同步待办','停用尚未确认时，会暂停该客户的新运行请求，直到上游确认。',table([{label:'客户',render:u=>u.display_name},{label:'状态',render:u=>badge(u.status)},{label:'提示',render:u=>u.sync_error||'等待同步'},{label:'操作',render:u=>actionButton('重新核对',()=>api(`/api/admin/users/${encodeURIComponent(u.id)}${u.core_customer_id?'':'/provision'}`,{method:u.core_customer_id?'PATCH':'POST',body:{}}))}],tasks,'没有待同步客户','当前没有持久化客户同步待办。')),
  el('p',{class:'inline-info'},'邮件、支付和公开地址是否已配置，请在',el('a',{href:'/admin/settings#payment',text:'站点设置'}),'中查看。'),el('a',{class:'btn',href:'/admin/rentals?status=review',text:'处理交付待办 →'}));
 }
 
 
 function accessEditor(account) {
- const form=el('form',{},field('接入标识','slug',{required:true,maxlength:48,value:account?.slug||'',disabled:Boolean(account)}),field('客户名称','name',{required:true,maxlength:100,value:account?.name||''}),...(account?[field('接入状态','status',{type:'select',choices:[{value:'active',label:'正常'},{value:'disabled',label:'停用本站访问'}],value:account.status})]:[]),el('button',{type:'submit',class:'btn primary',text:'保存接入账户'}));
+ const form=el('form',{},field('接入标识','slug',{required:true,maxlength:48,value:account?.slug||'',disabled:Boolean(account)}),field('客户名称','name',{required:true,maxlength:100,value:account?.name||''}),...(account?[field('接入状态','status',{type:'select',choices:[{value:'active',label:'正常'},{value:'disabled',label:'停用访问'}],value:account.status})]:[]),el('button',{type:'submit',class:'btn primary',text:'保存接入账户'}));
  const dialog=editorDialog(account?'编辑 API 客户':'创建 API 客户',form);
  bindForm(form,async v=>{
   const body={name:v.get('name').trim(),...(account?{expected_revision:account.revision,status:v.get('status')}:{slug:v.get('slug').trim()})};
-  if(!await confirmAction('保存本站接入账户','只在本站创建或更新直接 API 客户。不会向上游登记该客户的站点或它的下级。','确认保存'))return CANCEL;
+  if(!await confirmAction('保存接入账户','只在这里创建或更新直接 API 客户。不会向上游登记该客户的站点或它的下级。','确认保存'))return CANCEL;
   return api(account?`/api/admin/access-accounts/${account.id}`:'/api/admin/access-accounts',{method:account?'PATCH':'POST',body});
  },data=>{if(!data.account?.id)throw Object.assign(new Error('结果未知，请刷新账户列表。'),{uncertain:true});dialog.close();render();});
 }
 function accessResourceEditor(account,sources,resource) {
- const form=el('form',{},field('本站上游资源','upstream_id',{type:'select',required:true,choices:sources.map(r=>({value:r.id,label:r.name})),value:resource?.upstream_id||sources[0]?.id,disabled:Boolean(resource)}),field('客户可见资源名称','name',{required:true,maxlength:100,value:resource?.name||''}),field('到期时间','expires_at',{type:'datetime-local',hint:'新建留空沿用上游期限；编辑留空保留原期限。'}),...(resource?[field('资源状态','status',{type:'select',choices:[{value:'active',label:'启用访问'},{value:'disabled',label:'停用访问'}],value:resource.status})]:[]),notice('仅本站管理的分配','仅授予本站可用的资源范围与期限，不设置客户人数配额。客户可以自行经营域名和下级，本站不登记其组织关系。'),el('button',{type:'submit',class:'btn primary',text:'保存资源范围'}));
+ const form=el('form',{},field('上游资源','upstream_id',{type:'select',required:true,choices:sources.map(r=>({value:r.id,label:r.name})),value:resource?.upstream_id||sources[0]?.id,disabled:Boolean(resource)}),field('客户可见资源名称','name',{required:true,maxlength:100,value:resource?.name||''}),field('到期时间','expires_at',{type:'datetime-local',hint:'新建留空沿用上游期限；编辑留空保留原期限。'}),...(resource?[field('资源状态','status',{type:'select',choices:[{value:'active',label:'启用访问'},{value:'disabled',label:'停用访问'}],value:resource.status})]:[]),notice('仅在这里管理的分配','仅授予可用的资源范围与期限，不设置客户人数配额。客户可以自行经营域名和下级，不登记其组织关系。'),el('button',{type:'submit',class:'btn primary',text:'保存资源范围'}));
  const dialog=editorDialog('分配 API 资源范围',form);
  bindForm(form,async v=>{
   const body={name:v.get('name').trim(),...(resource?{expected_revision:resource.revision,status:v.get('status')}:{upstream_id:v.get('upstream_id')})};if(v.get('expires_at'))body.expires_at=new Date(v.get('expires_at')).toISOString();
@@ -1455,13 +1454,13 @@ function accessResourceEditor(account,sources,resource) {
 }
 function accessKeyEditor(account) {
  const allowed=['resources.read','customers.read','customers.write','delegation.grants.read','delegation.grants.write','delegation.devices.read','delegation.devices.write','delegation.usage.read','runtime'];
- const form=el('form',{},field('密钥名称','name',{required:true,maxlength:80,placeholder:'生产接入 / 轮换密钥'}),el('fieldset',{},el('legend',{text:'允许的接口权限'}),el('div',{class:'scope-grid'},allowed.map(scope=>el('label',{class:'check-label'},el('input',{type:'checkbox',name:'scopes',value:scope,checked:true}),scope)))),field('密钥到期时间','expires_at',{type:'datetime-local'}),notice('密钥与接入账户分离','本站独立生成密钥，撤销前可以再次查看。轮换同一账户的密钥不改变它的数据与资源，也不修改它在自己平台签发的密钥。'),el('button',{type:'submit',class:'btn primary',text:'签发接入密钥'}));
- const dialog=editorDialog('签发本站 API 密钥',form);
+ const form=el('form',{},field('密钥名称','name',{required:true,maxlength:80,placeholder:'生产接入 / 轮换密钥'}),el('fieldset',{},el('legend',{text:'允许的接口权限'}),el('div',{class:'scope-grid'},allowed.map(scope=>el('label',{class:'check-label'},el('input',{type:'checkbox',name:'scopes',value:scope,checked:true}),scope)))),field('密钥到期时间','expires_at',{type:'datetime-local'}),notice('密钥与接入账户分离','密钥在这里生成，撤销前可以再次查看。轮换同一账户的密钥不改变它的数据与资源，也不修改它在自己平台签发的密钥。'),el('button',{type:'submit',class:'btn primary',text:'签发接入密钥'}));
+ const dialog=editorDialog('签发 API 密钥',form);
  bindForm(form,async v=>{
   const body={name:v.get('name').trim(),scopes:v.getAll('scopes')};if(!body.scopes.length)throw new Error('至少选择一项权限。');if(v.get('expires_at'))body.expires_at=new Date(v.get('expires_at')).toISOString();
-  if(!await confirmAction('签发接入密钥',`这把密钥只供 ${account.name} 访问本站。撤销前可以再次查看，撤销后无法恢复。`,'确认签发'))return CANCEL;
+  if(!await confirmAction('签发接入密钥',`这把密钥只供 ${account.name} 使用。撤销前可以再次查看，撤销后无法恢复。`,'确认签发'))return CANCEL;
   return api(`/api/admin/access-accounts/${account.id}/keys`,{method:'POST',body});
- },data=>{if(!data.key?.id||!data.token)throw Object.assign(new Error('发钥结果未知，请刷新核对。'),{uncertain:true});dialog.close();showSecret(data);});
+ },async data=>{if(!data.key?.id||!data.token)throw Object.assign(new Error('发钥结果未知，请刷新核对。'),{uncertain:true});dialog.close();await render();});
 }
 async function accessView() {
  const params=new URLSearchParams(location.search),offset=Math.max(0,Number(params.get('offset'))||0),query=new URLSearchParams({limit:'50',offset:String(offset),q:params.get('q')||''});
@@ -1469,12 +1468,12 @@ async function accessView() {
  const search=el('form',{class:'button-row'},el('input',{name:'q',value:query.get('q'),placeholder:'搜索 API 客户','aria-label':'搜索 API 客户'}),el('button',{class:'btn',type:'submit',text:'搜索'}));search.addEventListener('submit',event=>{event.preventDefault();navigate('/admin/access?q='+encodeURIComponent(new FormData(search).get('q')));});
  root.append(search,el('div',{class:'pager'},el('span',{text:`共 ${data.total} 个接入账户`}),...[-50,50].map(delta=>el('button',{class:'btn small',text:delta<0?'上一页':'下一页',disabled:delta<0?offset===0:offset+accounts.length>=data.total,onclick:()=>{query.set('offset',String(Math.max(0,offset+delta)));navigate(`/admin/access?${query}`);}}))));
  const selectedID=params.get('account');if(selectedID&&!accounts.some(a=>a.id===selectedID)){const chosen=await api('/api/admin/access-accounts/'+encodeURIComponent(selectedID));accounts.push(chosen.account);}
- root.append(panel('API 客户','一个接入账户可以有多把密钥；数据和资源属于账户，不属于单把密钥。',table([{label:'客户',render:a=>el('div',{},el('strong',{text:a.name}),el('p',{class:'mono muted',text:a.slug}))},{label:'站点',render:a=>el('span',{class:'mono',text:a.public_origin})},{label:'状态',render:a=>badge(a.status)},{label:'操作',render:a=>el('div',{class:'button-row'},el('button',{class:'btn small',text:'编辑',onclick:()=>accessEditor(a)}),el('a',{class:'btn small',href:`/admin/access?account=${encodeURIComponent(a.id)}`,text:'资源与密钥'}))}],accounts,'暂无 API 客户','先创建本站接入账户，再分配资源和签发密钥。'),el('button',{class:'btn primary',text:'创建 API 客户',onclick:()=>accessEditor(null)})));
+ root.append(panel('API 客户','一个接入账户可以有多把密钥；数据和资源属于账户，不属于单把密钥。',table([{label:'客户',render:a=>el('div',{},el('strong',{text:a.name}),el('p',{class:'mono muted',text:a.slug}))},{label:'站点',render:a=>el('span',{class:'mono',text:a.public_origin})},{label:'状态',render:a=>badge(a.status)},{label:'操作',render:a=>el('div',{class:'button-row'},el('button',{class:'btn small',text:'编辑',onclick:()=>accessEditor(a)}),el('a',{class:'btn small',href:`/admin/access?account=${encodeURIComponent(a.id)}`,text:'资源与密钥'}))}],accounts,'暂无 API 客户','先创建接入账户，再分配资源和签发密钥。'),el('button',{class:'btn primary',text:'创建 API 客户',onclick:()=>accessEditor(null)})));
  const selected=accounts.find(a=>a.id===new URLSearchParams(location.search).get('account'));
  if(selected){
   const [r,k,own]=await Promise.all([api(`/api/admin/access-accounts/${selected.id}/resources`),api(`/api/admin/access-accounts/${selected.id}/keys`),api('/api/admin/resources')]),resources=collection(r,'resources'),keys=collection(k,'keys'),sources=collection(own,'resources');
-  root.append(panel(`${selected.name} · 资源范围`,'分配仅限本站拥有的资源范围和期限，不设置客户人数配额。',table([{label:'资源',render:r=>r.name},{label:'期限',render:r=>r.expires_at?date(r.expires_at):'无固定期限'},{label:'状态',render:r=>badge(r.available?'active':'disabled')},{label:'操作',render:r=>el('button',{class:'btn small',text:'编辑范围',onclick:()=>accessResourceEditor(selected,sources,r)})}],resources),el('button',{class:'btn',text:'分配资源',disabled:!sources.length,onclick:()=>accessResourceEditor(selected,sources)})));
-  root.append(panel(`${selected.name} · 本站密钥`,'交付本站公开地址和这里生成的密钥，绝不交付本站的上游密钥。',table([{label:'密钥',render:k=>k.name},{label:'前缀',render:k=>k.prefix+'…'},{label:'权限',render:k=>k.scopes.join(' · ')},{label:'期限',render:k=>date(k.expires_at)},{label:'状态',render:k=>badge(k.revoked_at?'revoked':k.expires_at&&Date.parse(k.expires_at)<Date.now()?'expired':'active')},{label:'操作',render:k=>el('div',{class:'table-actions'},k.copyable?actionButton('查看',async()=>{const data=await api(`/api/admin/access-accounts/${selected.id}/keys/${k.id}/copy`,{method:'POST',body:{}});showSecret({key:k,token:data.token});return CANCEL;}):el('span',{class:'muted',text:k.revoked_at?'':'不可再查看'}),actionButton('撤销',async()=>{if(!await confirmAction('撤销这把接入密钥','仅撤销这把密钥，并清除可再次查看的原文。同一接入账户的其他有效密钥和已有数据不变。','确认撤销',true))return CANCEL;return api(`/api/admin/access-accounts/${selected.id}/keys/${k.id}`,{method:'DELETE',body:{}});},{danger:true,disabled:Boolean(k.revoked_at)}))}],keys),el('button',{class:'btn',text:'签发接入密钥',onclick:()=>accessKeyEditor(selected)})));
+  root.append(panel(`${selected.name} · 资源范围`,'分配仅限已有的资源范围和期限，不设置客户人数配额。',table([{label:'资源',render:r=>r.name},{label:'期限',render:r=>r.expires_at?date(r.expires_at):'无固定期限'},{label:'状态',render:r=>badge(r.available?'active':'disabled')},{label:'操作',render:r=>el('button',{class:'btn small',text:'编辑范围',onclick:()=>accessResourceEditor(selected,sources,r)})}],resources),el('button',{class:'btn',text:'分配资源',disabled:!sources.length,onclick:()=>accessResourceEditor(selected,sources)})));
+  root.append(panel(`${selected.name} · 接入密钥`,'交付公开地址和这里生成的密钥，绝不交付上游密钥。',table([{label:'密钥',render:k=>k.name},{label:'前缀',render:k=>k.prefix+'…'},{label:'权限',render:k=>k.scopes.join(' · ')},{label:'期限',render:k=>date(k.expires_at)},{label:'状态',render:k=>badge(k.revoked_at?'revoked':k.expires_at&&Date.parse(k.expires_at)<Date.now()?'expired':'active')},{label:'操作',render:k=>el('div',{class:'table-actions'},k.copyable?actionButton('查看',async()=>{const data=await api(`/api/admin/access-accounts/${selected.id}/keys/${k.id}/copy`,{method:'POST',body:{}});showSecret({key:k,token:data.token});return CANCEL;}):el('span',{class:'muted',text:k.revoked_at?'':'不可再查看'}),actionButton('撤销',async()=>{if(!await confirmAction('撤销这把接入密钥','仅撤销这把密钥，并清除可再次查看的原文。同一接入账户的其他有效密钥和已有数据不变。','确认撤销',true))return CANCEL;return api(`/api/admin/access-accounts/${selected.id}/keys/${k.id}`,{method:'DELETE',body:{}});},{danger:true,disabled:Boolean(k.revoked_at)}))}],keys),el('button',{class:'btn',text:'签发接入密钥',onclick:()=>accessKeyEditor(selected)})));
  }
  return root;
 }

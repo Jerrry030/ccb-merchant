@@ -31,11 +31,9 @@ test('actual wizard and local API account UI isolate credentials, manage resourc
  await page.getByRole('button',{name:'签发接入密钥',exact:true}).click();await page.getByLabel('密钥名称',{exact:true}).fill('C 生产接入');
  assert.equal(await page.getByRole('checkbox',{name:'delegation.keys.manage',exact:true}).count(),0);
  await page.getByRole('dialog').getByRole('button',{name:'签发接入密钥',exact:true}).click();await page.getByRole('dialog').filter({hasText:'签发接入密钥'}).getByRole('button',{name:'确认签发',exact:true}).click();
- await page.getByRole('dialog',{name:'接入密钥'}).waitFor();const token=await page.locator('.secret').textContent();assert.match(token,/^ccbm_[a-f0-9]{64}$/);
+ await page.getByRole('row').filter({hasText:'C 生产接入'}).waitFor();assert.equal(await page.getByRole('dialog').count(),0);
+ await page.getByRole('button',{name:'查看',exact:true}).click();await page.getByRole('dialog',{name:'接入密钥'}).waitFor();const token=await page.locator('.secret').textContent();assert.match(token,/^ccbm_[a-f0-9]{64}$/);
  assert.equal(await page.evaluate(()=>JSON.stringify({...localStorage,...sessionStorage})).then(v=>v.includes(token)),false);
- await page.getByRole('button',{name:'关闭',exact:true}).click();assert.equal((await page.content()).includes(token),false);
- await page.getByRole('button',{name:'刷新',exact:true}).click();await page.getByRole('row').filter({hasText:'C 生产接入'}).waitFor();
- await page.getByRole('button',{name:'查看',exact:true}).click();await page.getByRole('dialog',{name:'接入密钥'}).waitFor();
  assert.equal(await page.locator('.secret').textContent(),token);await page.getByRole('button',{name:'关闭',exact:true}).click();
  assert.equal((await page.content()).includes(token),false);
  await page.getByRole('button',{name:'刷新',exact:true}).click();await page.getByRole('row').filter({hasText:'C 生产接入'}).waitFor();

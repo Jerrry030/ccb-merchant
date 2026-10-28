@@ -23,7 +23,7 @@ test('actual storefront UI creates a plan, buys, renews, filters and exports imm
  page.on('pageerror',e=>failures.push(e.message));page.setDefaultTimeout(10000);
  await context.route('**/*',route=>{if(new URL(route.request().url()).origin!==f.config.publicOrigin){external.push(route.request().url());return route.abort();}return route.continue();});
  await page.goto(f.config.publicOrigin+'/login');
- await page.getByLabel('电子邮箱',{exact:true}).fill('admin@example.test');await page.getByLabel('密码',{exact:true}).fill(password);await page.getByRole('button',{name:'登录工作台',exact:true}).click();
+ await page.getByLabel('电子邮箱',{exact:true}).fill('admin@example.test');await page.getByLabel('密码',{exact:true}).fill(password);await page.getByRole('button',{name:'登录',exact:true}).click();
  await page.getByRole('link',{name:'账号库存',exact:true}).waitFor();await page.goto(f.config.publicOrigin+'/admin/plans');await page.getByRole('button',{name:'创建套餐',exact:true}).click();
  await page.getByLabel('有效期（天，每天 24 小时）',{exact:true}).fill('7');await page.getByLabel('套餐金额（人民币元）',{exact:true}).fill('12.34');await page.getByLabel('上架状态',{exact:true}).selectOption('active');
  await page.getByRole('button',{name:'保存套餐',exact:true}).click();await page.getByRole('dialog').filter({hasText:'已有订单保留原价格'}).getByRole('button',{name:'确认保存',exact:true}).click();
@@ -31,7 +31,7 @@ test('actual storefront UI creates a plan, buys, renews, filters and exports imm
  const artifacts=resolve(project,'tests/browser/artifacts');await mkdir(artifacts,{recursive:true});await page.screenshot({path:resolve(artifacts,'rental-admin-plans.png'),fullPage:true});
  await page.getByRole('link',{name:'运营待办',exact:true}).click();await page.getByText('客户同步待办',{exact:true}).waitFor();
  await page.getByRole('button',{name:'退出登录',exact:true}).click();await page.getByRole('dialog').getByRole('button',{name:'退出登录',exact:true}).click();
- await page.getByLabel('电子邮箱',{exact:true}).fill('member@example.test');await page.getByLabel('密码',{exact:true}).fill(password);await page.getByRole('button',{name:'登录工作台',exact:true}).click();
+ await page.getByLabel('电子邮箱',{exact:true}).fill('member@example.test');await page.getByLabel('密码',{exact:true}).fill(password);await page.getByRole('button',{name:'登录',exact:true}).click();
  await page.getByRole('link',{name:'我的账号',exact:true}).waitFor();await page.goto(f.config.publicOrigin+'/wallet');assert.equal(await page.getByRole('link',{name:'套餐管理',exact:true}).count(),0);
  await page.getByRole('heading',{name:'7 天',exact:true}).waitFor();await page.screenshot({path:resolve(artifacts,'rental-member-plans.png'),fullPage:true});
  for(let i=0;i<2;i++){

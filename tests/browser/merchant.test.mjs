@@ -28,7 +28,7 @@ async function login({page,fixture},role = 'member',path = '/') {
   await page.getByRole('heading',{name:'欢迎回来',exact:true}).waitFor();
   await page.getByLabel('电子邮箱',{exact:true}).fill(fixtureAccounts[role].email);
   await page.getByLabel('密码',{exact:true}).fill(fixtureAccounts[role].password);
-  await page.getByRole('button',{name:'登录工作台',exact:true}).click();
+  await page.getByRole('button',{name:'登录',exact:true}).click();
   await page.locator('.shell').waitFor();
   await page.locator('#page-content:not([aria-busy])').waitFor();
 }
@@ -40,9 +40,13 @@ test('member identity controls navigation; direct admin routes do not fetch priv
   await h.page.getByText('工作空间尚未连接上游服务',{exact:true}).waitFor();
   assert.equal(await h.page.getByRole('link',{name:'客户管理',exact:true}).count(),0);
   assert.equal(await h.page.getByRole('link',{name:'API 接入',exact:true}).count(),0);
+  assert.equal(await h.page.getByRole('navigation',{name:'主导航'}).getByRole('link',{name:'开始使用',exact:true}).count(),1);
   assert.equal(await h.page.getByRole('combobox').count(),0,'No identity/role switch');
   assert.equal(await h.page.locator('.overview-page .is-unknown').count(),15,'Unavailable usage stays unknown');
   assert.equal(await h.page.getByText('0',{exact:true}).count(),0,'Unavailable upstream data must not be represented as zero');
+  await h.page.getByRole('navigation',{name:'主导航'}).getByRole('link',{name:'开始使用',exact:true}).click();
+  await h.page.getByRole('heading',{name:'开始使用',exact:true}).waitFor();
+  await h.page.getByRole('heading',{name:'安装 ccb',exact:true}).waitFor();
   await h.page.goto(h.fixture.origin + '/admin/access');
   await h.page.getByRole('heading',{name:'没有管理权限',exact:true}).waitFor();
   assert.equal(h.fixture.state.requests.filter(r => r.path.startsWith('/api/admin/')).length,0);
@@ -61,7 +65,7 @@ test('member empty and unavailable views have honest states; payment stays disab
 
 test('admin uses the same layout and sees only genuine empty data/configuration',async t => {
   const h = await harness(t); await login(h,'admin');
-  for (const title of ['客户管理','账号库存','审计日志','站点设置']) assert.equal(await h.page.getByRole('link',{name:title,exact:true}).count(),1);
+  for (const title of ['开始使用','客户管理','账号库存','审计日志','站点设置']) assert.equal(await h.page.getByRole('link',{name:title,exact:true}).count(),1);
   for (const [link,text] of [['账号库存','暂无账号'],['审计日志','暂无审计记录'],['站点设置','公开站点信息']]) {
     await h.page.getByRole('link',{name:link,exact:true}).click(); await h.page.getByText(text,{exact:true}).waitFor();
   }
@@ -114,12 +118,12 @@ test('enabled registration, verification and password reset are explicit and scr
 
 test('one-time setup requires confirmation and establishes server administrator identity',async t => {
   const {page,fixture} = await harness(t,{setupRequired:true}); await page.goto(fixture.origin+'/');
-  await page.getByRole('heading',{name:'初始化工作台',exact:true}).waitFor();
+  await page.getByRole('heading',{name:'初始化',exact:true}).waitFor();
   await page.getByLabel('初始化令牌',{exact:true}).fill('fixture-setup-token'); await page.getByLabel('显示名称',{exact:true}).fill('首位管理员');
   await page.getByLabel('电子邮箱',{exact:true}).fill('owner@example.test'); await page.getByLabel('密码',{exact:true}).fill('fixture-setup-password-123'); await page.getByLabel('确认密码',{exact:true}).fill('fixture-setup-password-123');
   await page.getByRole('button',{name:'创建管理员',exact:true}).click(); await page.getByRole('dialog').waitFor();
   assert.equal(fixture.state.requests.filter(r => r.path === '/api/setup').length,0);
-  await page.getByRole('button',{name:'确认初始化',exact:true}).click(); await page.getByRole('heading',{name:'上游接入',exact:true}).waitFor(); await page.getByRole('link',{name:'稍后配置，返回工作台',exact:true}).click(); await page.getByRole('heading',{name:'首页',exact:true}).waitFor();
+  await page.getByRole('button',{name:'确认初始化',exact:true}).click(); await page.getByRole('heading',{name:'上游接入',exact:true}).waitFor(); await page.getByRole('link',{name:'稍后配置，返回首页',exact:true}).click(); await page.getByRole('heading',{name:'首页',exact:true}).waitFor();
   assert.equal(await page.getByRole('link',{name:'客户管理',exact:true}).count(),1);
 });
 
@@ -245,7 +249,7 @@ test('loading is visible and expired sessions explicitly request fresh login',as
   await h.page.unroute(h.fixture.origin + '/api/me/accounts');
   h.fixture.state.sessions.clear(); await h.page.getByRole('link',{name:'我的账号',exact:true}).click(); await h.page.getByText('登录已失效',{exact:true}).waitFor();
   await h.page.getByRole('button',{name:'重新登录',exact:true}).click(); await h.page.getByRole('heading',{name:'欢迎回来',exact:true}).waitFor();
-  await h.page.getByLabel('电子邮箱',{exact:true}).fill(fixtureAccounts.member.email); await h.page.getByLabel('密码',{exact:true}).fill(fixtureAccounts.member.password); await h.page.getByRole('button',{name:'登录工作台',exact:true}).click(); await h.page.getByRole('heading',{name:'我的账号',exact:true}).first().waitFor();
+  await h.page.getByLabel('电子邮箱',{exact:true}).fill(fixtureAccounts.member.email); await h.page.getByLabel('密码',{exact:true}).fill(fixtureAccounts.member.password); await h.page.getByRole('button',{name:'登录',exact:true}).click(); await h.page.getByRole('heading',{name:'我的账号',exact:true}).first().waitFor();
 });
 
 test('unsafe return targets and non-Stripe HTTPS checkout origins are never navigated',async t => {
