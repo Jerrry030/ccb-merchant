@@ -31,7 +31,7 @@ export async function startFixture(options = {}) {
     try {
       if (!path.startsWith('/api/')) {
         if (!['GET','HEAD'].includes(req.method)) return reply(405,'method_not_allowed','Method not allowed.');
-        const asset = {'/app.js':['app.js','text/javascript; charset=utf-8'],'/payment-checkout.js':['payment-checkout.js','text/javascript; charset=utf-8'],'/mail-settings.js':['mail-settings.js','text/javascript; charset=utf-8'],'/payment-settings.js':['payment-settings.js','text/javascript; charset=utf-8'],'/payment-catalog.js':['payment-catalog.js','text/javascript; charset=utf-8'],'/usage-detail.js':['usage-detail.js','text/javascript; charset=utf-8'],'/inventory-status.js':['inventory-status.js','text/javascript; charset=utf-8'],'/registration-policy.js':['registration-policy.js','text/javascript; charset=utf-8'],'/styles.css':['styles.css','text/css; charset=utf-8'],'/mark.svg':['mark.svg','image/svg+xml']}[path] || ['index.html','text/html; charset=utf-8'];
+        const asset = {'/app.js':['app.js','text/javascript; charset=utf-8'],'/payment-checkout.js':['payment-checkout.js','text/javascript; charset=utf-8'],'/mail-settings.js':['mail-settings.js','text/javascript; charset=utf-8'],'/payment-settings.js':['payment-settings.js','text/javascript; charset=utf-8'],'/payment-catalog.js':['payment-catalog.js','text/javascript; charset=utf-8'],'/usage-detail.js':['usage-detail.js','text/javascript; charset=utf-8'],'/inventory-status.js':['inventory-status.js','text/javascript; charset=utf-8'],'/admin-workflow.js':['admin-workflow.js','text/javascript; charset=utf-8'],'/registration-policy.js':['registration-policy.js','text/javascript; charset=utf-8'],'/styles.css':['styles.css','text/css; charset=utf-8'],'/mark.svg':['mark.svg','image/svg+xml']}[path] || ['index.html','text/html; charset=utf-8'];
         const body = await readFile(resolve(publicRoot,asset[0]));
         res.writeHead(200,{'Content-Type':asset[1],'Cache-Control':'no-store','Referrer-Policy':'no-referrer','Content-Security-Policy':"default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'"});
         return res.end(body);
@@ -98,7 +98,8 @@ export async function startFixture(options = {}) {
       if (path === '/api/admin/connection') return reply(200,state.connection);
       if (path === '/api/admin/inventory') return reply(200,{accounts:state.grants.map(g=>({id:'held-'+g.id,resource_id:g.resource_id,platform:'Windows/x64',status:'active',revision:2,expires_at:new Date(Date.now()+90*86400000).toISOString(),grant_id:g.id,grant_revision:g.revision,customer_expires_at:g.expires_at,assigned:g.status==='active',user_id:'member-1',customer_name:'测试成员',details:{name:g.name,state:'available',device_name:''}}))});
       if (path === '/api/admin/resources') return reply(200,{resources:state.resources});
-      if (path === '/api/admin/users' && !write) return reply(200,{users:state.users});
+      if (path === '/api/admin/users' && !write) return reply(200,{users:state.users,total:state.users.length,limit:50,offset:0});
+      if (/^\/api\/admin\/users\/[^/]+$/.test(path) && !write) { const user=state.users.find(u=>u.id===decodeURIComponent(path.split('/').at(-1)));return user?reply(200,{user}):reply(404,'not_found','Customer not found.'); }
       if (path === '/api/admin/users' && req.method === 'POST') {
         const created = {id:`user-${state.users.length+1}`,email:body.email,display_name:body.display_name,role:body.role,status:'active',created_at:now}; state.users.push(created); return reply(201,{user:created});
       }
@@ -122,9 +123,9 @@ export async function startFixture(options = {}) {
         const {expected_revision,...patch} = body; Object.assign(grant,patch,{revision:grant.revision+1}); return reply(200,{grant});
       }
 
-      if (path === '/api/admin/orders') return reply(200,{orders:state.orders});
-      if (path === '/api/admin/audit') return reply(200,{events:state.events});
-      if (path === '/api/admin/operations') return reply(200,{pending_customers:[],unassigned_customers:[],rentals:[],payments_pending:0,worker:{interval_ms:15000,max_attempts:8},readiness:{core_configured:Boolean(state.connection.configured),mail_configured:false,payment_configured:Boolean(state.public.features.payment),https:false,schema_version:3,runtime_limit:8}});
+      if (path === '/api/admin/orders') return reply(200,{orders:state.orders,total:state.orders.length,limit:30,offset:0});
+      if (path === '/api/admin/audit') return reply(200,{events:state.events,total:state.events.length,limit:50,offset:0,actions:[...new Set(state.events.map(e=>e.action))],outcomes:[...new Set(state.events.map(e=>e.outcome))]});
+      if (path === '/api/admin/operations') return reply(200,{pending_customers:[],unassigned_customers:[],rentals:[],payments_pending:0,deliveries_pending:0,worker:{interval_ms:15000,max_attempts:8},readiness:{core_configured:Boolean(state.connection.configured),mail_configured:false,payment_configured:Boolean(state.public.features.payment),https:false,schema_version:3,runtime_limit:8}});
       if (path === '/api/admin/settings' && req.method === 'PATCH') {
         Object.assign(state.public.site,{name:body.name,description:body.description,support_email:body.support_email}); state.public.features.registration = body.registration_enabled; return reply(200,{site:state.public.site,features:state.public.features});
       }

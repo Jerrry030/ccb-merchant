@@ -1,9 +1,10 @@
+import { deliveryReviewStatuses, paymentReviewStatuses, auditActions, auditOutcomes, localDateTime, renewalExpiry } from './admin-workflow.js';
 import { paymentCheckout } from './payment-checkout.js';
 import { normalizeRegistrationEmailSuffixDomain, isRegistrationEmailSuffixDomainValid, parseRegistrationEmailSuffixWhitelistInput } from './registration-policy.js';
 import { mailSettingsView } from './mail-settings.js';
 import { paymentSettingsView } from './payment-settings.js';
 import { usageDetail } from './usage-detail.js';
-import { inventoryStatus } from './inventory-status.js';
+import { inventoryStatus, selectInventory } from './inventory-status.js';
 /* Standalone merchant client. Only /api on this origin; no stored credentials or demo data. */
 const app = document.getElementById('app');
 const state = { public: null, user: null, csrf: null, returnTo: '/', code: '', token: '', view: 0 };
@@ -350,14 +351,23 @@ async function render() {
     renderAuth(path); return;
   }
   if (authRoutes.has(path)) { navigate(state.returnTo || '/',true); return; }
-  const route = navigation.find(item => item.path === path) || {path,title:'页面不存在',description:'此地址不在导航中。'};
+  const routeSpec = navigation.find(item => item.path === path) || {path,title:'页面不存在',description:'此地址不在导航中。'};
+  const route = path==='/admin/customers'&&new URLSearchParams(location.search).has('user_id')?{...routeSpec,title:'客户详情'}:routeSpec;
   document.title = `${route.title} · ${state.public.site.name}`;
   const content = shell(route);
   try {
     let result;
     if (route.admin && state.user.role !== 'admin') result = emptyState('没有管理权限','此页面仅供服务端确认的商户管理员访问。','shield',el('a',{class:'btn primary',href:'/',text:'返回首页'}));
     else if (!views[path]) result = emptyState('没有找到此页面','请使用侧栏导航。','info',el('a',{class:'btn',href:'/',text:'返回首页'}));
-    else result = await views[path]();
+    else {
+      const customerId=new URLSearchParams(location.search).get('user_id');
+      if(customerId&&['/admin/inventory','/admin/devices','/admin/customer-usage','/admin/rentals','/admin/orders','/admin/audit'].includes(path)) {
+        const customer=await api('/api/admin/users/'+encodeURIComponent(customerId));
+        if(ticket!==state.view)return;
+        content.before(customerWorkspace(customer.user));
+      }
+      result = await views[path]();
+    }
     if (ticket !== state.view) return;
     content.replaceChildren(result); content.removeAttribute('aria-busy');
     document.getElementById('announcer').textContent = `${route.title}已加载`;
@@ -742,7 +752,13 @@ async function overviewView() {
 async function inventoryView() {
  const data=await api('/api/admin/inventory'),accounts=collection(data,'accounts');
  const query=new URLSearchParams(location.search),customerId=query.get('user_id'),now=Date.now();
- const entries=accounts.map(account=>({account,...inventoryStatus(account,now)})).filter(({account,history})=>!customerId||account.user_id===customerId||(!history&&account.assigned===false));
+ const entries=selectInventory(accounts,query,now);
+ const filters=el('form',{class:'admin-filters'},field('搜索账号或客户','q',{value:query.get('q')||'',placeholder:'账号名称、编号、客户姓名或邮箱'}),field('平台','platform',{type:'select',value:query.get('platform')||'',choices:[{value:'',label:'全部平台'},...Array.from(new Set(accounts.map(a=>a.platform).filter(Boolean))).sort().map(value=>({value,label:value}))]}),field('库存状态','status',{type:'select',value:query.get('status')||'',choices:[['','全部状态'],['assignable','可分配'],['assigned','已分配'],['unavailable','暂不可用'],['review','待核对'],['released','已释放'],['expired','已到期']].map(([value,label])=>({value,label}))}),field('到期口径','deadline',{type:'select',value:query.get('deadline')||'customer',choices:[{value:'customer',label:'客户到期'},{value:'authorization',label:'上游授权到期'}]}),field('到期范围','due',{type:'select',value:query.get('due')||'',choices:[{value:'',label:'全部期限'},{value:'7',label:'未来 7 天'},{value:'30',label:'未来 30 天'}]}),field('排序','sort',{type:'select',value:query.get('sort')||'expiry_asc',choices:[{value:'expiry_asc',label:'到期从近到远'},{value:'expiry_desc',label:'到期从远到近'},{value:'name',label:'账号名称'}]}),el('button',{class:'btn',type:'submit',text:'筛选库存'}));
+ const controls=[...filters.children];
+ const advanced=el('details',{class:'inventory-filter-details',open:['platform','status','deadline','due','sort'].some(key=>query.get(key))},el('summary',{text:'平台、状态、到期与排序'}),el('div',{class:'admin-filter-fields'},controls.slice(1,-1)));
+ filters.replaceChildren(controls[0],controls.at(-1),advanced);
+ filters.addEventListener('submit',event=>{event.preventDefault();const next=new URLSearchParams(location.search);for(const [key,value] of new FormData(filters)){if(value)next.set(key,value);else next.delete(key);}navigate('/admin/inventory?'+next);});
+ const quick=el('div',{class:'button-row'},[7,30].map(days=>el('button',{class:'btn small',text:'客户 '+days+' 天内到期',onclick:()=>{const next=new URLSearchParams(location.search);next.set('deadline','customer');next.set('due',String(days));next.delete('view');navigate('/admin/inventory?'+next);}})),el('button',{class:'btn small',text:'清除库存筛选',onclick:()=>{const next=new URLSearchParams(location.search);for(const key of ['q','platform','status','deadline','due','sort'])next.delete(key);navigate('/admin/inventory?'+next);}}));
  const current=entries.filter(entry=>!entry.history),historical=entries.filter(entry=>entry.history);
  const selected=query.get('view')==='history'?'history':'current';
  const descriptions={current:'选账号 → 选客户 → 确认分配。每个账号最多绑定 1 台设备。',history:'已释放、已到期的授权仅供核对，不作为当前可交付库存。'};
@@ -752,9 +768,9 @@ async function inventoryView() {
   const columns=[
    {label:'账号',render:({account:a})=>el('div',{},el('strong',{text:a.details?.name||a.id}),el('span',{class:'table-sub',text:a.platform}))},
    {label:'规格',render:({account:a})=>a.details?.plan||'Claude'},
-   {label:isHistory?'原授权到期':'授权到期',render:({account:a})=>date(a.expires_at)},
+   {label:isHistory?'原授权到期':'授权到期',render:({account:a})=>el('div',{},date(a.expires_at),isHistory?null:expiryIndicator(a.expires_at))},
    {label:'状态',render:entry=>el('div',{},el('span',{class:`badge ${entry.tone}`,text:entry.label}),entry.reason?el('span',{class:'table-sub',text:entry.reason}):null)},
-   {label:isHistory?'关联客户':'使用客户',render:({account:a})=>isHistory&&!a.user_id?'未提供':a.assigned?el('div',{},el('strong',{text:a.customer_name||'已分配客户'}),el('span',{class:'table-sub',text:a.customer_email||''}),el('span',{class:'table-sub',text:'客户到期：'+date(a.customer_expires_at)})):'—'},
+   {label:isHistory?'关联客户':'使用客户',render:({account:a})=>isHistory&&!a.user_id?'未提供':a.assigned?el('div',{},el('strong',{text:a.customer_name||'已分配客户'}),el('span',{class:'table-sub',text:a.customer_email||''}),el('span',{class:'table-sub',text:'客户到期：'+date(a.customer_expires_at)}),expiryIndicator(a.customer_expires_at)):'—'},
   ];
   if(!isHistory)columns.push({label:'设备',render:({account:a})=>a.details?.device_name||'未绑定'});
   columns.push({label:'操作',render:entry=>{
@@ -771,9 +787,10 @@ async function inventoryView() {
      el('button',{class:'btn small',type:'button',text:'延长客户有效期',disabled:!entry.active||!a.grant_revision||Date.parse(a.customer_expires_at)>=Date.parse(a.expires_at),onclick:()=>extendCustomerAccount(a)}),
      actionButton('收回账号',async()=>await confirmAction('收回账号',`收回「${a.details?.name||'此账号'}」对「${a.customer_name||'当前客户'}」的授权。原客户和设备将不能继续使用，确认成功后才可重新分配。`,'确认收回',true)?api('/api/admin/grants/'+encodeURIComponent(a.grant_id),{method:'PATCH',body:{expected_revision:a.grant_revision,status:'revoked'}}):CANCEL,{danger:true,disabled:!a.grant_id||!a.grant_revision})]);
   }});
-  const empty=isHistory?'暂无历史记录':historical.length?'暂无当前库存':'暂无账号';
+  const filtering=['q','platform','status','due'].some(key=>query.get(key));
+   const empty=filtering?'没有匹配的库存':isHistory?'暂无历史记录':historical.length?'暂无当前库存':'暂无账号';
   const explanation=isHistory?(customerId?'未返回与这位客户明确关联的历史授权；未关联客户的记录可在全部库存中查看。':'已释放或已到期的授权会保留在这里，不计入当前库存。'):historical.length?'当前没有可用的授权记录。可切换到历史记录核对原授权，或联系平台管理员重新分配。':customerId?'这位客户尚未获得账号，当前也没有未分配库存。':'请联系平台管理员分配账号。账号进入库存后，直接选择客户即可交付。';
-  const inventory=table(columns,rows,empty,explanation);inventory.classList.add('rental-table');
+  const inventory=table(columns,rows,empty,filtering?'请调整筛选条件；这不代表全部库存为空。':explanation);inventory.classList.add('rental-table');
   const page=el('div',{id:'inventory-'+id,role:'tabpanel','aria-labelledby':'inventory-tab-'+id,hidden:id!==selected},inventory,
    el('p',{class:'inventory-scope-note',text:isHistory?(customerId?'仅显示明确关联这位客户的历史授权，不计入当前库存统计。':'历史记录仅供核对，不计入当前库存统计。'):customerId?'仅显示这位客户的账号及未分配库存；统计按当前筛选范围计算。':'当前库存包含待核对或暂不可用的授权；已释放、已到期记录请查看历史记录。'}));
   const tab=el('button',{id:'inventory-tab-'+id,type:'button',role:'tab','aria-controls':page.id,'aria-selected':String(id===selected),tabindex:id===selected?'0':'-1',onclick:()=>showPage(id)},label,el('span',{class:'inventory-tab-count',text:number(rows.length)}));
@@ -792,7 +809,7 @@ async function inventoryView() {
   if(next<0)return;event.preventDefault();showPage(pages[next].id);pages[next].tab.focus();
  }},pages.map(item=>item.tab));
  const inventoryPanel=panel('账号库存',descriptions[selected],el('div',{},tabs,pages.map(item=>item.page)));
- return el('div',{class:'page-content inventory-page'},allLink,
+ return el('div',{class:'page-content inventory-page'},allLink,filters,quick,
   el('div',{class:'stats-grid',role:'group','aria-label':'当前库存统计'},stat('可分配',number(current.filter(entry=>entry.assignable).length),'当前筛选范围内可交付的授权','layers'),stat('已分配',number(current.filter(entry=>entry.active&&entry.account.assigned===true).length),'仅统计当前仍有效的客户授权','users')),
   inventoryPanel);
 }
@@ -837,9 +854,20 @@ async function assignInventoryAccount(account,customerId=null){
  }catch(error){document.getElementById('page-feedback')?.replaceChildren(errorNotice(error));}
 }
 function extendCustomerAccount(account){
- const form=el('form',{},notice(account.details?.name||'账号',`当前客户到期 ${date(account.customer_expires_at)}；最多可延长至 ${date(account.expires_at)}。`),field('新的客户到期时间','expires_at',{type:'datetime-local',required:true}),el('button',{class:'btn primary',type:'submit',text:'确认延长'}));
+ const input=field('新的客户到期时间','expires_at',{type:'datetime-local',required:true,min:localDateTime(Math.max(Date.now(),Date.parse(account.customer_expires_at))+60000),max:localDateTime(account.expires_at)});
+ const preview=el('div',{class:'inline-info','aria-live':'polite'}),control=input.querySelector('input');
+ let chosenExpiry=null;
+ const update=()=>{preview.textContent='原客户期限：'+date(account.customer_expires_at)+' → 新客户期限：'+date(chosenExpiry||control.value)+'；授权上限：'+date(account.expires_at);};
+ const shortcuts=el('div',{class:'button-row'},[7,30].map(days=>el('button',{type:'button',class:'btn small',text:'延长 '+days+' 天',disabled:!renewalExpiry(account,days),title:'从原期限与当前时间中较晚者起算；不能超过上游授权期限。',onclick:()=>{const end=renewalExpiry(account,days);if(end){chosenExpiry=end;control.value=localDateTime(end);update();}}})));
+ const form=el('form',{},notice(account.details?.name||'账号','客户：'+(account.customer_name||account.customer_email||'当前客户')+'。快捷延长按 24 小时计一天；超过授权上限的选项不可用。'),shortcuts,input,preview,el('button',{class:'btn primary',type:'submit',text:'确认延长'}));
+ control.addEventListener('input',()=>{chosenExpiry=null;update();});update();
  const dialog=editorDialog('延长客户有效期',form);
- bindForm(form,values=>{const end=new Date(values.get('expires_at')).toISOString();if(Date.parse(end)<=Math.max(Date.now(),Date.parse(account.customer_expires_at))||Date.parse(end)>Date.parse(account.expires_at))throw new Error('新的到期时间必须晚于原期限，且不能超过账号到期时间。');return api('/api/admin/grants/'+encodeURIComponent(account.grant_id),{method:'PATCH',body:{expected_revision:account.grant_revision,expires_at:end}});},()=>{dialog.close();render();});
+ bindForm(form,async values=>{
+   const stamp=Date.parse(chosenExpiry||values.get('expires_at'));
+   if(!Number.isFinite(stamp)||stamp<=Math.max(Date.now(),Date.parse(account.customer_expires_at))||stamp>Date.parse(account.expires_at))throw new Error('新的到期时间必须晚于原期限，且不能超过账号到期时间。');
+   if(!await confirmAction('确认客户续期','将「'+(account.customer_name||'当前客户')+'」的「'+(account.details?.name||'账号')+'」从 '+date(account.customer_expires_at)+' 延长至 '+date(stamp)+'。不会延长上游授权，也不会自动收款。','确认续期'))return CANCEL;
+   return api('/api/admin/grants/'+encodeURIComponent(account.grant_id),{method:'PATCH',body:{expected_revision:account.grant_revision,expires_at:new Date(stamp).toISOString()}});
+ },()=>{dialog.close();toast('客户有效期已由服务器确认');render();});
 }
 async function accountsView() {
   const accounts = collection(await api('/api/me/accounts'),'accounts');
@@ -879,13 +907,13 @@ async function devicesView() {
   if(staff&&!userId)throw new Error('请从客户管理选择一位客户。');
   const base=staff?`/api/admin/users/${encodeURIComponent(userId)}/devices`:'/api/me/devices';
   const data=await api(base),devices=collection(data,'devices').filter(d=>!accountId||d.current_grant_id===accountId),accounts=collection(data,'accounts');
-  return el('div',{class:'page-content'},staff?el('a',{href:'/admin/customers',class:'btn small',text:'返回客户管理'}):null,panel(accountId?'更换设备':staff?'客户设备':'连接的设备','可以改名、选择账号或清空选择；清空不退出登录。单账号单设备，不会自动抢占。',table([
+  return el('div',{class:'page-content'},panel(accountId?'更换设备':staff?'客户设备':'连接的设备','可以改名、选择账号或清空选择；清空不退出登录。单账号单设备，不会自动抢占。',table([
     {label:'设备',render:d=>el('div',{},el('strong',{text:d.name||'未命名设备'}),el('span',{class:'table-sub',text:d.platform||'未知平台'}))},
     {label:'状态',render:d=>badge(d.state)},{label:'所选账号',render:d=>d.account_name||accounts.find(a=>a.id===d.current_grant_id)?.name||'未指定'},
     {label:'最近活动',render:d=>date(d.last_seen)},{label:'到期时间',render:d=>date(d.expires_at)},
     {label:'操作',render:d=>el('div',{class:'table-actions'},
       el('button',{class:'btn small',text:'管理绑定',disabled:d.state!=='approved',onclick:()=>deviceEditor(d,accounts,base)}),
-      el('a',{class:'btn small',href:(staff?'/admin/customer-usage?user_id='+encodeURIComponent(userId)+'&':'/usage?')+'device_id='+encodeURIComponent(d.id),text:'使用记录'}),
+      el('a',{class:'btn small',href:(staff?'/admin/customer-usage?'+new URLSearchParams({user_id:userId,...(query.get('return_to')?{return_to:query.get('return_to')}:{})})+'&':'/usage?')+'device_id='+encodeURIComponent(d.id),text:'使用记录'}),
       actionButton('撤销连接',async()=>await confirmAction('撤销设备连接',`确认撤销「${d.name||'此设备'}」？此操作会阻止新的执行请求。`,'撤销连接',true)?api(base+'/'+encodeURIComponent(d.id),{method:'DELETE'}):CANCEL,{danger:true,disabled:d.state==='revoked'}))},
   ],devices,'还没有连接设备','请在客户端发起连接并确认。不会自动授权设备。'),staff?null:el('a',{class:'btn primary',href:'/connect'},icon('terminal'),'开始使用')));
 }
@@ -1251,7 +1279,7 @@ async function usageView() {
     ],requests,'此区间暂无请求','换一个时间范围，或在获得权益并连接设备后开始使用。'),pager)));
 }
 function orderTable(orders, showCustomer = false) {
-  return table([...(showCustomer ? [{label:'客户标识',render:o => el('span',{class:'mono',text:o.user_id || '未提供'})}] : []),{label:'订单编号',render:o => el('span',{class:'mono',text:o.id})},{label:'支付方式',render:o=>({stripe:'Stripe',alipay:'支付宝',wxpay:'微信支付',airwallex:'Airwallex'}[o.payment_method]||'Stripe')},{label:'用途',render:o=>o.rental_id?'套餐支付':'余额充值'},{label:'金额',render:o => money(o.amount_minor,o.currency)},{label:'支付状态',render:o => badge(o.status)},{label:'创建时间',render:o => date(o.created_at)},{label:'操作',render:o=>['creating','pending','unknown'].includes(o.status)?el('div',{class:'button-row'},actionButton('核对支付',()=>api(`/api/${showCustomer?'admin':'me'}/payments/${encodeURIComponent(o.id)}/reconcile`,{method:'POST',body:{}})),showCustomer?null:el('a',{class:'btn small',href:'/wallet?order='+encodeURIComponent(o.id),text:'继续支付'})):'—'}],orders,'暂无支付订单','只有服务器创建的真实支付订单才会出现在这里。');
+  return table([...(showCustomer ? [{label:'客户',render:o => el('div',{},el('a',{href:'/admin/customers?user_id='+encodeURIComponent(o.user_id),text:o.customer_name||o.user_id||'未提供'}),el('span',{class:'table-sub',text:o.customer_email||''}))}] : []),{label:'订单编号',render:o => el('span',{class:'mono',text:o.id})},{label:'支付方式',render:o=>({stripe:'Stripe',alipay:'支付宝',wxpay:'微信支付',airwallex:'Airwallex'}[o.payment_method]||'Stripe')},{label:'用途',render:o=>o.rental_id?'套餐支付':'余额充值'},{label:'金额',render:o => money(o.amount_minor,o.currency)},{label:'支付状态',render:o => badge(o.status)},{label:'创建时间',render:o => date(o.created_at)},{label:'操作',render:o=>paymentReviewStatuses.includes(o.status)?el('div',{class:'button-row'},actionButton('核对支付',()=>api(`/api/${showCustomer?'admin':'me'}/payments/${encodeURIComponent(o.id)}/reconcile`,{method:'POST',body:{}})),showCustomer?null:el('a',{class:'btn small',href:'/wallet?order='+encodeURIComponent(o.id),text:'继续支付'})):'—'}],orders,'暂无支付订单','只有服务器创建的真实支付订单才会出现在这里。');
 }
 async function walletView() {
   const [data, catalog] = await Promise.all([api('/api/me/wallet'), api('/api/plans'+(new URLSearchParams(location.search).get('renew_grant_id')?'?renew_grant_id='+encodeURIComponent(new URLSearchParams(location.search).get('renew_grant_id')):'')).catch(error=>({plans:[],catalogError:error.message}))]);
@@ -1352,7 +1380,60 @@ function customerEditor(user) {
     render();
   });
 }
+
+function customerWorkspace(user) {
+  const params=new URLSearchParams(location.search);
+  let detail='/admin/customers?user_id='+encodeURIComponent(user.id);
+  if(location.pathname==='/admin/customers') detail=location.pathname+location.search;
+  else if(params.get('return_to')) {
+    try {const candidate=new URL(params.get('return_to'),location.origin);if(candidate.origin===location.origin&&candidate.pathname==='/admin/customers'&&candidate.searchParams.get('user_id')===user.id){detail=candidate.pathname+candidate.search;}}catch{}
+  }
+  const list=new URL(detail,location.origin);list.searchParams.delete('user_id');list.searchParams.delete('return_to');
+  const scope=new URLSearchParams({user_id:user.id,return_to:detail});
+  return el('section',{class:'customer-context','aria-label':'当前客户'},
+    el('div',{},el('strong',{text:user.display_name||'未命名客户'}),el('span',{class:'table-sub',text:user.email}),badge(user.status)),
+    el('a',{class:'btn small',href:location.pathname==='/admin/customers'?list.pathname+list.search:detail,text:location.pathname==='/admin/customers'?'返回客户列表':'返回客户详情'}),
+    el('nav',{'aria-label':'客户业务'},[['/admin/inventory','账号与分配'],['/admin/devices','设备管理'],['/admin/customer-usage','客户用量'],['/admin/rentals','交付订单'],['/admin/orders','支付记录'],['/admin/audit','客户审计']].map(([path,title])=>el('a',{class:'btn small',href:path+'?'+scope,text:title,'aria-current':location.pathname===path?'page':null}))));
+}
+
+function expiryIndicator(value, now=Date.now()) {
+  const end=Date.parse(value);
+  if(!Number.isFinite(end))return el('span',{class:'table-sub',text:'期限未提供'});
+  const remaining=end-now;
+  return el('span',{class:remaining<=7*86400000?'badge warn':'table-sub',text:remaining<=0?'已到期':remaining<86400000?'不足 1 天':String(Math.ceil(remaining/86400000))+' 天后到期'});
+}
+
+function listPager(data, params, base, unit='条') {
+  return el('div',{class:'pager'},el('span',{text:'共 '+number(data.total)+' '+unit+' · 第 '+(Math.floor(data.offset/data.limit)+1)+' 页'}),[-1,1].map(direction=>el('button',{class:'btn small',type:'button',text:direction<0?'上一页':'下一页',disabled:direction<0?data.offset===0:data.offset+data.limit>=data.total,onclick:()=>{const next=new URLSearchParams(params);next.set('offset',String(Math.max(0,data.offset+direction*data.limit)));navigate(base+'?'+next);}})));
+}
+
+async function customerDetailView(user) {
+  const scope=new URLSearchParams({user_id:user.id,return_to:location.pathname+location.search});
+  const since=new Date(Date.now()-7*86400000).toISOString();
+  const endpoints=['/api/admin/inventory','/api/admin/users/'+encodeURIComponent(user.id)+'/devices','/api/admin/rentals?limit=5&user_id='+encodeURIComponent(user.id),'/api/admin/orders?limit=5&user_id='+encodeURIComponent(user.id),...(user.core_customer_id?['/api/admin/users/'+encodeURIComponent(user.id)+'/usage?limit=5&result=error&from='+encodeURIComponent(since)]:[])];
+  const results=await Promise.allSettled(endpoints.map(async(path,index)=>{const value=await api(path);collection(value,['accounts','devices','rentals','orders','requests'][index]);return value;}));
+  const data=results.map(r=>r.status==='fulfilled'?r.value:null);
+  const accounts=data[0]?collection(data[0],'accounts').filter(a=>a.user_id===user.id&&!inventoryStatus(a).history):null;
+  const devices=data[1]?collection(data[1],'devices'):null;
+  const nextExpiry=accounts?.map(a=>Date.parse(a.customer_expires_at)).filter(Number.isFinite).sort((a,b)=>a-b)[0];
+  const root=el('div',{class:'page-content customer-detail'},customerWorkspace(user),
+    el('div',{class:'button-row'},el('button',{class:'btn',text:'编辑客户资料',onclick:()=>customerEditor(user)})),
+    user.sync_pending?notice('客户同步待确认',user.sync_error||'新的交付或使用可能受限，请先到运营待办核对。','warn',el('a',{href:'/admin/operations',class:'btn small',text:'处理同步待办'})):null,
+    el('div',{class:'stats-grid'},stat('当前账号',accounts?number(accounts.length):'未知','当前客户范围内的授权','layers'),stat('最近客户到期',nextExpiry?date(nextExpiry):accounts?'—':'未知','以客户期限为准，不是上游授权期限','receipt'),stat('已连接设备',devices?number(devices.filter(d=>d.state==='approved').length):'未知','仅统计已批准的连接','monitor')));
+  const sections=[
+    ['账号与期限','账号和客户期限来自当前库存；管理与分配保留版本校验。',accounts&&table([{label:'账号',render:a=>el('div',{},el('strong',{text:a.details?.name||a.id}),el('span',{class:'table-sub',text:a.platform}))},{label:'状态',render:a=>inventoryStatus(a).label},{label:'客户到期',render:a=>el('div',{},date(a.customer_expires_at),expiryIndicator(a.customer_expires_at))},{label:'授权上限',render:a=>date(a.expires_at)}],accounts,'尚未分配账号','可从账号与分配中选择当前库存。'),'/admin/inventory',0],
+    ['客户设备','核对设备、所选账号和最近活动，无需冒用客户登录。',devices&&table([{label:'设备',render:d=>d.name||d.id},{label:'状态',render:d=>badge(d.state)},{label:'所选账号',render:d=>d.account_name||'未指定'},{label:'最近活动',render:d=>date(d.last_seen)}],devices,'还没有连接设备','请让客户从客户端发起连接。'),'/admin/devices',1],
+    ['最近交付订单','只展示最近 5 笔；查看全部可筛选异常订单。',data[2]&&table([{label:'订单 / 套餐',render:o=>el('div',{},o.name,el('span',{class:'table-sub',text:o.id}))},{label:'状态',render:o=>badge(o.status)},{label:'客户到期',render:o=>date(o.expires_at)}],data[2].rentals,'暂无交付订单','人工分配的账号请看上方账号与期限。'),'/admin/rentals',2],
+    ['最近支付订单','只展示最近 5 笔；支付结果以服务端核对为准。',data[3]&&table([{label:'订单',render:o=>o.id},{label:'金额',render:o=>money(o.amount_minor,o.currency)},{label:'状态',render:o=>badge(o.status)}],data[3].orders,'暂无支付订单','没有支付订单不代表没有人工分配的账号。'),'/admin/orders',3],
+  ];
+  for(const [title,description,body,path,index] of sections){if(index<2&&body)body.classList.add('rental-table');root.append(panel(title,description,body||notice('此项数据暂不可用',results[index].reason?.message||'未获得完整结果，不代表没有记录。','warn'),el('a',{class:'btn small',href:path+'?'+scope,text:'查看全部'})));}
+  root.append(panel('最近失败请求','近 7 天，最多显示最近 5 条；不是全部用量汇总。',!user.core_customer_id?emptyState('尚未建立使用记录','客户获得账号并开始使用后可在这里核对。'):data[4]?table([{label:'时间',render:r=>date(r.time)},{label:'模型',render:r=>r.model||'—'},{label:'状态',render:r=>statusBadge(r.status)}],collection(data[4],'requests'),'此区间没有失败请求','仅代表本次查询返回的近 7 天范围。'):notice('使用记录暂不可用',results[4]?.reason?.message||'请稍后核对。','warn'),el('a',{class:'btn small',href:'/admin/customer-usage?'+scope+'&result=error&range=7d',text:'查看失败请求'})));
+  return root;
+}
+
 async function customersView() {
+  const selected=new URLSearchParams(location.search).get('user_id');
+  if(selected){const data=await api('/api/admin/users/'+encodeURIComponent(selected));return customerDetailView(data.user);}
   const params=new URLSearchParams(location.search),offset=Math.max(0,Number(params.get('offset'))||0),query=new URLSearchParams({limit:'50',offset:String(offset),q:params.get('q')||''});
   const data=await api(`/api/admin/users?${query}`),users=collection(data,'users');
   const search=el('form',{class:'button-row'},el('input',{name:'q',value:query.get('q'),placeholder:'搜索客户邮箱或名称','aria-label':'搜索客户'}),el('button',{class:'btn',type:'submit',text:'搜索'}));search.addEventListener('submit',event=>{event.preventDefault();navigate('/admin/customers?q='+encodeURIComponent(new FormData(search).get('q')));});
@@ -1361,7 +1442,7 @@ async function customersView() {
     {label:'客户',render:u => el('div',{},el('strong',{text:u.display_name || '未命名客户'}),el('span',{class:'table-sub',text:u.email}))},
     {label:'角色 / 状态',render:u => el('div',{class:'button-row'},badge(u.role),badge(u.status))},
     {label:'创建时间',render:u => date(u.created_at)},
-    {label:'操作',render:u => el('div',{class:'table-actions'},el('button',{class:'btn small',type:'button',text:'编辑',onclick:()=>customerEditor(u)}),el('a',{class:'btn small',href:`/admin/inventory?user_id=${encodeURIComponent(u.id)}`,text:'查看与分配账号'}),el('a',{class:'btn small',href:`/admin/devices?user_id=${encodeURIComponent(u.id)}`,text:'管理设备'}))},
+    {label:'操作',render:u => el('div',{class:'table-actions'},el('a',{class:'btn small',href:'/admin/customers?'+new URLSearchParams({...Object.fromEntries(query),user_id:u.id}),text:'客户详情'}),el('button',{class:'btn small',type:'button',text:'编辑',onclick:()=>customerEditor(u)}),el('a',{class:'btn small',href:`/admin/inventory?user_id=${encodeURIComponent(u.id)}`,text:'查看与分配账号'}),el('a',{class:'btn small',href:`/admin/devices?user_id=${encodeURIComponent(u.id)}`,text:'管理设备'}))},
   ],users,'暂无客户账户','创建客户后，在账号库存选择账号并分配给客户。'),el('button',{class:'btn primary',type:'button',onclick:() => customerEditor()},icon('plus'),'创建客户')));
 }
 function showSecret(data) {
@@ -1375,16 +1456,34 @@ function showSecret(data) {
 }
 
 async function ordersView() {
-  const orders = collection(await api('/api/admin/orders'),'orders');
-  return el('div',{class:'page-content'},state.public.features.payment !== true ? notice('在线支付未启用','此处仍可查看已有真实订单，但不会模拟收款或提供手工入账。','warn') : null,panel('支付订单',`${number(orders.length)} 条服务器记录`,orderTable(orders,true)));
+  const params=new URLSearchParams(location.search),query=new URLSearchParams(params);query.delete('return_to');query.set('limit','30');
+  const data=await api('/api/admin/orders?'+query),orders=collection(data,'orders'),userId=params.get('user_id');
+  const form=el('form',{class:'admin-filters'},field('订单或客户','q',{value:query.get('q')||''}),field('支付状态','status',{type:'select',value:query.get('status')||'',choices:[['','全部'],['needs_review','全部待确认'],['creating','创建中'],['pending','待支付'],['unknown','结果未知'],['paid','已支付'],['expired','已过期'],['failed','失败']].map(([value,label])=>({value,label}))}),el('button',{class:'btn',type:'submit',text:'筛选支付'}));
+  form.addEventListener('submit',event=>{event.preventDefault();const next=new URLSearchParams(params);next.delete('offset');for(const [key,value] of new FormData(form)){if(value)next.set(key,value);else next.delete(key);}navigate('/admin/orders?'+next);});
+  return el('div',{class:'page-content'},userId?null:el('a',{href:'/admin/operations',class:'btn small',text:'返回运营待办'}),form,
+    state.public.features.payment!==true?notice('在线支付未启用','仍可核对已有订单，不会模拟收款或提供手工入账。','warn'):null,
+    panel('支付订单','按服务端状态核对，待确认包括创建中、待支付和结果未知。',orderTable(orders,true)),listPager(data,params,'/admin/orders','笔'));
 }
 async function auditView() {
-  const events = collection(await api('/api/admin/audit'),'events');
-  return panel('操作审计','只展示结构化操作信息，不输出敏感请求内容',table([
-    {label:'时间',render:e => date(e.created_at)}, {label:'操作',render:e => e.action || '未提供'},
-    {label:'操作者',render:e => el('span',{class:'mono',text:e.actor_id || '系统'})},
-    {label:'目标',render:e => el('span',{class:'mono',text:e.subject_id || '—'})}, {label:'结果',render:e => e.outcome ? badge(e.outcome) : '结果未提供'},
-  ],events,'暂无审计记录','管理操作产生后，服务器记录将展示在此处。'));
+  const params=new URLSearchParams(location.search),query=new URLSearchParams(params);query.delete('return_to');query.set('limit','50');
+  const data=await api('/api/admin/audit?'+query),events=collection(data,'events');
+  const form=el('form',{class:'admin-filters'},field('搜索人员或目标','q',{value:params.get('q')||'',placeholder:'姓名、邮箱或技术标识'}),field('操作类型','action',{type:'select',value:params.get('action')||'',choices:[{value:'',label:'全部操作'},...data.actions.map(value=>({value,label:auditActions[value]||value}))]}),field('操作结果','outcome',{type:'select',value:params.get('outcome')||'',choices:[{value:'',label:'全部结果'},...data.outcomes.map(value=>({value,label:auditOutcomes[value]||value}))]}),field('开始时间','from',{type:'datetime-local',value:params.get('from')?localDateTime(params.get('from')):''}),field('结束时间','to',{type:'datetime-local',value:params.get('to')?localDateTime(params.get('to')):''}),el('button',{class:'btn',type:'submit',text:'查询审计'}));
+  const feedback=el('div',{role:'alert'});
+  form.addEventListener('submit',event=>{
+    event.preventDefault();const values=new FormData(form),next=new URLSearchParams(params);next.delete('offset');
+    if(values.get('from')&&values.get('to')&&Date.parse(values.get('from'))>Date.parse(values.get('to'))){feedback.replaceChildren(notice('时间范围不正确','开始时间不能晚于结束时间。','warn'));return;}
+    for(const [key,value] of values){if(value)next.set(key,['from','to'].includes(key)?new Date(value).toISOString():value);else next.delete(key);}navigate('/admin/audit?'+next);
+  });
+  const records=table([
+    {label:'时间',render:e=>date(e.created_at)},
+    {label:'业务操作',render:e=>auditActions[e.action]||e.action},
+    {label:'操作者',render:e=>el('div',{},e.actor_name||(!e.actor_id?'系统':'身份名称未提供'),el('span',{class:'table-sub',text:e.actor_email||''}))},
+    {label:'关联客户 / 目标',render:e=>el('div',{},e.resolved_customer_id?el('a',{href:'/admin/customers?user_id='+encodeURIComponent(e.resolved_customer_id),text:e.customer_name||e.customer_email||'查看客户'}):el('span',{text:'未关联客户'}),e.subject_name?el('span',{class:'table-sub',text:e.subject_name}):null)},
+    {label:'结果',render:e=>el('span',{class:'badge '+(['failed','unknown','delivery_unknown','core_pending'].includes(e.outcome)?'warn':''),text:auditOutcomes[e.outcome]||e.outcome||'结果未提供'})},
+    {label:'技术标识',render:e=>el('details',{},el('summary',{text:'查看标识'}),el('div',{class:'audit-identifiers'},el('p',{class:'mono',text:'操作：'+e.action}),el('p',{class:'mono',text:'操作者：'+(e.actor_id||'系统')}),el('p',{class:'mono',text:'目标：'+(e.subject_id||'—')}),el('button',{type:'button',class:'btn small',text:'复制标识',onclick:async()=>{try{await navigator.clipboard.writeText('事件 '+e.id+'\n操作 '+e.action+'\n操作者 '+(e.actor_id||'系统')+'\n目标 '+(e.subject_id||'—'));toast('审计标识已复制');}catch{toast('无法访问剪贴板，请选中标识手动复制');}}})))},
+  ],events,'暂无审计记录','当前筛选范围没有记录；可调整条件查询更早记录。');records.classList.add('rental-table');
+  return el('div',{class:'page-content'},form,feedback,
+    panel('操作审计','时间按本机时区显示。姓名按当前资料解析；新授权操作保留当时的账号名称，无法关联的旧记录不猜测归属。',records),listPager(data,params,'/admin/audit'));
 }
 
 function switchRow(title, hint, name, checked) {
@@ -1595,15 +1694,15 @@ async function planAdminView() {
 }
 async function rentalsView() {
  const admin=location.pathname==='/admin/rentals',base=admin?'/admin/rentals':'/orders',endpoint=admin?'/api/admin/rentals':'/api/me/rentals';
- const query=new URLSearchParams(location.search);query.delete('order');query.set('limit','30');
- const data=await api(`${endpoint}?${query}`),rows=collection(data,'rentals'),offset=Number(data.offset||0);
- const filters=el('form',{class:'button-row'},field('订单或套餐','q',{value:query.get('q')||''}),field('交付状态','status',{type:'select',choices:[{value:'',label:'全部'},...['awaiting_payment','queued','review','fulfilled','refund_pending','refunded','cancelled'].map(value=>({value,label:{awaiting_payment:'待支付',queued:'待开通',review:'待核对',fulfilled:'已交付',refund_pending:'退款核对中',refunded:'已退回余额',cancelled:'已取消'}[value]}))],value:query.get('status')||''}),el('button',{class:'btn',type:'submit',text:'筛选'}));
- filters.addEventListener('submit',event=>{event.preventDefault();const v=new FormData(filters);navigate(`${base}?${new URLSearchParams({q:v.get('q'),status:v.get('status')})}`);});
- const columns=[{label:'订单 / 套餐',render:o=>el('div',{},el('strong',{text:o.name}),el('p',{class:'mono muted',text:o.id}))},...(admin?[{label:'客户',render:o=>el('span',{class:'mono',text:o.user_id})}]:[]),{label:'价格 / 租期',render:o=>`${money(o.amount_minor)} / ${o.duration_days} 天`},{label:'交付状态',render:o=>el('div',{},badge(o.status),o.last_error?el('p',{class:'muted',text:o.last_error}):null)},{label:'已交付期限',render:o=>date(o.expires_at)},{label:'操作',render:o=>{
+ const params=new URLSearchParams(location.search),query=new URLSearchParams(params);query.delete('order');query.delete('return_to');query.set('limit','30');
+ const data=await api(`${endpoint}?${query}`),rows=collection(data,'rentals');
+ const filters=el('form',{class:'button-row'},field('订单或套餐','q',{value:query.get('q')||''}),field('交付状态','status',{type:'select',choices:[{value:'',label:'全部'},{value:'needs_review',label:'全部待核对（含退款）'},...['awaiting_payment','queued','review','fulfilled','refund_pending','refunded','cancelled'].map(value=>({value,label:{awaiting_payment:'待支付',queued:'待开通',review:'待核对',fulfilled:'已交付',refund_pending:'退款核对中',refunded:'已退回余额',cancelled:'已取消'}[value]}))],value:query.get('status')||''}),el('button',{class:'btn',type:'submit',text:'筛选'}));
+ filters.addEventListener('submit',event=>{event.preventDefault();const v=new FormData(filters);const next=new URLSearchParams(params);next.delete('offset');next.set('q',v.get('q'));next.set('status',v.get('status'));navigate(base+'?'+next);});
+ const columns=[{label:'订单 / 套餐',render:o=>el('div',{},el('strong',{text:o.name}),el('p',{class:'mono muted',text:o.id}))},...(admin?[{label:'客户',render:o=>el('div',{},el('a',{href:'/admin/customers?user_id='+encodeURIComponent(o.user_id),text:o.customer_name||o.user_id}),el('span',{class:'table-sub',text:o.customer_email||''}))}]:[]),{label:'价格 / 租期',render:o=>`${money(o.amount_minor)} / ${o.duration_days} 天`},{label:'交付状态',render:o=>el('div',{},badge(o.status),o.last_error?el('p',{class:'muted',text:o.last_error}):null)},{label:'已交付期限',render:o=>date(o.expires_at)},{label:'操作',render:o=>{
   const actions=el('div',{class:'button-row'});
   if(o.payment_order_id&&o.payment_status!=='paid')actions.append(actionButton('核对支付',()=>api(`/api/${admin?'admin':'me'}/payments/${encodeURIComponent(o.payment_order_id)}/reconcile`,{method:'POST',body:{}})));
   if(!admin&&o.payment_order_id&&o.status==='awaiting_payment')actions.append(el('a',{class:'btn small',href:'/wallet?order='+encodeURIComponent(o.payment_order_id),text:'继续支付'}));
-  if(admin&&['queued','review','refund_pending'].includes(o.status))for(const action of (o.status==='refund_pending'?['refund']:['retry','refund']))actions.append(actionButton(action==='retry'?'重新核对':'退回余额',async()=>{
+  if(admin&&['queued',...deliveryReviewStatuses].includes(o.status))for(const action of (o.status==='refund_pending'?['refund']:['retry','refund']))actions.append(actionButton(action==='retry'?'重新核对':'退回余额',async()=>{
    if(!await confirmAction(action==='retry'?'重新核对订单':'退回未交付款项',action==='retry'?'将按原订单编号核对上游回执，不重复增加租期。':'仅在上游确认没有交付后，将订单全额退回余额，不是支付渠道原路退款。','确认执行',action==='refund'))return CANCEL;
    return api(`/api/admin/rentals/${encodeURIComponent(o.id)}/resolve`,{method:'POST',body:{action,expected_revision:o.revision}});
   },{danger:action==='refund'}));
@@ -1614,19 +1713,19 @@ async function rentalsView() {
   const csv='\uFEFF'+[['订单','套餐','金额分','币种','天数','状态','到期时间'],...rows.map(r=>[r.id,r.name,r.amount_minor,r.currency,r.duration_days,r.status,r.expires_at])].map(r=>r.map(cell).join(',')).join('\r\n');
   const url=URL.createObjectURL(new Blob([csv],{type:'text/csv;charset=utf-8'}));const link=el('a',{href:url,download:'rental-orders.csv'});link.click();setTimeout(()=>URL.revokeObjectURL(url),1000);
  }});
- const pager=el('div',{class:'button-row'},el('span',{class:'muted',text:`共 ${data.total} 笔 · 本页 ${rows.length} 笔`}),...[-30,30].map(delta=>el('button',{class:'btn small',text:delta<0?'上一页':'下一页',disabled:delta<0?offset===0:offset+rows.length>=data.total,onclick:()=>{query.set('offset',String(Math.max(0,offset+delta)));navigate(`${base}?${query}`);}})));
+ const pager=listPager(data,params,base,'笔');
  const rentalTable=table(columns,rows);rentalTable.classList.add('rental-table');
- return el('div',{class:'page-content'},filters,panel('套餐订单','价格、租期和购买身份以下单快照为准。',rentalTable,exportButton),pager);
+ return el('div',{class:'page-content'},admin&&!params.get('user_id')?el('a',{href:'/admin/operations',class:'btn small',text:'返回运营待办'}):null,filters,panel('套餐订单','价格、租期和购买身份以下单快照为准。',rentalTable,exportButton),pager);
 }
 async function operationsView() {
  const data=await api('/api/admin/operations');
  const tasks=collection(data,'pending_customers');
  const unassigned=collection(data,'unassigned_customers');
  return el('div',{class:'page-content'},
- el('div',{class:'stats-grid'},stat('待分配客户',number(unassigned.length),'已可登录但还没有账号','users'),stat('待同步客户',number(tasks.length),'本页最多列出 100 个','users'),stat('待确认支付',number(data.payments_pending),'包括结果未知的订单','wallet'),stat('待核对交付',number(data.rentals.filter(r=>['review','refund_pending'].includes(r.status)).reduce((n,r)=>n+r.count,0)),'可在销售与交付处理','receipt')),
+ el('div',{class:'stats-grid'},stat('待分配客户',number(unassigned.length),'已可登录但还没有账号','users'),stat('待同步客户',number(tasks.length),'本页最多列出 100 个','users'),el('a',{class:'operation-link',href:'/admin/orders?status=needs_review'},stat('待确认支付',number(data.payments_pending),'查看全部待确认支付 →','wallet')),el('a',{class:'operation-link',href:'/admin/rentals?status=needs_review'},stat('待核对交付',number(data.deliveries_pending),'包含待核对交付和退款核对中 →','receipt'))),
  panel('待分配账号','这些客户已经可以登录，但还没有分配账号。已下单未交付的，请同时到销售与交付核对。',table([{label:'客户',render:u=>el('div',{},el('strong',{text:u.display_name||'未命名客户'}),el('span',{class:'table-sub',text:u.email}))},{label:'注册时间',render:u=>date(u.created_at)},{label:'操作',render:u=>el('a',{class:'btn small',href:`/admin/inventory?user_id=${encodeURIComponent(u.id)}`,text:'查看与分配账号'})}],unassigned,'没有待分配客户','新注册并可以登录的客户，在分配账号前会显示在这里。')),
  panel('客户同步待办','停用尚未确认时，会暂停该客户的新运行请求，直到上游确认。',table([{label:'客户',render:u=>u.display_name},{label:'状态',render:u=>badge(u.status)},{label:'提示',render:u=>u.sync_error||'等待同步'},{label:'操作',render:u=>actionButton('重新核对',()=>api(`/api/admin/users/${encodeURIComponent(u.id)}${u.core_customer_id?'':'/provision'}`,{method:u.core_customer_id?'PATCH':'POST',body:{}}))}],tasks,'没有待同步客户','当前没有持久化客户同步待办。')),
- el('p',{class:'inline-info'},'邮件、支付和公开地址是否已配置，请在',el('a',{href:'/admin/settings#payment',text:'站点设置'}),'中查看。'),el('a',{class:'btn',href:'/admin/rentals?status=review',text:'处理交付待办 →'}));
+ el('p',{class:'inline-info'},'邮件、支付和公开地址是否已配置，请在',el('a',{href:'/admin/settings#payment',text:'站点设置'}),'中查看。'),el('a',{class:'btn',href:'/admin/rentals?status=needs_review',text:'处理交付待办 →'}));
 }
 
 

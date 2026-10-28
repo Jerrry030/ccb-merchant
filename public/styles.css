@@ -202,3 +202,19 @@ a.stat-cell:hover { background:var(--soft); text-decoration:none; color:inherit;
 .payment-qr{display:flex;flex-direction:column;align-items:center;gap:12px;margin:18px 0}.payment-qr img{background:#fff;max-width:100%;height:auto;border:1px solid var(--line);border-radius:12px}.payment-qr p{color:var(--muted);font-size:13px}.payment-checkout .button-row{flex-wrap:wrap;margin:14px 0}.checkout-page{max-width:680px;padding:32px;margin:8vh auto}.checkout-page p{margin:22px 0}
 
 .usage-trend{height:160px;display:flex;align-items:flex-end;gap:2px;padding:14px;overflow:hidden}.usage-trend-bar{flex:1;min-width:1px;background:var(--accent,#648c6b);border-radius:3px 3px 0 0}
+
+
+/* Operator workflows: customer identity remains visible across business pages. */
+.customer-context{display:flex;flex-wrap:wrap;gap:14px;align-items:center;padding:18px 22px;border:1px solid var(--line);border-radius:14px;background:var(--panel)}
+.customer-context>div{flex:1;min-width:180px}.customer-context strong{font-size:18px}.customer-context nav{display:flex;flex-wrap:wrap;gap:8px;flex-basis:100%}.customer-context [aria-current=page]{color:var(--primary);border-color:var(--primary)}
+.admin-filters{display:flex;flex-wrap:wrap;align-items:flex-end;gap:12px;padding:18px;border:1px solid var(--line);border-radius:12px;background:var(--panel)}
+.admin-filters .field{flex:1 1 160px;min-width:0;margin:0}.admin-filters .btn{min-height:42px}.customer-detail .stats-grid{grid-template-columns:repeat(3,minmax(0,1fr))}.customer-detail .stat-value{overflow-wrap:anywhere;font-size:22px}
+.operation-link{text-decoration:none;color:inherit;display:block}.operation-link:hover{outline:2px solid var(--primary);border-radius:14px}.audit-identifiers{max-width:260px;overflow-wrap:anywhere}.audit-identifiers p{font-size:11px}
+@media(max-width:700px){.admin-filters{padding:14px}.admin-filters .field{flex-basis:calc(50% - 12px)}.customer-detail .stats-grid{grid-template-columns:1fr}.customer-context{padding:16px}.customer-context nav .btn{flex:1 1 40%}}
+
+.inventory-filter-details{flex-basis:100%;min-width:0}.inventory-filter-details summary{cursor:pointer;color:var(--muted);font-size:12px;padding:4px 0}.admin-filter-fields{display:flex;flex-wrap:wrap;gap:12px;padding-top:14px}.admin-filter-fields .field{flex:1 1 140px}
+
+.customer-detail .card-head>.btn{flex-shrink:0;white-space:nowrap}
+@media(max-width:700px){.customer-detail .stats-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.customer-detail .stat:nth-child(2){order:3;grid-column:1/-1}.customer-detail .stat{padding:16px}.customer-detail .stat-value{font-size:20px}}
+
+.main>.customer-context{margin-bottom:22px}

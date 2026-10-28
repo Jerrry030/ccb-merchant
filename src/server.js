@@ -1,3 +1,5 @@
+import { readOrderPage, readAuditPage } from './admin-queries.js';
+import { deliveryReviewStatuses, paymentReviewStatuses } from '../public/admin-workflow.js';
 import { Access } from './access.js';
 import { Customers } from './customers.js';
 import { Commerce, publicPlan } from './commerce.js';
@@ -290,20 +292,15 @@ export function createMerchant(config, options={}) {
         }
         case 'GET /api/me/rentals':
         case 'GET /api/admin/rentals': {
-          const admin=path.startsWith('/api/admin/'),query=listQuery(url.searchParams);
-          const where=[...(admin?[]:['user_id=?']),...(query.status?['status=?']:[]),...(query.q?['(id LIKE ? OR name LIKE ?)']:[])];
-          const args=[...(admin?[]:[user.id]),...(query.status?[query.status]:[]),...(query.q?[`%${query.q}%`,`%${query.q}%`]:[])];
-          const sql=where.length?` WHERE ${where.join(' AND ')}`:'';
-          const total=store.db.prepare(`SELECT count(*) AS n FROM rentals${sql}`).get(...args).n;
-          const rows=store.db.prepare(`SELECT * FROM rentals${sql} ORDER BY created_at DESC,id DESC LIMIT ? OFFSET ?`).all(...args,query.limit,query.offset);
-          respond(res,200,{rentals:rows.map(row=>{const payment=store.db.prepare('SELECT * FROM orders WHERE rental_id=?').get(row.id);return {...publicRental(row),payment_order_id:payment?.id||null,payment_status:payment?.status||null};}),total,limit:query.limit,offset:query.offset});return;
+          respond(res,200,readOrderPage(store,url.searchParams,{rentals:true,ownerId:path.startsWith('/api/admin/')?null:user.id}));return;
         }
         case 'GET /api/admin/operations': {
           const pending=store.db.prepare("SELECT * FROM users WHERE core_pending IS NOT NULL OR (provision_name IS NOT NULL AND core_customer_id IS NULL) ORDER BY created_at LIMIT 100").all().map(publicUser);
           const unassigned=store.db.prepare("SELECT * FROM users WHERE role='member' AND status='active' AND core_customer_id IS NULL AND provision_name IS NULL ORDER BY created_at LIMIT 100").all().map(publicUser);
           const totals=store.db.prepare('SELECT status,count(*) AS count FROM rentals GROUP BY status').all();
-          const paymentsPending=store.db.prepare("SELECT count(*) AS n FROM orders WHERE status IN ('creating','pending','unknown')").get().n;
-          respond(res,200,{pending_customers:pending,unassigned_customers:unassigned,rentals:totals,payments_pending:paymentsPending,worker:{interval_ms:config.reconcileIntervalMs,max_attempts:8},readiness:{core_configured:Boolean(config.upstreamUrl),mail_configured:Boolean(effectiveMail(config,store)),payment_configured:describePayment(config,store).configured,https:config.secureCookies,schema_version:store.db.prepare('PRAGMA user_version').get().user_version,runtime_limit:config.runtimeMaxInFlight}});return;
+          const paymentsPending=store.db.prepare('SELECT count(*) AS n FROM orders WHERE status IN ('+paymentReviewStatuses.map(()=>'?').join(',')+')').get(...paymentReviewStatuses).n;
+          const deliveriesPending=totals.filter(row=>deliveryReviewStatuses.includes(row.status)).reduce((sum,row)=>sum+row.count,0);
+          respond(res,200,{pending_customers:pending,unassigned_customers:unassigned,rentals:totals,payments_pending:paymentsPending,deliveries_pending:deliveriesPending,worker:{interval_ms:config.reconcileIntervalMs,max_attempts:8},readiness:{core_configured:Boolean(config.upstreamUrl),mail_configured:Boolean(effectiveMail(config,store)),payment_configured:describePayment(config,store).configured,https:config.secureCookies,schema_version:store.db.prepare('PRAGMA user_version').get().user_version,runtime_limit:config.runtimeMaxInFlight}});return;
         }
         case 'GET /api/admin/connection': respond(res,200,{...await connection(),upstream_url:config.upstreamUrl,public_origin:config.publicOrigin,environment_managed:config.upstreamEnvironment,revision:core.revision}); return;
         case 'POST /api/admin/upstream': {
@@ -419,6 +416,7 @@ export function createMerchant(config, options={}) {
           fields(body,['user_id','resource_id','expires_at','account_lease_id','expected_account_revision'],['user_id','resource_id']);
           const targetId=text(body.user_id,'user_id',150);
           const payload={resource_id:decodeURIComponent(opaqueId(body.resource_id))};
+          let accountLabel=null;
           if(body.expires_at!==undefined) payload.expires_at=expiry(body.expires_at);
           if(body.account_lease_id) {
             payload.account_lease_id=decodeURIComponent(opaqueId(body.account_lease_id));
@@ -435,6 +433,7 @@ export function createMerchant(config, options={}) {
               if(!Array.isArray(owned.accounts))throw new HttpError(503,'invalid_core_response','Account inventory is unavailable.');
               const account=owned.accounts.find(a=>a.id===payload.account_lease_id);
               if(!account||account.resource_id!==payload.resource_id||account.status!=='active'||!Number.isFinite(Date.parse(account.expires_at))||Date.parse(account.expires_at)<=Date.now())throw new HttpError(409,'account_unavailable','This account is no longer available. Refresh the inventory.');
+              accountLabel=typeof account.details?.name==='string'?account.details.name.slice(0,200):account.id;
               payload.expires_at??=account.expires_at;
               if(Date.parse(payload.expires_at)>Date.parse(account.expires_at)||Date.parse(payload.expires_at)<=Date.now())throw new HttpError(400,'invalid_expiry','Customer expiry must be in the future and within the account expiry.');
               if(account.revision!==payload.expected_account_revision && !(account.revision===payload.expected_account_revision+1&&account.assigned&&account.customer_id===target.core_customer_id))throw new HttpError(409,'account_changed','The account changed. Refresh before assigning it.');
@@ -450,11 +449,11 @@ export function createMerchant(config, options={}) {
             const data=await core.request('POST','/access/v1/grants',payload), grant=project(data.grant,schemas.grant);
             auth.require(req,true);
             if(!grant?.id||grant.status!=='active'||grant.customer_id!==target.core_customer_id||grant.resource_id!==payload.resource_id||(payload.account_lease_id&&(grant.account_lease_id!==payload.account_lease_id||Date.parse(grant.expires_at)!==Date.parse(payload.expires_at))))throw new HttpError(503,'core_outcome_unknown','Delivery is unconfirmed. Check the account before retrying the same assignment.');
-            store.audit(user.id,'grant.create',grant.id);respond(res,201,{grant});return;
+            store.audit(user.id,'grant.create',grant.id,'ok',{customer_id:targetId,subject_label:accountLabel});respond(res,201,{grant});return;
           } finally {lockedUsers.delete(targetId);}
         }
-        case 'GET /api/admin/orders': respond(res,200,{orders:store.db.prepare('SELECT * FROM orders ORDER BY created_at DESC LIMIT 1000').all().map(order=>({...publicOrder(order),user_id:order.user_id}))}); return;
-        case 'GET /api/admin/audit': respond(res,200,{events:store.db.prepare('SELECT * FROM audit ORDER BY id DESC LIMIT 500').all()}); return;
+        case 'GET /api/admin/orders': respond(res,200,readOrderPage(store,url.searchParams)); return;
+        case 'GET /api/admin/audit': respond(res,200,readAuditPage(store,url.searchParams)); return;
       }
       let match;
 
@@ -502,7 +501,9 @@ export function createMerchant(config, options={}) {
         if(body.expires_at!==undefined) expiry(body.expires_at);
         const data=await core.request('PATCH',`/access/v1/grants/${opaqueId(match[1])}`,body), grant=project(data.grant,schemas.grant);
         if(grant?.id!==match[1]) throw new HttpError(503,'core_outcome_unknown','Grant update is unconfirmed. Refresh before another change.');
-        store.audit(user.id,'grant.update',grant.id); respond(res,200,{grant}); return;
+        const auditCustomer=store.db.prepare('SELECT id FROM users WHERE core_customer_id=?').get(grant.customer_id || '');
+        const priorLabel=store.db.prepare("SELECT subject_label FROM audit WHERE subject_id=? AND action='grant.create' ORDER BY id DESC LIMIT 1").get(grant.id);
+        store.audit(user.id,body.status==='revoked'?'grant.revoke':body.expires_at?'grant.extend':'grant.update',grant.id,'ok',{customer_id:auditCustomer?.id || null,subject_label:priorLabel?.subject_label || null}); respond(res,200,{grant}); return;
       }
       if((req.method==='PATCH' && (match=path.match(/^\/api\/admin\/users\/([^/]+)$/))) || (req.method==='POST' && (match=path.match(/^\/api\/admin\/users\/([^/]+)\/provision$/)))) {
         const targetId=decodeURIComponent(opaqueId(match[1]));

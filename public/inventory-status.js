@@ -21,3 +21,26 @@ export function inventoryStatus(account, now = Date.now()) {
   }
   return { history, active, assignable, label, tone, reason };
 }
+
+
+export function selectInventory(accounts, params, now = Date.now()) {
+  const customer=params.get('user_id'), q=(params.get('q')||'').trim().toLocaleLowerCase(), platform=params.get('platform'), status=params.get('status');
+  const days=Number(params.get('due')), deadline=params.get('deadline')==='authorization'?'expires_at':'customer_expires_at';
+  const entries=accounts.map(account=>({account,...inventoryStatus(account,now)})).filter(entry=>{
+    const a=entry.account;
+    if(customer && a.user_id!==customer && (entry.history || a.assigned!==false)) return false;
+    if(q && ![a.id,a.details?.name,a.customer_name,a.customer_email].some(v=>String(v||'').toLocaleLowerCase().includes(q)))return false;
+    if(platform && a.platform!==platform)return false;
+    if(status && !({assignable:entry.assignable,assigned:entry.active&&a.assigned===true,unavailable:entry.active&&!['available','limited'].includes(a.details?.state),review:entry.label==='状态待核对'||entry.label==='有效期待核对',released:a.status==='released',expired:entry.history&&a.status!=='released'}[status]))return false;
+    if([7,30].includes(days)) {const end=Date.parse(a[deadline]);if(!Number.isFinite(end)||end<=now||end>now+days*86400000)return false;}
+    return true;
+  });
+  const sort=params.get('sort')||'expiry_asc';
+  entries.sort((a,b)=>{
+    if(sort==='name')return String(a.account.details?.name||a.account.id).localeCompare(String(b.account.details?.name||b.account.id),'zh-CN')||a.account.id.localeCompare(b.account.id);
+    const x=Date.parse(a.account[deadline]),y=Date.parse(b.account[deadline]);
+    if(!Number.isFinite(x)||!Number.isFinite(y))return Number(!Number.isFinite(x))-Number(!Number.isFinite(y))||a.account.id.localeCompare(b.account.id);
+    return (sort==='expiry_desc'?y-x:x-y)||a.account.id.localeCompare(b.account.id);
+  });
+  return entries;
+}

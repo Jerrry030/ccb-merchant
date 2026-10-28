@@ -28,11 +28,12 @@ export class Store {
     // Additive local schema changes preserve existing users, wallets and receipts.
     this.db.exec('BEGIN IMMEDIATE');
     try {
-      for (const [table, columns] of Object.entries({rentals:{platform:"TEXT NOT NULL DEFAULT ''",account_lease_id:"TEXT NOT NULL DEFAULT ''",renew_grant_id:"TEXT NOT NULL DEFAULT ''"},plans:{source_plan_id:'TEXT',source_revision:'INTEGER',cost_minor:'INTEGER'}})) {
+      for (const [table, columns] of Object.entries({rentals:{platform:"TEXT NOT NULL DEFAULT ''",account_lease_id:"TEXT NOT NULL DEFAULT ''",renew_grant_id:"TEXT NOT NULL DEFAULT ''"},plans:{source_plan_id:'TEXT',source_revision:'INTEGER',cost_minor:'INTEGER'},audit:{customer_id:'TEXT',subject_label:'TEXT'}})) {
         const existing=new Set(this.db.prepare(`PRAGMA table_info(${table})`).all().map(c=>c.name));
         for(const [name,type] of Object.entries(columns)) if(!existing.has(name)) this.db.exec(`ALTER TABLE ${table} ADD COLUMN ${name} ${type}`);
       }
       this.db.exec(readFileSync(new URL('./inventory-schema.sql',import.meta.url),'utf8'));
+      this.db.exec('CREATE INDEX IF NOT EXISTS audit_customer ON audit(customer_id,id); CREATE INDEX IF NOT EXISTS audit_action ON audit(action,id); CREATE INDEX IF NOT EXISTS audit_time ON audit(created_at,id);');
       if(this.db.prepare('PRAGMA user_version').get().user_version<4)this.db.exec('PRAGMA user_version=4');
       this.db.exec('COMMIT');
     } catch(error) {this.db.exec('ROLLBACK');this.db.close();throw error;}
@@ -94,8 +95,8 @@ export class Store {
     try { const value = work(); this.db.exec('COMMIT'); return value; }
     catch (error) { this.db.exec('ROLLBACK'); throw error; }
   }
-  audit(actor, action, subject, outcome = 'ok') {
-    this.db.prepare('INSERT INTO audit(actor_id,action,subject_id,outcome,created_at) VALUES (?,?,?,?,?)').run(actor || null, action, subject || null, outcome, new Date().toISOString());
+  audit(actor, action, subject, outcome = 'ok', {customer_id = null, subject_label = null} = {}) {
+    this.db.prepare('INSERT INTO audit(actor_id,action,subject_id,outcome,created_at,customer_id,subject_label) VALUES (?,?,?,?,?,?,?)').run(actor || null, action, subject || null, outcome, new Date().toISOString(), customer_id, subject_label);
   }
   throttle(key, max, windowMs) {
     const now = Date.now();

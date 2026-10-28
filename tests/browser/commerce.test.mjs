@@ -42,8 +42,8 @@ test('actual storefront UI creates a plan, buys, renews, filters and exports imm
  }
  const rows=f.store.db.prepare('SELECT * FROM rentals ORDER BY created_at').all();assert.equal(rows.length,2);assert.equal(Date.parse(rows[1].expires_at)-Date.parse(rows[0].expires_at),7*86400000);
  assert.equal(f.store.wallet(member.data.user.id).balance_minor,7532);
- await page.getByLabel('订单或套餐',{exact:true}).fill('不存在');await page.getByRole('button',{name:'筛选',exact:true}).click();await page.getByText('共 0 笔 · 本页 0 笔',{exact:true}).waitFor();
- await page.getByLabel('订单或套餐',{exact:true}).fill('7');await page.getByRole('button',{name:'筛选',exact:true}).click();await page.getByText('共 2 笔 · 本页 2 笔',{exact:true}).waitFor();
+ await page.getByLabel('订单或套餐',{exact:true}).fill('不存在');await page.getByRole('button',{name:'筛选',exact:true}).click();await page.getByText('共 0 笔 · 第 1 页',{exact:true}).waitFor();
+ await page.getByLabel('订单或套餐',{exact:true}).fill('7');await page.getByRole('button',{name:'筛选',exact:true}).click();await page.getByText('共 2 笔 · 第 1 页',{exact:true}).waitFor();
  const downloaded=page.waitForEvent('download');await page.getByRole('button',{name:'导出本页 CSV',exact:true}).click();assert.equal((await downloaded).suggestedFilename(),'rental-orders.csv');
  await page.screenshot({path:resolve(artifacts,'rental-member-orders.png'),fullPage:true});
  await page.setViewportSize({width:390,height:844});await page.screenshot({path:resolve(artifacts,'rental-member-mobile.png'),fullPage:true});
