@@ -7,15 +7,25 @@ const ALIPAY='https://openapi.alipay.com/gateway.do', WX='https://api.mch.weixin
 function badSignature() { throw new HttpError(400,'invalid_signature','Invalid payment notification signature.'); }
 function mismatch() { throw new HttpError(409,'payment_mismatch','Payment identity, amount or signature did not match.'); }
 function same(a,b) { const x=Buffer.from(String(a)),y=Buffer.from(String(b));return x.length===y.length&&timingSafeEqual(x,y); }
-function rsaKey(raw,privatePart=false) {
+function rsaKey(raw,provider,field) {
+  const privatePart=field==='private_key';
+  // SuixingPay's existing merchant signing keys may be 1024-bit. This does
+  // not relax its 2048-bit platform verifier or Alipay/WeChat key requirements.
+  const minimumBits=provider==='suixingpay'&&privatePart?1024:2048;
+  const definition=paymentProviders[provider];
+  const label=definition.title+'的'+definition.fields.find(item=>item.key===field).label;
   const labels=privatePart?['PRIVATE KEY','RSA PRIVATE KEY']:['PUBLIC KEY','RSA PUBLIC KEY'];
-  for(const label of labels)try {
-    const pem=raw?.trim().startsWith('-----BEGIN')?raw:'-----BEGIN '+label+'-----\n'+String(raw).replace(/\s/g,'')+'\n-----END '+label+'-----';
-    const key=privatePart?createPrivateKey(pem):createPublicKey(pem);
-    if(key.asymmetricKeyType!=='rsa'||key.asymmetricKeyDetails.modulusLength<2048)break;
-    return key;
-  } catch {}
-  throw new HttpError(400,'invalid_provider_config','An RSA key of at least 2048 bits is required.');
+  let key;
+  for(const encoding of labels) {
+    try {
+      const pem=raw?.trim().startsWith('-----BEGIN')?raw:'-----BEGIN '+encoding+'-----\n'+String(raw).replace(/\s/g,'')+'\n-----END '+encoding+'-----';
+      key=privatePart?createPrivateKey(pem):createPublicKey(pem);
+    } catch { continue; }
+    break;
+  }
+  if(!key||key.asymmetricKeyType!=='rsa')throw new HttpError(400,'invalid_payment_key',label+'无法解析为 RSA 密钥，请检查填写的 PEM 或 Base64 格式。');
+  if(!Number.isSafeInteger(key.asymmetricKeyDetails?.modulusLength)||key.asymmetricKeyDetails.modulusLength<minimumBits)throw new HttpError(400,'invalid_payment_key',label+'至少需要 '+minimumBits+' 位 RSA 密钥。');
+  return key;
 }
 export function paymentAmount(value) {
   const text=String(value);
@@ -66,7 +76,7 @@ export function validateProviderConfig(id,c,{allowMissingWebhook=false}={}) {
   const definition=paymentProviders[id];
   if(!definition||!c||typeof c!=='object')throw new HttpError(400,'invalid_provider_config','Unknown payment provider configuration.');
   for(const field of definition.fields)if(field.required&&!c[field.key]&&!(allowMissingWebhook&&id==='stripe'&&field.key==='webhook_secret'))throw new HttpError(400,'invalid_provider_config','Required payment credentials are missing.');
-  if(['alipay','wxpay','suixingpay'].includes(id)){rsaKey(c.private_key,true);rsaKey(c.public_key);}
+  if(['alipay','wxpay','suixingpay'].includes(id)){rsaKey(c.private_key,id,'private_key');rsaKey(c.public_key,id,'public_key');}
   if(id==='wxpay'&&(Buffer.byteLength(c.api_v3_key||'')!==32||![c.app_id,c.mch_id,c.cert_serial,c.public_key_id].every(value=>/^[A-Za-z0-9_-]+$/.test(value||''))))throw new HttpError(400,'invalid_provider_config','Invalid WeChat Pay API v3 key or merchant identifiers.');
   if(id==='airwallex'&&(!['https://api.airwallex.com/api/v1','https://api-demo.airwallex.com/api/v1'].includes(c.api_base)||c.currency!=='CNY'))throw new HttpError(400,'invalid_provider_config','Airwallex requires its official API origin and CNY settlement.');
   if(['easypay','suixingpay'].includes(id)){const url=new URL(c.api_base);if(url.protocol!=='https:'||url.username||url.password||url.search||url.hash)throw new HttpError(400,'invalid_provider_config','Payment API base must be HTTPS.');}
@@ -85,30 +95,30 @@ export class PaymentProvider {
   }
   async alipay(method,biz,extra={}) {
     const params={app_id:this.c.app_id,method,format:'JSON',charset:'utf-8',sign_type:'RSA2',timestamp:new Date(Date.now()+8*3600000).toISOString().slice(0,19).replace('T',' '),version:'1.0',biz_content:JSON.stringify(biz),...extra};
-    params.sign=sign('RSA-SHA256',Buffer.from(canonical(params,['sign'])),rsaKey(this.c.private_key,true)).toString('base64');
+    params.sign=sign('RSA-SHA256',Buffer.from(canonical(params,['sign'])),rsaKey(this.c.private_key,this.id,'private_key')).toString('base64');
     const result=await this.request('POST',ALIPAY,{body:new URLSearchParams(params).toString(),headers:{'Content-Type':'application/x-www-form-urlencoded'}});
     const name=method.replaceAll('.','_')+'_response',data=result.value[name];
-    if(!data||!result.value.sign||!verify('RSA-SHA256',Buffer.from(result.fields[name]),rsaKey(this.c.public_key),Buffer.from(result.value.sign,'base64')))mismatch();
+    if(!data||!result.value.sign||!verify('RSA-SHA256',Buffer.from(result.fields[name]),rsaKey(this.c.public_key,this.id,'public_key'),Buffer.from(result.value.sign,'base64')))mismatch();
     if(data.code!=='10000')throw new Error('Alipay business rejection');return data;
   }
   verifyWx(raw,headers) {
     const timestamp=headers.get('wechatpay-timestamp'),nonce=headers.get('wechatpay-nonce'),signature=headers.get('wechatpay-signature');
     validTime(timestamp);if(!nonce||headers.get('wechatpay-serial')!==this.c.public_key_id||!signature)mismatch();
-    if(!verify('RSA-SHA256',Buffer.from(timestamp+'\n'+nonce+'\n'+raw+'\n'),rsaKey(this.c.public_key),Buffer.from(signature,'base64')))mismatch();
+    if(!verify('RSA-SHA256',Buffer.from(timestamp+'\n'+nonce+'\n'+raw+'\n'),rsaKey(this.c.public_key,this.id,'public_key'),Buffer.from(signature,'base64')))mismatch();
   }
   async wx(method,path,payload) {
     const body=payload?JSON.stringify(payload):'',timestamp=String(Math.floor(Date.now()/1000)),nonce=randomBytes(16).toString('hex');
-    const signature=sign('RSA-SHA256',Buffer.from(method+'\n'+path+'\n'+timestamp+'\n'+nonce+'\n'+body+'\n'),rsaKey(this.c.private_key,true)).toString('base64');
+    const signature=sign('RSA-SHA256',Buffer.from(method+'\n'+path+'\n'+timestamp+'\n'+nonce+'\n'+body+'\n'),rsaKey(this.c.private_key,this.id,'private_key')).toString('base64');
     const result=await this.request(method,WX+path,{body:body||undefined,headers:{'Content-Type':'application/json',Accept:'application/json',Authorization:'WECHATPAY2-SHA256-RSA2048 mchid="'+this.c.mch_id+'",nonce_str="'+nonce+'",timestamp="'+timestamp+'",serial_no="'+this.c.cert_serial+'",signature="'+signature+'"'}});
     this.verifyWx(result.raw,result.headers);return result.value;
   }
   verifySuixing(raw) {
     const data=paymentJSON(raw).value;
-    if(!data.sign||(data.signType&&data.signType!==this.c.sign_type)||!verify(this.c.sign_type==='RSA2'?'RSA-SHA256':'RSA-SHA1',Buffer.from(suixingText(raw)),rsaKey(this.c.public_key),Buffer.from(data.sign,'base64')))mismatch();return data;
+    if(!data.sign||(data.signType&&data.signType!==this.c.sign_type)||!verify(this.c.sign_type==='RSA2'?'RSA-SHA256':'RSA-SHA1',Buffer.from(suixingText(raw)),rsaKey(this.c.public_key,this.id,'public_key'),Buffer.from(data.sign,'base64')))mismatch();return data;
   }
   async suixing(path,reqData) {
     const envelope={reqData:Object.fromEntries(Object.entries(reqData).sort(([a],[b])=>a.localeCompare(b,'en'))),orgId:this.c.org_id,reqId:randomUUID().replaceAll('-',''),timestamp:new Date(Date.now()+8*3600000).toISOString().replace(/[-:T]/g,'').slice(0,14),version:'1.0',signType:this.c.sign_type};
-    envelope.sign=sign(this.c.sign_type==='RSA2'?'RSA-SHA256':'RSA-SHA1',Buffer.from(suixingText(JSON.stringify(envelope))),rsaKey(this.c.private_key,true)).toString('base64');
+    envelope.sign=sign(this.c.sign_type==='RSA2'?'RSA-SHA256':'RSA-SHA1',Buffer.from(suixingText(JSON.stringify(envelope))),rsaKey(this.c.private_key,this.id,'private_key')).toString('base64');
     const result=await this.request('POST',this.c.api_base.replace(/\/$/,'')+path,{body:JSON.stringify(envelope),headers:{'Content-Type':'application/json'}});
     const data=this.verifySuixing(result.raw);
     if(data.orgId!==this.c.org_id||data.reqId!==envelope.reqId||data.signType!==this.c.sign_type)mismatch();
@@ -225,7 +235,7 @@ export class PaymentProvider {
       case 'alipay':case 'easypay':{
         data=formFields(raw);
         if(this.id==='alipay'){
-          if(data.sign_type!=='RSA2'||data.app_id!==c.app_id||!verify('RSA-SHA256',Buffer.from(canonical(data)),rsaKey(c.public_key),Buffer.from(data.sign||'','base64')))mismatch();
+          if(data.sign_type!=='RSA2'||data.app_id!==c.app_id||!verify('RSA-SHA256',Buffer.from(canonical(data)),rsaKey(c.public_key,this.id,'public_key'),Buffer.from(data.sign||'','base64')))mismatch();
         }else if(data.sign_type!=='MD5'||!same(data.sign||'',createHash('md5').update(canonical(data)+c.pkey).digest('hex')))mismatch();
         break;
       }

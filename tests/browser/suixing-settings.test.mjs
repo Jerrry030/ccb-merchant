@@ -1,0 +1,35 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { createRequire } from 'node:module';
+import { createPrivateKey,createPublicKey } from 'node:crypto';
+import { resolve,dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { fixture,password } from '../server/fixtures.js';
+import { providerFixture } from '../server/payment-provider-fixture.js';
+const require=createRequire(import.meta.url),{chromium}=require(process.env.PLAYWRIGHT_MODULE||'playwright');
+const project=resolve(dirname(fileURLToPath(import.meta.url)),'../..');
+
+test('saved Suixing 1024-bit merchant draft enables from the browser without re-entering secrets; weak platform errors name the field',async t=>{
+ const remote=providerFixture({merchantBits:1024});
+ const config={...remote.configs.suixingpay,enabled:false,sign_type:'RSA',private_key:createPrivateKey(remote.configs.suixingpay.private_key).export({type:'pkcs1',format:'der'}).toString('base64'),public_key:createPublicKey(remote.configs.suixingpay.public_key).export({type:'spki',format:'der'}).toString('base64')};
+ const f=await fixture(t,{withoutCore:true,publicDir:resolve(project,'public'),paymentTransport:remote.transport});
+ const admin=await f.request('POST','/api/setup',{email:'admin@example.test',password,display_name:'配置测试管理员',setup_token:f.setupToken});
+ assert.equal((await f.request('PATCH','/api/admin/payment',{expected_revision:1,providers:{suixingpay:config}},admin)).status,200);
+ const browser=await chromium.launch({headless:true,...(process.env.PLAYWRIGHT_EXECUTABLE_PATH?{executablePath:process.env.PLAYWRIGHT_EXECUTABLE_PATH}:{})});t.after(()=>browser.close());
+ const context=await browser.newContext({viewport:{width:1365,height:1000},reducedMotion:'reduce'}),page=await context.newPage(),errors=[],external=[];
+ page.on('pageerror',error=>errors.push(error.message));page.setDefaultTimeout(10000);
+ await context.route('**/*',route=>{if(new URL(route.request().url()).origin!==f.config.publicOrigin){external.push(route.request().url());return route.abort();}return route.continue();});
+ t.after(()=>{assert.deepEqual(errors,[]);assert.deepEqual(external,[]);});
+ await page.goto(f.config.publicOrigin+'/admin/settings#payment');await page.getByLabel('电子邮箱',{exact:true}).fill('admin@example.test');await page.getByLabel('密码',{exact:true}).fill(password);await page.locator('.auth-form button[type=submit]').click();
+ await page.getByRole('tab',{name:'支付配置',exact:true}).click();await page.locator('summary').filter({hasText:'随行付'}).click();
+ const form=page.getByRole('form',{name:'随行付渠道配置',exact:true});
+ assert.equal(await form.getByLabel('随行付 商户私钥',{exact:true}).inputValue(),'');assert.equal(await form.getByLabel('随行付 平台公钥',{exact:true}).inputValue(),'');
+ await form.getByRole('checkbox',{name:'启用随行付',exact:true}).check();await form.getByRole('button',{name:'保存随行付渠道',exact:true}).click();await page.getByRole('dialog').getByRole('button',{name:'确认保存',exact:true}).click();
+ await form.getByText('渠道配置已保存',{exact:true}).waitFor();assert.equal((await f.request('GET','/api/admin/payment',undefined,admin)).data.payment.providers.find(p=>p.id==='suixingpay').ready,true);assert.equal(remote.requests.length,0);
+ await form.getByRole('button',{name:'检查随行付配置',exact:true}).click();await form.getByText('配置格式检查通过',{exact:true}).waitFor();assert.equal(remote.requests.length,0);
+ const weakPublic=createPublicKey(remote.configs.suixingpay.private_key).export({type:'spki',format:'pem'});
+ await form.getByLabel('随行付 平台公钥',{exact:true}).fill(weakPublic);await form.getByRole('button',{name:'保存随行付渠道',exact:true}).click();await page.getByRole('dialog').getByRole('button',{name:'确认保存',exact:true}).click();
+ await form.getByText('随行付的平台公钥至少需要 2048 位 RSA 密钥。',{exact:true}).waitFor();
+ assert.equal(await form.getByText('渠道参数或密钥格式无效，请检查必填字段、RSA 密钥和结算币种。',{exact:true}).count(),0);
+ const saved=JSON.parse(f.store.db.prepare("SELECT value FROM settings WHERE key='payment'").get().value);assert.equal(saved.revision,3);assert.equal(saved.providers.suixingpay.public_key,config.public_key);assert.equal(remote.requests.length,0);
+});

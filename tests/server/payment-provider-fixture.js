@@ -3,8 +3,8 @@ import { generateKeyPairSync,sign,verify,createHash,createHmac,createCipheriv } 
 
 // Synthetic merchants, independent protocol request verification and signed responses.
 // This fixture never contacts a real provider and holds no live credentials.
-export function providerFixture() {
-  const merchant=generateKeyPairSync('rsa',{modulusLength:2048}),platform=generateKeyPairSync('rsa',{modulusLength:2048});
+export function providerFixture({merchantBits=2048}={}) {
+  const merchant=generateKeyPairSync('rsa',{modulusLength:merchantBits}),platform=generateKeyPairSync('rsa',{modulusLength:2048});
   const privateKey=merchant.privateKey.export({format:'pem',type:'pkcs8'}),publicKey=platform.publicKey.export({format:'pem',type:'spki'});
   const configs={
     alipay:{enabled:true,app_id:'202610270001',private_key:privateKey,public_key:publicKey},
