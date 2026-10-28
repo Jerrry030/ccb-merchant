@@ -335,7 +335,7 @@ function shell(route) {
   root.append(el('div',{class:'workspace'},el('header',{class:'topbar'},menu,
     el('div',{class:'breadcrumb'},el('span',{text:state.public.site.name}),el('span',{'aria-hidden':'true',text:'/'}),el('strong',{text:route.title})),
     el('div',{class:'top-actions'},themeButton(),badge(state.user.role))),
-    el('main',{id:'main',class:'main',tabindex:'-1'},el('div',{class:'page-heading'},el('div',{},el('span',{class:'eyebrow',text:route.admin ? '商户管理' : '工作空间'}),el('h1',{text:route.title}),route.path==='/connect'?el('p',{id:'connect-lead',text:state.code?connectGuides.pairing:route.description}):null),el('button',{class:'btn',type:'button',text:'搜索 · Ctrl K',onclick:()=>globalSearch()}),el('button',{class:'btn',type:'button',onclick:() => render()},icon('refresh'),'刷新')),
+    el('main',{id:'main',class:'main',tabindex:'-1'},el('div',{class:'page-heading'},el('div',{},el('span',{class:'eyebrow',text:route.admin ? '商户管理' : '工作空间'}),el('h1',{text:route.title}),route.path==='/connect'?el('p',{id:'connect-lead',text:state.code?connectGuides.pairing:route.description}):null),el('button',{class:'btn',type:'button',onclick:() => render()},icon('refresh'),'刷新')),
       el('div',{id:'page-feedback'}),content,el('footer',{class:'page-footer'},el('span',{text:`${state.public.site.name}`}),el('span',{text:'用量可核对 · 密钥留在服务端'})))));
   app.replaceChildren(root); return content;
 }
@@ -832,20 +832,6 @@ function resetLabel(item, recover) {
   const d = new Date(at), hh = String(d.getHours()).padStart(2,'0'), mm = String(d.getMinutes()).padStart(2,'0');
   return `\u5468${'\u65e5\u4e00\u4e8c\u4e09\u56db\u4e94\u516d'[d.getDay()]} ${hh}:${mm} \u91cd\u7f6e`;
 }
-function globalSearch(){
- if(!state.user||document.querySelector('dialog[aria-label="全局搜索"]'))return;
- const owner=state.user.id,staff=state.user.role==='admin',input=el('input',{type:'search','aria-label':'搜索内容',placeholder:'页面、客户或账号'}),results=el('div'),feedback=el('div',{role:'status'}),submit=el('button',{type:'submit',class:'btn primary',text:'搜索'}),form=el('form',{},el('div',{class:'button-row'},input,submit),feedback,results);
- const dialog=editorDialog('全局搜索',form);let generation=0;
- form.addEventListener('submit',async event=>{
-  event.preventDefault();const current=++generation,q=input.value.trim().toLowerCase();submit.disabled=true;results.replaceChildren();feedback.textContent='读取当前权限范围内的结果…';
-  const pages=navigation.filter(n=>!n.hidden&&(!n.admin||staff)).map(n=>({title:n.title,url:n.path}));
-  const tasks=staff?[api('/api/admin/users?limit=100&q='+encodeURIComponent(q)).then(d=>collection(d,'users').map(u=>({title:(u.display_name||'')+' '+u.email,url:'/admin/customers?q='+encodeURIComponent(u.email)}))),api('/api/admin/inventory').then(d=>collection(d,'accounts').map(a=>{const status=inventoryStatus(a);return {title:(a.details?.name||a.id)+' · '+status.label,url:'/admin/inventory'+(status.history?'?view=history':'')};}))]:[api('/api/me/accounts').then(d=>collection(d,'accounts').map(a=>({title:a.name||a.id,url:'/accounts'})))];
-  const values=await Promise.allSettled(tasks);if(current!==generation||!dialog.isConnected||state.user?.id!==owner)return;
-  const matches=[...pages,...values.flatMap(v=>v.status==='fulfilled'?v.value:[])].filter(v=>v.title.toLowerCase().includes(q)).slice(0,60);
-  results.replaceChildren(...matches.map(v=>el('p',{},el('a',{class:'btn',href:v.url,text:v.title,onclick:()=>dialog.close()}))));feedback.textContent=values.some(v=>v.status==='rejected')?'部分资源读取失败，未显示失败部分。':matches.length?`显示 ${matches.length} 条匹配；客户最多查询 100 条。`:'没有匹配结果。';submit.disabled=false;
- });input.focus();
-}
-addEventListener('keydown',event=>{if(state.user&&(event.ctrlKey||event.metaKey)&&event.key.toLowerCase()==='k'){event.preventDefault();globalSearch();}});
 async function devicesView() {
   const query=new URLSearchParams(location.search),accountId=query.get('account_id'),staff=location.pathname==='/admin/devices',userId=query.get('user_id');
   if(staff&&!userId)throw new Error('请从客户管理选择一位客户。');

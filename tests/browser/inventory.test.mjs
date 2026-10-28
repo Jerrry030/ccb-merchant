@@ -141,10 +141,6 @@ test('released history is read-only while same-name current leases retain exact 
  assert.equal(f.state.inventory[2].assigned,false);
  assert.equal(await stats.locator('.stat').filter({hasText:'可分配'}).locator('.stat-value').textContent(),'1');
  assert.equal(await stats.locator('.stat').filter({hasText:'已分配'}).locator('.stat-value').textContent(),'1');
- await page.getByRole('button',{name:'搜索 · Ctrl K',exact:true}).click();
- const search=page.getByRole('dialog',{name:'全局搜索'});await search.getByLabel('搜索内容',{exact:true}).fill('shared@example.test');await search.getByRole('button',{name:'搜索',exact:true}).click();
- const oldResult=search.getByRole('link',{name:'shared@example.test · 已释放',exact:true});await oldResult.waitFor();
- assert.equal(await oldResult.getAttribute('href'),'/admin/inventory?view=history');await oldResult.click();await history.waitFor({state:'visible'});
  await page.locator('.toast').waitFor({state:'hidden'});
  const artifacts=resolve(project,'tests/browser/artifacts');await mkdir(artifacts,{recursive:true});
  for(const theme of ['light','dark']){
