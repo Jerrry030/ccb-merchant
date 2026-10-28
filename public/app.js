@@ -8,9 +8,13 @@ const app = document.getElementById('app');
 const state = { public: null, user: null, csrf: null, returnTo: '/', code: '', token: '', view: 0 };
 const CANCEL = Symbol('cancel');
 const authRoutes = new Set(['/login', '/setup', '/register', '/verify', '/forgot', '/reset']);
+const connectGuides = {
+  idle: '安装 CCB、登录并确认设备，然后开始你的项目。',
+  pairing: '核对设备信息并确认，然后回到终端继续。',
+};
 const navigation = [
   { path: '/', title: '首页', icon: 'overview', description: '查看账单与用量。参考费用只供核对，不会从钱包扣费。' },
-  { path: '/connect', title: '开始使用', icon: 'terminal', description: '安装 CCB、登录并确认设备，然后在项目目录开始工作。' },
+  { path: '/connect', title: '开始使用', icon: 'terminal', description: connectGuides.idle },
   { path: '/accounts', title: '我的账号', icon: 'layers', description: '查看已分配或订阅交付的账号、额度和正在使用的设备。' },
   { path: '/devices',hidden:true, title: '我的设备', icon: 'monitor', description: '每个账号最多绑定 1 台设备。换机请先撤销旧设备，再连接新设备。' },
   { path: '/usage', title: '使用记录', icon: 'chart', description: '查看请求与 Token。参考成本只供核对，不会从钱包扣费。' },
@@ -327,7 +331,7 @@ function shell(route) {
   root.append(el('div',{class:'workspace'},el('header',{class:'topbar'},menu,
     el('div',{class:'breadcrumb'},el('span',{text:state.public.site.name}),el('span',{'aria-hidden':'true',text:'/'}),el('strong',{text:route.title})),
     el('div',{class:'top-actions'},themeButton(),badge(state.user.role))),
-    el('main',{id:'main',class:'main',tabindex:'-1'},el('div',{class:'page-heading'},el('div',{},el('span',{class:'eyebrow',text:route.admin ? '商户管理' : '工作空间'}),el('h1',{text:route.title})),el('button',{class:'btn',type:'button',onclick:() => render()},icon('refresh'),'刷新')),
+    el('main',{id:'main',class:'main',tabindex:'-1'},el('div',{class:'page-heading'},el('div',{},el('span',{class:'eyebrow',text:route.admin ? '商户管理' : '工作空间'}),el('h1',{text:route.title}),route.path==='/connect'?el('p',{id:'connect-lead',text:state.code?connectGuides.pairing:route.description}):null),el('button',{class:'btn',type:'button',onclick:() => render()},icon('refresh'),'刷新')),
       el('div',{id:'page-feedback'}),content,el('footer',{class:'page-footer'},el('span',{text:`${state.public.site.name}`}),el('span',{text:'用量可核对 · 密钥留在服务端'})))));
   app.replaceChildren(root); return content;
 }
@@ -806,42 +810,124 @@ async function devicesView() {
 async function connectView() {
   const query = new URLSearchParams(location.search);
   if (query.has('code')) { state.code = query.get('code').slice(0,128); history.replaceState({},'','/connect'); }
-  const accountId=query.get('account_id');let selected=null;
-  if(accountId){
-    const accounts=collection(await api('/api/me/accounts'),'accounts');selected=accounts.find(a=>a.id===accountId);
-    if(!selected||!['available','limited'].includes(selected.state)||!/^[A-Za-z0-9_.-]+$/.test(accountId))return panel('账号暂不可用','请返回我的账号重新选择。',el('a',{href:'/accounts',class:'btn',text:'返回我的账号'}));
+  const ticket = state.view;
+  const accountId = query.get('account_id');
+  let selected = null;
+  if (accountId) {
+    const accounts = collection(await api('/api/me/accounts'),'accounts');
+    if (ticket !== state.view) return;
+    selected = accounts.find(account => account.id === accountId);
+    if (!selected || !['available','limited'].includes(selected.state) || !/^[A-Za-z0-9_.-]+$/.test(accountId)) return panel('账号暂不可用','请返回我的账号重新选择。',el('a',{href:'/accounts',class:'btn',text:'返回我的账号'}));
   }
-  const preview = el('div',{}); let currentPreview = null;
-  const form = el('form',{class:'form-narrow'},field('CCB 连接码','code',{required:true,maxlength:128,value:state.code,class:'code-input',autocomplete:'off',spellcheck:'false',placeholder:'输入客户端显示的连接码',hint:'先查看设备信息，再单独确认授权；不会因打开链接而自动批准。'}),el('button',{class:'btn primary',type:'submit'},icon('monitor'),'查看设备信息'));
-  form.querySelector('input').addEventListener('input',() => { currentPreview = null; preview.replaceChildren(); state.code = ''; });
-  bindForm(form,async values => {
-    preview.replaceChildren(); currentPreview = null;
-    state.code = values.get('code').trim(); if (!state.code) throw new Error('请输入连接码。');
-    return api('/api/me/devices/preview',{method:'POST',body:{code:state.code}});
-  },data => {
-    if (!data.device || typeof data.device !== 'object') throw new Error('服务器没有返回可核对的设备信息。');
-    currentPreview = {device:data.device,code:state.code}; const {device,code} = currentPreview;
-    const expires = new Date(device.expires_at).getTime(); const valid = Number.isFinite(expires) && expires > Date.now();
-    const approve = actionButton(device.renewal ? '确认续期此设备' : '确认授权此设备',async () => {
-      if (!currentPreview || currentPreview.code !== code || new Date(device.expires_at).getTime() <= Date.now()) throw new Error('预览已失效，请重新读取设备信息。');
-      if (!await confirmAction('确认设备授权',`请确认「${device.name || '未命名设备'}」（${device.platform || '未知平台'}）由您本人发起。不要批准陌生人的连接码。`,'确认授权')) return CANCEL;
-      const result = await api('/api/me/devices/approve',{method:'POST',body:{code}}); if (result.ok !== true) throw Object.assign(new Error('未收到授权确认。'),{uncertain:true}); return result;
-    },{disabled:!valid,onSuccess:() => { state.code = ''; currentPreview = null; navigate('/devices'); }});
-    preview.replaceChildren(el('hr',{class:'form-divider'}),el('div',{class:'connection-box'},el('h2',{text:'请核对连接请求'}),el('dl',{class:'detail-list'},el('dt',{text:'设备名称'}),el('dd',{text:device.name || '未命名设备'}),el('dt',{text:'运行平台'}),el('dd',{text:device.platform || '未提供'}),el('dt',{text:'确认有效期'}),el('dd',{text:date(device.expires_at)}),el('dt',{text:'请求类型'}),el('dd',{text:device.renewal ? '设备续期' : '新设备连接'}))),valid ? approve : notice('连接码不可确认','连接码已过期或有效期不可验证，请在客户端重新发起连接。','warn'));
-  });
-  const checks = el('div',{class:'confirm-checks'},el('h3',{text:'确认之前，请检查'}),el('ul',{class:'section-list'},[
-    ['01','请求是您本人发起的','不要批准别人发送的连接码。'],['02','客户端指向当前商户','客户端应连接当前商户的公开地址，而不是其他商户或平台后台。'],['03','账户有可用权益','没有有效授权时，设备确认不会绕过资源限制。'],
-  ].map(([n,title,text]) => el('li',{},el('span',{class:'step-num',text:n}),el('div',{class:'list-copy'},el('strong',{text:title}),el('p',{text}))))),notice('无需粘贴 API 密钥','连接设备不需要提供上游账号、商户密钥或管理员凭据。'));
-  const approval = panel('确认终端设备码','当前登录账户决定可使用的权益。先核对设备，再单独确认。',el('div',{class:'card-body'},form,preview,checks));
+  const approver = state.user?.display_name || state.user?.email || '—';
+  const approval = el('section',{class:'card approval-card','aria-label':'设备登录确认'});
+  const layout = el('div',{class:'connect-layout'});
+  let currentPreview = null;
+  let timer = 0;
+  const stopTimer = () => { clearInterval(timer); timer = 0; };
+  const setLead = pairing => {
+    if (ticket !== state.view) return;
+    const lead = document.getElementById('connect-lead');
+    if (lead) lead.textContent = pairing ? connectGuides.pairing : connectGuides.idle;
+  };
+  const place = pairing => {
+    layout.classList.toggle('confirmation-first', pairing);
+    layout.replaceChildren(...(pairing ? [approval, guide] : [guide, approval]));
+    setLead(pairing);
+  };
+  const contextRow = () => el('div',{class:'approval-context'},el('span',{text:'授权用户'}),el('strong',{text:approver}));
+  const warning = () => el('p',{class:'approval-warning'},icon('key'),'只确认你本人发起的请求。');
+  function renderIdle() {
+    stopTimer();
+    currentPreview = null;
+    const form = el('form',{class:'form-narrow'},field('连接码','code',{required:true,maxlength:128,value:state.code,class:'code-input',autocomplete:'off',spellcheck:'false',placeholder:'输入终端显示的连接码',hint:'打开本页不会自动授权。先核对设备，再单独确认。'}),el('button',{class:'btn primary block',type:'submit',text:'核对设备'}));
+    form.querySelector('input').addEventListener('input',() => { currentPreview = null; state.code = ''; if (layout.classList.contains('confirmation-first')) place(false); });
+    bindForm(form,async values => {
+      stopTimer();
+      currentPreview = null;
+      state.code = values.get('code').trim();
+      if (!state.code) throw new Error('请输入连接码。');
+      return api('/api/me/devices/preview',{method:'POST',body:{code:state.code}});
+    },data => {
+      if (!data.device || typeof data.device !== 'object') throw new Error('服务器没有返回可核对的设备信息。');
+      currentPreview = {device:data.device,code:state.code};
+      renderPending(currentPreview.device, currentPreview.code);
+    });
+    approval.replaceChildren(el('div',{class:'approval-eyebrow'},icon('key'),el('span',{text:'设备授权'})),el('h2',{text:'确认终端连接码'}),el('p',{class:'lead',text:'运行 ccb login 后，在这里输入终端显示的连接码。'}),contextRow(),form,warning());
+    place(Boolean(state.code));
+  }
+  function renderPending(device, code) {
+    stopTimer();
+    const renewal = Boolean(device.renewal);
+    const remain = el('dd');
+    const approve = el('button',{class:'btn primary',type:'button',text:renewal ? '确认设备续期' : '确认设备登录'});
+    const back = el('button',{class:'btn',type:'button',text:'重新输入',onclick:() => { state.code = ''; renderIdle(); }});
+    const tick = () => {
+      if (ticket !== state.view || !remain.isConnected) { stopTimer(); return; }
+      const seconds = Math.ceil((Date.parse(device.expires_at) - Date.now()) / 1000);
+      const valid = Number.isFinite(seconds) && seconds > 0;
+      remain.className = valid ? '' : 'expired-code';
+      remain.textContent = valid ? Math.floor(seconds / 60) + ' 分 ' + String(seconds % 60).padStart(2,'0') + ' 秒' : '已过期，请在终端重新登录';
+      approve.disabled = !valid || approve.dataset.busy === 'true';
+    };
+    timer = setInterval(tick, 1000);
+    approve.addEventListener('click',async () => {
+      if (approve.dataset.busy === 'true' || approve.disabled) return;
+      if (!currentPreview || currentPreview.code !== code || Date.parse(device.expires_at) <= Date.now()) {
+        document.getElementById('page-feedback')?.replaceChildren(notice('预览已失效','请重新输入连接码并核对设备。','warn'));
+        approve.disabled = true;
+        return;
+      }
+      approve.dataset.busy = 'true'; approve.disabled = true; back.disabled = true;
+      try {
+        const result = await api('/api/me/devices/approve',{method:'POST',body:{code}});
+        if (ticket !== state.view) return;
+        if (result.ok !== true) throw Object.assign(new Error('未收到授权确认。'),{uncertain:true});
+        state.code = ''; currentPreview = null;
+        renderDone(device, renewal);
+      } catch (error) {
+        if (ticket !== state.view) return;
+        document.getElementById('page-feedback')?.replaceChildren(errorNotice(error));
+        if (!error.uncertain) { approve.dataset.busy = ''; approve.disabled = Date.parse(device.expires_at) <= Date.now(); back.disabled = false; }
+      }
+    });
+    approval.replaceChildren(
+      el('div',{class:'approval-eyebrow'},icon('key'),el('span',{text:'设备授权'})),
+      el('h2',{text:renewal ? '确认设备续期' : '确认设备登录'}),
+      el('p',{class:'lead',text:'确认设备名称和连接码与你的终端一致。'}),
+      contextRow(),
+      el('div',{class:'pending-device'},el('span',{class:'device-icon'},icon('monitor')),el('div',{},el('strong',{text:device.name || '未命名设备'}),el('small',{text:device.platform || '未提供'}))),
+      el('dl',{class:'device-facts'},el('dt',{text:'连接码'}),el('dd',{},el('code',{text:device.code || code})),el('dt',{text:'剩余时间'}),remain),
+      el('p',{class:'fine-print',text:renewal ? '设备续期保留项目历史，不延长账号有效期；设备已过期时需要重新选择账号。' : (selected ? '确认后，终端会选择当前账号，不会抢占其他设备。' : '确认后，终端会列出你可使用的账号供你选择。')}),
+      el('div',{class:'approval-actions'},back,approve),
+      warning()
+    );
+    place(true);
+    tick();
+  }
+  function renderDone(device, renewal) {
+    stopTimer();
+    approval.replaceChildren(
+      el('div',{class:'approval-eyebrow'},icon('key'),el('span',{text:'设备授权'})),
+      el('div',{class:'approved-mark','aria-hidden':'true',text:'✓'}),
+      el('h2',{text:renewal ? '设备已续期' : '设备已登录'}),
+      el('p',{class:'lead',text:renewal ? '回到终端等待续期完成。项目历史会保留；设备已过期时需要重新选择账号。' : (selected ? '回到终端等待登录完成。终端会选择当前账号，然后就可以开始项目。' : '回到终端等待登录完成，再查看并选择可用账号，开始你的项目。')}),
+      el('div',{class:'approved-device'},el('small',{text:approver}),el('strong',{text:device.name || '未命名设备'})),
+      commandBlock('回到项目终端','ccb'),
+      el('a',{class:'btn completion-action',href:'/devices',text:'查看我的设备'})
+    );
+    place(true);
+  }
   const steps = el('ol',{class:'connection-steps'},
-    el('li',{},el('h3',{text:'安装 ccb'}),el('p',{text:'需要 Node.js 18 或更新版本。Windows、macOS 和 Linux 使用同一条命令。'}),commandBlock('安装命令','npm install -g @rimuruchan/ccb'),el('p',{class:'instruction-note'},'首次启动时 ccb 会下载官方 Claude Code；电脑上已有 ',el('code',{text:'claude'}),' 时直接使用。以后用同一条命令更新。')),
-    el('li',{},el('h3',{text:'登录这台电脑'}),el('p',{text:'在需要接入的电脑上运行登录命令。浏览器会打开本页，让你确认设备。'}),commandBlock('登录命令',loginCommand(selected?.id)),el('p',{class:'instruction-note',text:'浏览器没有自动打开时，在本页「确认终端设备码」中输入终端显示的连接码。'})),
-    el('li',{},el('h3',{text:'选择账号，开始项目'}),el('p',{},'在项目目录运行 ccb。还没选账号时会列出账号供你选择，之后用 ',el('code',{text:'ccb account'}),' 切换。'),commandBlock('启动命令','ccb')));
+    el('li',{},el('h2',{text:'安装 ccb'}),el('p',{text:'需要 Node.js 18 或更新版本。Windows、macOS 和 Linux 使用同一条命令。'}),commandBlock('安装命令','npm install -g @rimuruchan/ccb'),el('p',{class:'instruction-note'},'首次启动时 ccb 会下载官方 Claude Code；电脑上已有 ',el('code',{text:'claude'}),' 时直接使用。以后用同一条命令更新。')),
+    el('li',{},el('h2',{text:'登录这台电脑'}),el('p',{text:'在需要接入的电脑上运行登录命令，浏览器会打开本页让你确认设备。'}),commandBlock('登录命令',loginCommand(selected?.id)),el('p',{class:'instruction-note',text:'浏览器没有自动打开时，在本页「确认终端连接码」中输入终端显示的连接码。登录命令使用本站公开地址；其他电脑需要能访问它。'})),
+    el('li',{},el('h2',{text:'选择账号，开始项目'}),el('p',{},'在项目目录运行 ccb。指定账号的登录命令会在确认设备后完成选择；未指定时会列出可用账号。之后用 ',el('code',{text:'ccb account'}),' 切换。'),commandBlock('启动命令','ccb')));
   const reference = el('dl',{class:'connection-reference','aria-label':'常用命令'});
   for (const [name, command] of [['继续上次会话','ccb -c'],['切换账号','ccb account'],['检查连接','ccb status'],['设备续期','ccb login --renew'],['更新 Claude Code','ccb update']]) reference.append(el('div',{},el('dt',{text:name}),el('dd',{},el('code',{text:command}))));
-  const guide = panel('安装与登录','安装客户端、登录、确认设备，然后在项目目录开始。',el('div',{class:'card-body'},steps,reference));
-  const pairing = Boolean(state.code);
-  return el('div',{class:pairing ? 'connect-layout confirmation-first' : 'connect-layout'},selected?notice('当前账号：'+selected.name,'设备确认后终端会选择此账号。不会抢占旧设备；商户站当前提供 Code。'):null,...(pairing ? [approval, guide] : [guide, approval]));
+  const guide = el('section',{class:'connection-instructions','aria-label':'安装与登录指南'},steps,reference);
+  renderIdle();
+  const account = selected ? el('section',{class:'card account-context'},el('div',{class:'card-body'},el('h2',{text:selected.name || '当前账号'}),el('p',{text:'设备确认后，终端将选择此账号；这不会抢占其他设备。本站当前提供 Code。'}),el('a',{href:'/accounts',text:'返回我的账号'}))) : null;
+  return el('div',{class:'connect-page'},account,layout);
 }
 
 function loginCommand(accountId) {

@@ -130,15 +130,16 @@ test('one-time setup requires confirmation and establishes server administrator 
 test('connect query survives login without auto-approval; writes use cookie and CSRF',async t => {
   const h = await harness(t,{connected:true}); await login(h,'member','/connect?code=TEST-CONNECT');
   await h.page.getByRole('heading',{name:'开始使用',exact:true}).waitFor(); assert.equal(new URL(h.page.url()).pathname,'/connect'); assert.equal(new URL(h.page.url()).search,'');
-  assert.equal(await h.page.getByLabel('CCB 连接码',{exact:true}).inputValue(),'TEST-CONNECT');
+  assert.equal(await h.page.getByLabel('连接码',{exact:true}).inputValue(),'TEST-CONNECT');
+  assert.equal(await h.page.getByText('核对设备信息并确认，然后回到终端继续。',{exact:true}).count(),1);
   assert.equal(await h.page.getByLabel('网关地址',{exact:true}).count(),0);
   assert.equal(await h.page.getByText(`ccb login --gateway ${h.fixture.origin}`,{exact:true}).count(),1);
   assert.equal(await h.page.getByText('npm install -g @rimuruchan/ccb',{exact:true}).count(),1);
+  assert.equal(h.fixture.state.requests.filter(r => r.path.includes('/devices')).length,0);
+  await h.page.getByRole('button',{name:'核对设备',exact:true}).click(); await h.page.getByText('我的测试笔记本',{exact:true}).waitFor();
   assert.equal(h.fixture.state.requests.filter(r => r.path.includes('/devices/approve')).length,0);
-  await h.page.getByRole('button',{name:'查看设备信息',exact:true}).click(); await h.page.getByText('我的测试笔记本',{exact:true}).waitFor();
-  await h.page.getByRole('button',{name:'确认授权此设备',exact:true}).click(); await h.page.getByRole('dialog').waitFor();
-  assert.equal(h.fixture.state.requests.filter(r => r.path.includes('/devices/approve')).length,0);
-  await h.page.getByRole('button',{name:'确认授权',exact:true}).click(); await h.page.getByRole('heading',{name:'我的设备',exact:true}).waitFor();
+  await h.page.getByRole('button',{name:'确认设备登录',exact:true}).click(); await h.page.getByRole('heading',{name:'设备已登录',exact:true}).waitFor();
+  await h.page.getByRole('link',{name:'查看我的设备',exact:true}).click(); await h.page.getByRole('heading',{name:'我的设备',exact:true}).waitFor();
   const writes = h.fixture.state.requests.filter(r => ['/api/me/devices/preview','/api/me/devices/approve'].includes(r.path));
   assert.equal(writes.length,2); for (const req of writes) { assert.equal(req.authenticated,true); assert.match(req.csrf,/^fixture-csrf-/); assert.equal(req.origin,h.fixture.origin); assert.equal(req.body.code,'TEST-CONNECT'); }
   await h.page.getByRole('button',{name:'撤销连接',exact:true}).click(); await h.page.getByRole('dialog').getByRole('button',{name:'取消',exact:true}).click();
