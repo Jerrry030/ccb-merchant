@@ -23,6 +23,21 @@ test('retired procurement history is preserved on reopen without being an active
  assert.equal((await f.request('GET','/api/admin/inventory',undefined,admin)).status,200);
 });
 
+test('inventory preserves historical and same-name leases while delivery rejects a released lease',async t=>{
+ const expires_at=new Date(Date.now()+30*86400000).toISOString();
+ const inventory=[{id:'released-lease',status:'released',revision:5},{id:'current-lease',status:'active',revision:7},{id:'independent-lease',status:'active',revision:2}].map(a=>({resource_id:'resource-1',platform:'Windows/x64',assigned:false,expires_at,details:{name:'same@example.test',state:'available'},...a}));
+ const f=await fixture(t,{inventory}),admin=await f.request('POST','/api/setup',{setup_token:f.setupToken,email:'admin@example.test',password,display_name:'Owner'});
+ const member=await f.request('POST','/api/admin/users',{email:'buyer@example.test',password,display_name:'Buyer',role:'member'},admin);
+ const view=await f.request('GET','/api/admin/inventory',undefined,admin);assert.equal(view.status,200,view.raw);
+ assert.deepEqual(view.data.accounts.map(a=>({id:a.id,status:a.status,revision:a.revision})),inventory.map(a=>({id:a.id,status:a.status,revision:a.revision})));
+ const body={user_id:member.data.user.id,resource_id:'resource-1',expires_at};
+ const released=await f.request('POST','/api/admin/grants',{...body,account_lease_id:'released-lease',expected_account_revision:5},admin);
+ assert.equal(released.status,409);assert.equal(released.data.error.code,'account_unavailable');assert.equal(f.state.customers.length,0);assert.equal(f.state.grants.length,0);
+ const delivered=await f.request('POST','/api/admin/grants',{...body,account_lease_id:'current-lease',expected_account_revision:7},admin);
+ assert.equal(delivered.status,201,delivered.raw);assert.equal(delivered.data.grant.account_lease_id,'current-lease');assert.equal(f.state.inventory[2].assigned,false);
+ assert.deepEqual(f.state.inventory.map(a=>a.id),['released-lease','current-lease','independent-lease']);
+});
+
 test('upstream quote refresh updates cost but never overwrites the local retail price or term',async t=>{
  let revision=1,cost=1000;
  const f=await fixture(t,{onCore:({url,json})=>{if(url.pathname==='/access/v1/resources'){json({resources:[{id:'resource-1',name:'Pool',kind:'subscription',status:'active',available:true,surfaces:['code'],plans:[{id:'source-plan',duration_days:90,amount_minor:cost,revision,status:'active'}],stock:[]}]});return true;}}});

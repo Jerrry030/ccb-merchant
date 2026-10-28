@@ -179,6 +179,13 @@ a.stat-cell:hover { background:var(--soft); text-decoration:none; color:inherit;
 
 /* Inventory tables reuse the responsive order-card layout on small screens. */
 .inventory-page .table-sub{overflow-wrap:anywhere}.inventory-page .button-row .btn{white-space:nowrap}
+.inventory-tabs{display:flex;flex-wrap:wrap;gap:20px;padding:0 24px;border-bottom:1px solid var(--line)}
+.inventory-tabs [role=tab]{display:inline-flex;align-items:center;gap:8px;min-height:44px;padding:10px 0;border:0;border-bottom:2px solid transparent;background:transparent;color:var(--muted);font:inherit;font-weight:600;cursor:pointer}
+.inventory-tabs [role=tab][aria-selected=true]{color:var(--primary);border-bottom-color:var(--primary)}
+.inventory-tab-count{padding:0 6px;border-radius:5px;background:var(--soft);font-size:12px;font-variant-numeric:tabular-nums}
+.inventory-page [role=tabpanel][hidden]{display:none}.inventory-scope-note{margin:0;padding:12px 24px;border-top:1px solid var(--line);color:var(--muted);font-size:12px}
+.inventory-record-facts{display:grid;grid-template-columns:100px minmax(0,1fr);gap:12px 16px;margin:20px 0}.inventory-record-facts dt{color:var(--muted)}.inventory-record-facts dd{margin:0;overflow-wrap:anywhere}.inventory-record-id{overflow-wrap:anywhere}
+@media(max-width:600px){.inventory-tabs{gap:16px;padding:0 18px}.inventory-scope-note{padding:12px 18px}.inventory-record-facts{grid-template-columns:84px minmax(0,1fr);gap:12px}}
 
 /* Independent mail/payment settings; short cards rather than one mixed form. */
 .settings-field-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:0 20px}

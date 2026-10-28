@@ -3,6 +3,7 @@ import { normalizeRegistrationEmailSuffixDomain, isRegistrationEmailSuffixDomain
 import { mailSettingsView } from './mail-settings.js';
 import { paymentSettingsView } from './payment-settings.js';
 import { usageDetail } from './usage-detail.js';
+import { inventoryStatus } from './inventory-status.js';
 /* Standalone merchant client. Only /api on this origin; no stored credentials or demo data. */
 const app = document.getElementById('app');
 const state = { public: null, user: null, csrf: null, returnTo: '/', code: '', token: '', view: 0 };
@@ -696,32 +697,62 @@ async function overviewView() {
   root.append(el('div',{class:'usage-board'},usageCard,el('div',{class:'usage-rail'},billCard,qualityCard)));
   return root;
 }
-function inventoryStatus(account) {
- if(account.status==='expired'||Date.parse(account.expires_at)<=Date.now())return '已到期';
- if(account.status!=='active'||!account.details||!['available','limited'].includes(account.details.state))return '不可用';
- return account.assigned?'已分配':'可分配';
-}
 async function inventoryView() {
  const data=await api('/api/admin/inventory'),accounts=collection(data,'accounts');
- const customerId=new URLSearchParams(location.search).get('user_id');
- const shown=customerId?accounts.filter(a=>a.user_id===customerId||!a.assigned):accounts;
- const inventory=table([
-  {label:'账号',render:a=>el('div',{},el('strong',{text:a.details?.name||a.id}),el('span',{class:'table-sub',text:a.platform}))},
-  {label:'规格',render:a=>a.details?.plan||'Claude'},
-  {label:'账号到期',render:a=>date(a.expires_at)},
-  {label:'状态',render:a=>el('div',{},el('span',{class:'badge',text:inventoryStatus(a)}),inventoryStatus(a)==='不可用'?el('span',{class:'table-sub',text:a.status!=='active'?'账号已释放':'上游状态未就绪，请联系平台管理员'}):null)},
-  {label:'使用客户',render:a=>a.assigned?el('div',{},el('strong',{text:a.customer_name||'已分配客户'}),el('span',{class:'table-sub',text:a.customer_email||''}),el('span',{class:'table-sub',text:'客户到期：'+date(a.customer_expires_at)})):'—'},
-  {label:'设备',render:a=>a.details?.device_name||'未绑定'},
-  {label:'操作',render:a=>el('div',{class:'button-row'},
-   el('button',{class:'btn small',text:'账号详情',onclick:()=>editorDialog('账号详情',accountCard({...a.details,id:a.id,platform:a.platform,expires_at:a.expires_at,device_limit:1},true))}),
-   !a.assigned?el('button',{class:'btn small',text:'分配客户',disabled:inventoryStatus(a)!=='可分配',onclick:()=>assignInventoryAccount(a,customerId)}):[
-    el('button',{class:'btn small',text:'延长客户有效期',disabled:a.status!=='active'||!a.grant_revision||Date.parse(a.customer_expires_at)>=Date.parse(a.expires_at),onclick:()=>extendCustomerAccount(a)}),
-    actionButton('收回账号',async()=>await confirmAction('收回账号',`收回「${a.details?.name||'此账号'}」对「${a.customer_name||'当前客户'}」的授权。原客户和设备将不能继续使用，确认成功后才可重新分配。`,'确认收回',true)?api('/api/admin/grants/'+encodeURIComponent(a.grant_id),{method:'PATCH',body:{expected_revision:a.grant_revision,status:'revoked'}}):CANCEL,{danger:true,disabled:!a.grant_id||!a.grant_revision})])}
- ],shown,'暂无账号',customerId?'这位客户尚未获得账号，当前也没有可分配库存。':'请联系平台管理员分配账号。账号进入库存后，直接选择客户即可交付。');
- inventory.classList.add('rental-table');
- return el('div',{class:'page-content inventory-page'},customerId?el('a',{href:'/admin/inventory',class:'btn',text:'查看全部库存'}):null,
-  el('div',{class:'stats-grid'},stat('可分配',number(accounts.filter(a=>inventoryStatus(a)==='可分配').length),'选择账号后分配客户','layers'),stat('已分配',number(accounts.filter(a=>a.assigned).length),'一份账号交付给一位客户','users')),
-  panel('账号库存','选账号 → 选客户 → 确认分配。每个账号最多绑定 1 台设备。',inventory));
+ const query=new URLSearchParams(location.search),customerId=query.get('user_id'),now=Date.now();
+ const entries=accounts.map(account=>({account,...inventoryStatus(account,now)})).filter(({account,history})=>!customerId||account.user_id===customerId||(!history&&account.assigned===false));
+ const current=entries.filter(entry=>!entry.history),historical=entries.filter(entry=>entry.history);
+ const selected=query.get('view')==='history'?'history':'current';
+ const descriptions={current:'选账号 → 选客户 → 确认分配。每个账号最多绑定 1 台设备。',history:'已释放、已到期的授权仅供核对，不作为当前可交付库存。'};
+ const allLink=customerId?el('a',{href:'/admin/inventory'+(selected==='history'?'?view=history':''),class:'btn',text:'查看全部库存'}):null;
+ const pages=[['current','当前库存',current],['history','历史记录',historical]].map(([id,label,rows])=>{
+  const isHistory=id==='history';
+  const columns=[
+   {label:'账号',render:({account:a})=>el('div',{},el('strong',{text:a.details?.name||a.id}),el('span',{class:'table-sub',text:a.platform}))},
+   {label:'规格',render:({account:a})=>a.details?.plan||'Claude'},
+   {label:isHistory?'原授权到期':'授权到期',render:({account:a})=>date(a.expires_at)},
+   {label:'状态',render:entry=>el('div',{},el('span',{class:`badge ${entry.tone}`,text:entry.label}),entry.reason?el('span',{class:'table-sub',text:entry.reason}):null)},
+   {label:isHistory?'关联客户':'使用客户',render:({account:a})=>isHistory&&!a.user_id?'未提供':a.assigned?el('div',{},el('strong',{text:a.customer_name||'已分配客户'}),el('span',{class:'table-sub',text:a.customer_email||''}),el('span',{class:'table-sub',text:'客户到期：'+date(a.customer_expires_at)})):'—'},
+  ];
+  if(!isHistory)columns.push({label:'设备',render:({account:a})=>a.details?.device_name||'未绑定'});
+  columns.push({label:'操作',render:entry=>{
+   const a=entry.account;
+   if(isHistory)return el('button',{class:'btn small',type:'button',text:'查看记录',onclick:()=>editorDialog('历史授权记录',el('div',{},
+    notice('历史授权，不计入当前库存','此记录只用于核对原授权，不代表当前账号状态，也不能用于再次分配。'),
+    el('dl',{class:'inventory-record-facts'},[
+     ['账号',a.details?.name||a.id],['授权编号',a.id],['状态',entry.label],['规格',a.details?.plan||'Claude'],['平台',a.platform||'未提供'],
+     ['原授权到期',date(a.expires_at)],['授权创建时间',date(a.created_at)],['关联客户',a.user_id?(a.customer_name||a.customer_email||a.user_id):'未提供'],
+    ].map(([name,value])=>[el('dt',{text:name}),el('dd',{text:value})]))))});
+   return el('div',{class:'button-row'},
+    el('button',{class:'btn small',type:'button',text:'账号详情',onclick:()=>editorDialog('账号详情',el('div',{},accountCard({...a.details,id:a.id,platform:a.platform,expires_at:a.expires_at,device_limit:1},true),el('p',{class:'inline-info inventory-record-id',text:'授权编号：'+a.id})))}),
+    !a.assigned?el('button',{class:'btn small',type:'button',text:'分配客户',disabled:!entry.assignable,onclick:()=>assignInventoryAccount(a,customerId)}):[
+     el('button',{class:'btn small',type:'button',text:'延长客户有效期',disabled:!entry.active||!a.grant_revision||Date.parse(a.customer_expires_at)>=Date.parse(a.expires_at),onclick:()=>extendCustomerAccount(a)}),
+     actionButton('收回账号',async()=>await confirmAction('收回账号',`收回「${a.details?.name||'此账号'}」对「${a.customer_name||'当前客户'}」的授权。原客户和设备将不能继续使用，确认成功后才可重新分配。`,'确认收回',true)?api('/api/admin/grants/'+encodeURIComponent(a.grant_id),{method:'PATCH',body:{expected_revision:a.grant_revision,status:'revoked'}}):CANCEL,{danger:true,disabled:!a.grant_id||!a.grant_revision})]);
+  }});
+  const empty=isHistory?'暂无历史记录':historical.length?'暂无当前库存':'暂无账号';
+  const explanation=isHistory?(customerId?'未返回与这位客户明确关联的历史授权；未关联客户的记录可在全部库存中查看。':'已释放或已到期的授权会保留在这里，不计入当前库存。'):historical.length?'当前没有可用的授权记录。可切换到历史记录核对原授权，或联系平台管理员重新分配。':customerId?'这位客户尚未获得账号，当前也没有未分配库存。':'请联系平台管理员分配账号。账号进入库存后，直接选择客户即可交付。';
+  const inventory=table(columns,rows,empty,explanation);inventory.classList.add('rental-table');
+  const page=el('div',{id:'inventory-'+id,role:'tabpanel','aria-labelledby':'inventory-tab-'+id,hidden:id!==selected},inventory,
+   el('p',{class:'inventory-scope-note',text:isHistory?(customerId?'仅显示明确关联这位客户的历史授权，不计入当前库存统计。':'历史记录仅供核对，不计入当前库存统计。'):customerId?'仅显示这位客户的账号及未分配库存；统计按当前筛选范围计算。':'当前库存包含待核对或暂不可用的授权；已释放、已到期记录请查看历史记录。'}));
+  const tab=el('button',{id:'inventory-tab-'+id,type:'button',role:'tab','aria-controls':page.id,'aria-selected':String(id===selected),tabindex:id===selected?'0':'-1',onclick:()=>showPage(id)},label,el('span',{class:'inventory-tab-count',text:number(rows.length)}));
+  return {id,page,tab};
+ });
+ function showPage(id){
+  for(const item of pages){item.page.hidden=item.id!==id;item.tab.setAttribute('aria-selected',String(item.id===id));item.tab.tabIndex=item.id===id?0:-1;}
+  inventoryPanel.querySelector('.card-head p').textContent=descriptions[id];
+  const url=new URL(location.href);if(id==='history')url.searchParams.set('view','history');else url.searchParams.delete('view');
+  history.replaceState({},'',url.pathname+url.search+url.hash);
+  if(allLink)allLink.href='/admin/inventory'+(id==='history'?'?view=history':'');
+ }
+ const tabs=el('div',{class:'inventory-tabs',role:'tablist','aria-label':'库存记录范围',onkeydown:event=>{
+  const index=pages.findIndex(item=>item.tab===event.target);if(index<0)return;
+  const next=event.key==='Home'?0:event.key==='End'?pages.length-1:event.key==='ArrowRight'?(index+1)%pages.length:event.key==='ArrowLeft'?(index+pages.length-1)%pages.length:-1;
+  if(next<0)return;event.preventDefault();showPage(pages[next].id);pages[next].tab.focus();
+ }},pages.map(item=>item.tab));
+ const inventoryPanel=panel('账号库存',descriptions[selected],el('div',{},tabs,pages.map(item=>item.page)));
+ return el('div',{class:'page-content inventory-page'},allLink,
+  el('div',{class:'stats-grid',role:'group','aria-label':'当前库存统计'},stat('可分配',number(current.filter(entry=>entry.assignable).length),'当前筛选范围内可交付的授权','layers'),stat('已分配',number(current.filter(entry=>entry.active&&entry.account.assigned===true).length),'仅统计当前仍有效的客户授权','users')),
+  inventoryPanel);
 }
 async function assignInventoryAccount(account,customerId=null){
  try {
@@ -808,7 +839,7 @@ function globalSearch(){
  form.addEventListener('submit',async event=>{
   event.preventDefault();const current=++generation,q=input.value.trim().toLowerCase();submit.disabled=true;results.replaceChildren();feedback.textContent='读取当前权限范围内的结果…';
   const pages=navigation.filter(n=>!n.hidden&&(!n.admin||staff)).map(n=>({title:n.title,url:n.path}));
-  const tasks=staff?[api('/api/admin/users?limit=100&q='+encodeURIComponent(q)).then(d=>collection(d,'users').map(u=>({title:(u.display_name||'')+' '+u.email,url:'/admin/customers?q='+encodeURIComponent(u.email)}))),api('/api/admin/inventory').then(d=>collection(d,'accounts').map(a=>({title:a.details?.name||a.id,url:'/admin/inventory'})))]:[api('/api/me/accounts').then(d=>collection(d,'accounts').map(a=>({title:a.name||a.id,url:'/accounts'})))];
+  const tasks=staff?[api('/api/admin/users?limit=100&q='+encodeURIComponent(q)).then(d=>collection(d,'users').map(u=>({title:(u.display_name||'')+' '+u.email,url:'/admin/customers?q='+encodeURIComponent(u.email)}))),api('/api/admin/inventory').then(d=>collection(d,'accounts').map(a=>{const status=inventoryStatus(a);return {title:(a.details?.name||a.id)+' · '+status.label,url:'/admin/inventory'+(status.history?'?view=history':'')};}))]:[api('/api/me/accounts').then(d=>collection(d,'accounts').map(a=>({title:a.name||a.id,url:'/accounts'})))];
   const values=await Promise.allSettled(tasks);if(current!==generation||!dialog.isConnected||state.user?.id!==owner)return;
   const matches=[...pages,...values.flatMap(v=>v.status==='fulfilled'?v.value:[])].filter(v=>v.title.toLowerCase().includes(q)).slice(0,60);
   results.replaceChildren(...matches.map(v=>el('p',{},el('a',{class:'btn',href:v.url,text:v.title,onclick:()=>dialog.close()}))));feedback.textContent=values.some(v=>v.status==='rejected')?'部分资源读取失败，未显示失败部分。':matches.length?`显示 ${matches.length} 条匹配；客户最多查询 100 条。`:'没有匹配结果。';submit.disabled=false;
