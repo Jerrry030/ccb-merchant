@@ -61,7 +61,9 @@ export function publicSettings(saved, mail, payment, upstreamUrl) {
     site: {
       name: saved.name, description: saved.description, support_email: saved.support_email, currency: 'CNY',
       logo_url: saved.logo_url || '', accent_color: saved.accent_color || '#7c5cff',
+      registration_enabled: Boolean(saved.registration_enabled),
       registration_email_suffix_whitelist: registration.email_suffix_whitelist,
+      registration_email_domain_quota_enabled: registration.email_domain_quota_enabled,
     },
     features: {
       registration: Boolean(saved.registration_enabled && (registration.email_verification_enabled ? mailOn : true)),

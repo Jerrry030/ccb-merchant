@@ -103,13 +103,13 @@ test('enabled registration, verification and password reset are explicit and scr
   await page.goto(fixture.origin+'/register');
   await page.getByLabel('显示名称',{exact:true}).fill('新测试成员'); await page.getByLabel('电子邮箱',{exact:true}).fill('new@example.test');
   await page.getByLabel('密码',{exact:true}).fill('fixture-new-password-123'); await page.getByLabel('确认密码',{exact:true}).fill('fixture-new-password-123');
-  await page.getByRole('button',{name:'创建账户',exact:true}).click(); await page.getByText('请前往邮箱完成验证，然后返回登录。',{exact:true}).waitFor();
+  await page.getByRole('button',{name:'创建账户',exact:true}).click(); await page.getByText('请查看邮箱。新注册或尚未验证的账户会收到 24 小时内有效的验证邮件，并使用你刚刚填写的密码。已经可以登录的账户不会被修改，请用原密码登录或找回密码。',{exact:true}).waitFor();
   await page.goto(fixture.origin+'/verify?token=fixture-verification-token');
   await page.getByRole('heading',{name:'验证电子邮箱',exact:true}).waitFor(); assert.equal(new URL(page.url()).search,'');
   assert.equal(fixture.state.requests.filter(r => r.path === '/api/auth/verify').length,0,'Opening a link must not auto-submit');
   await page.getByRole('button',{name:'确认验证',exact:true}).click(); await page.getByText('邮箱已验证，请返回登录。',{exact:true}).waitFor();
   await page.goto(fixture.origin+'/forgot'); await page.getByLabel('电子邮箱',{exact:true}).fill('anyone@example.test');
-  await page.getByRole('button',{name:'发送重置邮件',exact:true}).click(); await page.getByText('如果账户符合条件，您将收到重置邮件。请同时检查垃圾邮件。',{exact:true}).waitFor();
+  await page.getByRole('button',{name:'发送重置邮件',exact:true}).click(); await page.getByText('如果这个邮箱可以重置密码，你会收到 30 分钟内有效的重置邮件。如果账户还没完成验证，你会收到验证邮件，而不是重置链接。请同时检查垃圾邮件。',{exact:true}).waitFor();
   await page.goto(fixture.origin+'/reset?token=fixture-reset-token'); await page.getByRole('heading',{name:'设置新密码',exact:true}).waitFor(); assert.equal(new URL(page.url()).search,'');
   await page.getByLabel('新密码',{exact:true}).fill('fixture-reset-password-123'); await page.getByLabel('确认密码',{exact:true}).fill('fixture-reset-password-123');
   await page.getByRole('button',{name:'重置密码',exact:true}).click(); await page.getByText('密码已重置，请使用新密码登录。',{exact:true}).waitFor();
@@ -128,7 +128,7 @@ test('one-time setup requires confirmation and establishes server administrator 
 });
 
 test('connect query survives login without auto-approval; writes use cookie and CSRF',async t => {
-  const h = await harness(t,{connected:true}); await login(h,'member','/connect?code=TEST-CONNECT');
+  const h = await harness(t,{connected:true,accounts:[{id:'account-1',name:'测试账号',state:'available',plan:'Claude',surfaces:['code']}]}); await login(h,'member','/connect?code=TEST-CONNECT');
   await h.page.getByRole('heading',{name:'开始使用',exact:true}).waitFor(); assert.equal(new URL(h.page.url()).pathname,'/connect'); assert.equal(new URL(h.page.url()).search,'');
   assert.equal(await h.page.getByLabel('连接码',{exact:true}).inputValue(),'TEST-CONNECT');
   assert.equal(await h.page.getByText('核对设备信息并确认，然后回到终端继续。',{exact:true}).count(),1);

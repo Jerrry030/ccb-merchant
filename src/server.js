@@ -300,9 +300,10 @@ export function createMerchant(config, options={}) {
         }
         case 'GET /api/admin/operations': {
           const pending=store.db.prepare("SELECT * FROM users WHERE core_pending IS NOT NULL OR (provision_name IS NOT NULL AND core_customer_id IS NULL) ORDER BY created_at LIMIT 100").all().map(publicUser);
+          const unassigned=store.db.prepare("SELECT * FROM users WHERE role='member' AND status='active' AND core_customer_id IS NULL AND provision_name IS NULL ORDER BY created_at LIMIT 100").all().map(publicUser);
           const totals=store.db.prepare('SELECT status,count(*) AS count FROM rentals GROUP BY status').all();
           const paymentsPending=store.db.prepare("SELECT count(*) AS n FROM orders WHERE status IN ('creating','pending','unknown')").get().n;
-          respond(res,200,{pending_customers:pending,rentals:totals,payments_pending:paymentsPending,worker:{interval_ms:config.reconcileIntervalMs,max_attempts:8},readiness:{core_configured:Boolean(config.upstreamUrl),mail_configured:Boolean(effectiveMail(config,store)),payment_configured:describePayment(config,store).configured,https:config.secureCookies,schema_version:store.db.prepare('PRAGMA user_version').get().user_version,runtime_limit:config.runtimeMaxInFlight}});return;
+          respond(res,200,{pending_customers:pending,unassigned_customers:unassigned,rentals:totals,payments_pending:paymentsPending,worker:{interval_ms:config.reconcileIntervalMs,max_attempts:8},readiness:{core_configured:Boolean(config.upstreamUrl),mail_configured:Boolean(effectiveMail(config,store)),payment_configured:describePayment(config,store).configured,https:config.secureCookies,schema_version:store.db.prepare('PRAGMA user_version').get().user_version,runtime_limit:config.runtimeMaxInFlight}});return;
         }
         case 'GET /api/admin/connection': respond(res,200,{...await connection(),upstream_url:config.upstreamUrl,public_origin:config.publicOrigin,environment_managed:config.upstreamEnvironment,revision:core.revision}); return;
         case 'POST /api/admin/upstream': {

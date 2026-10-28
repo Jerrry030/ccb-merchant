@@ -36,18 +36,22 @@ export class Auth {
     if(!['GET','HEAD'].includes(req.method) && !equalSecret(req.headers['x-csrf-token'],session.csrf)) throw new HttpError(403,'invalid_csrf','Refresh the session and send its CSRF token.');
     return {user,session};
   }
-  async mailToken(user,kind) {
-    const token=randomToken(), now=Date.now();
-    this.store.transaction(()=>{
-      this.store.db.prepare('DELETE FROM auth_tokens WHERE (user_id=? AND kind=?) OR expires_at<=?').run(user.id,kind,now);
-      this.store.db.prepare('INSERT INTO auth_tokens VALUES (?,?,?,?)').run(digest(token),user.id,kind,now+(kind==='verify'?86400000:1800000));
-    });
-    try { await this.mailer.send(user.email,kind,token); }
-    catch { this.store.audit(null,`mail.${kind}`,user.id,'delivery_unknown'); /* Do not log credentials, links, or provider errors. */ }
+  async sendMail(user,kind) {
+    let token='';
+    if(kind==='verify' || kind==='reset') {
+      token=randomToken();
+      const now=Date.now();
+      this.store.transaction(()=>{
+        this.store.db.prepare('DELETE FROM auth_tokens WHERE (user_id=? AND kind=?) OR expires_at<=?').run(user.id,kind,now);
+        this.store.db.prepare('INSERT INTO auth_tokens VALUES (?,?,?,?)').run(digest(token),user.id,kind,now+(kind==='verify'?86400000:1800000));
+      });
+    }
+    try { await this.mailer.send(user.email,kind,token); return true; }
+    catch { this.store.audit(null,`mail.${kind}`,user.id,'delivery_unknown'); return false; /* Do not log credentials, links, or provider errors. */ }
   }
   async handle(req,res,path,body,features) {
     const route=`${req.method} ${path}`;
-    if(!['POST /api/setup','POST /api/auth/login','POST /api/auth/register','POST /api/auth/forgot-password','POST /api/auth/reset-password','POST /api/auth/verify','GET /api/auth/session','POST /api/auth/logout','PATCH /api/auth/password'].includes(route)) return false;
+    if(!['POST /api/setup','POST /api/auth/login','POST /api/auth/register','POST /api/auth/resend-verification','POST /api/auth/forgot-password','POST /api/auth/reset-password','POST /api/auth/verify','GET /api/auth/session','POST /api/auth/logout','PATCH /api/auth/password'].includes(route)) return false;
     if(!['GET','HEAD'].includes(req.method)) this.store.throttle(`auth:${req.socket.remoteAddress}`,30,60000);
     switch(route) {
       case 'POST /api/setup': {
@@ -95,28 +99,49 @@ export class Auth {
         fields(body,['email','password','display_name'],['email','password','display_name']);
         const address=email(body.email), name=text(body.display_name,'display_name',100), hashed=await passwordHash(body.password);
         this.store.throttle(`register:${digest(address)}`,3,3600000);
-        let user=this.store.db.prepare('SELECT * FROM users WHERE email=?').get(address);
-        if(!user) {
-          const status=features.email_verification?'pending_verification':'active';
-          user=this.store.transaction(()=>{
-            const existing=this.store.db.prepare('SELECT * FROM users WHERE email=?').get(address);
-            if(existing) return existing;
+        const user=this.store.transaction(()=>{
+          const existing=this.store.db.prepare('SELECT * FROM users WHERE email=?').get(address);
+          if(!existing) {
             assertCanRegister(this.store, address);
+            const status=features.email_verification?'pending_verification':'active';
             const added=this.store.createUser({email:address,display_name:name,password_hash:hashed,role:'member',status});
             this.store.audit(added.id,'auth.register',added.id);
             return added;
-          });
+          }
+          if(existing.status==='pending_verification' && features.email_verification) {
+            const updated=this.store.db.prepare("UPDATE users SET password_hash=?,display_name=? WHERE id=? AND status='pending_verification'").run(hashed,name,existing.id);
+            if(updated.changes===1) this.store.audit(existing.id,'auth.register_refresh',existing.id);
+          }
+          return this.store.db.prepare('SELECT * FROM users WHERE id=?').get(existing.id);
+        });
+        const verifying=features.email_verification;
+        let delivery=verifying?'sent':'not_required';
+        if(verifying) {
+          const kind=user.status==='pending_verification'?'verify':user.status==='active'?'login':'unavailable';
+          if(!await this.sendMail(user,kind)) delivery='unconfirmed';
         }
-        if(user.status==='pending_verification') await this.mailToken(user,'verify');
-        respond(res,200,{status:user.status==='pending_verification'?'verification_required':'created'}); break;
+        respond(res,200,{status:verifying?'verification_required':'created',delivery}); break;
+      }
+      case 'POST /api/auth/resend-verification': {
+        if(!this.mailer) throw new HttpError(503,'mail_disabled','Email verification and reset are not configured.');
+        fields(body,['email'],['email']);
+        const address=email(body.email);
+        this.store.throttle(`register:${digest(address)}`,3,3600000);
+        const user=this.store.db.prepare('SELECT * FROM users WHERE email=?').get(address);
+        if(user?.status==='pending_verification') await this.sendMail(user,'verify');
+        else if(user?.status==='active') await this.sendMail(user,'login');
+        else if(user?.status==='disabled') await this.sendMail(user,'unavailable');
+        respond(res,200,{ok:true}); break;
       }
       case 'POST /api/auth/forgot-password': {
         fields(body,['email'],['email']);
         const address=email(body.email);
         this.store.throttle(`reset:${digest(address)}`,3,3600000);
         if(this.mailer) {
-          const user=this.store.db.prepare("SELECT * FROM users WHERE email=? AND status='active'").get(address);
-          if(user) await this.mailToken(user,'reset');
+          const user=this.store.db.prepare('SELECT * FROM users WHERE email=?').get(address);
+          if(user?.status==='active') await this.sendMail(user,'reset');
+          else if(user?.status==='pending_verification') await this.sendMail(user,'verify');
+          else if(user?.status==='disabled') await this.sendMail(user,'unavailable');
         }
         respond(res,200,{ok:true}); break;
       }

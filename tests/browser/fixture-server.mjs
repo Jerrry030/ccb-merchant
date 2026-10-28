@@ -20,7 +20,7 @@ export async function startFixture(options = {}) {
     public: {site:{name:'紫序工作台',description:'一个安静、高效的 Code 工作空间。',support_email:'support@example.test',currency:'CNY',logo_url:'https://untrusted.invalid/tracking.svg'},features:{registration:false,email_verification:false,password_reset:false,payment:false,token_billing:false,...options.features},setup_required:options.setupRequired || false},
     users:[{id:'admin-1',email:fixtureAccounts.admin.email,display_name:'测试管理员',role:'admin',status:'active',core_customer_id:'customer-admin',created_at:now},{id:'member-1',email:fixtureAccounts.member.email,display_name:options.displayName || '测试成员',role:'member',status:'active',core_customer_id:'customer-member',created_at:now}],
     connection:{configured:Boolean(options.connected),available:Boolean(options.connected),...(options.connected ? {user:{id:'merchant-fixture',name:'独立测试商户'},scopes:['resources.read','customers.read','customers.write','delegation.grants.read','delegation.grants.write','delegation.devices.read','delegation.devices.write','delegation.usage.read','runtime','delegation.keys.manage']} : {})},
-    pending:options.pending || [], resources:options.resources || [], grants:options.grants || [],devices:options.devices || [],orders:[],ledger:[],events:[],
+    pending:options.pending || [], accounts:options.accounts || [], resources:options.resources || [], grants:options.grants || [],devices:options.devices || [],orders:[],ledger:[],events:[],
     checkoutUrl:options.checkoutUrl || 'https://checkout.stripe.com/c/pay/fixture-only', grantConflict:false,
   };
   state.public.payment={currency:'CNY',min_amount_minor:1,max_amount_minor:1000000,help_text:'',methods:state.public.features.payment?[{id:'stripe',title:'Stripe 收银台'}]:[]};
@@ -61,8 +61,9 @@ export async function startFixture(options = {}) {
         state.public.setup_required = false; const found = state.users[0]; const id = randomUUID(),csrf = `fixture-csrf-${randomUUID()}`;
         state.sessions.set(id,{userId:found.id,csrf}); res.setHeader('Set-Cookie',`fixture_session=${id}; Path=/; HttpOnly; SameSite=Lax`); return reply(201,{user:found,csrf_token:csrf});
       }
-      if (['/api/auth/register','/api/auth/verify','/api/auth/forgot-password','/api/auth/reset-password'].includes(path) && write) {
-        if (path.endsWith('/register')) return state.public.features.registration ? reply(201,{status:state.public.features.email_verification ? 'verification_required' : 'created'}) : reply(503,'registration_disabled','Registration disabled.');
+      if (['/api/auth/register','/api/auth/resend-verification','/api/auth/verify','/api/auth/forgot-password','/api/auth/reset-password'].includes(path) && write) {
+        if (path.endsWith('/register')) return state.public.features.registration ? reply(201,{status:state.public.features.email_verification ? 'verification_required' : 'created',delivery:state.public.features.email_verification ? 'sent' : 'not_required'}) : reply(503,'registration_disabled','Registration disabled.');
+        if (path.endsWith('/resend-verification')) return state.public.features.email_verification ? reply(200,{ok:true}) : reply(503,'mail_disabled','Email services disabled.');
         const enabled = path.endsWith('/verify') ? state.public.features.email_verification : state.public.features.password_reset;
         return enabled ? reply(200,{ok:true}) : reply(503,'mail_disabled','Email services disabled.');
       }
@@ -87,7 +88,7 @@ export async function startFixture(options = {}) {
       if (path === '/api/me/usage') return reply(200,{usage:null,requests:[],total:0});
       if (path === '/api/me/wallet') return reply(200,{wallet:{balance_minor:0,currency:'CNY'},ledger:state.ledger,orders:state.orders});
       if (path === '/api/plans' || path === '/api/admin/plans') return reply(200,{plans:[]});
-      if (path === '/api/me/accounts') return reply(200,{accounts:[]});
+      if (path === '/api/me/accounts') return reply(200,{accounts:state.accounts});
       if (path === '/api/me/payments' && req.method === 'POST') {
         if (!state.public.features.payment) return reply(503,'payment_disabled','Payments are not configured.');
         const order = {id:`order-${state.orders.length+1}`,status:'pending',amount_minor:body.amount_minor,currency:'CNY',created_at:now}; state.orders.push(order); return reply(201,{order,checkout_url:state.checkoutUrl});
@@ -123,7 +124,7 @@ export async function startFixture(options = {}) {
 
       if (path === '/api/admin/orders') return reply(200,{orders:state.orders});
       if (path === '/api/admin/audit') return reply(200,{events:state.events});
-      if (path === '/api/admin/operations') return reply(200,{pending_customers:[],rentals:[],payments_pending:0,worker:{interval_ms:15000,max_attempts:8},readiness:{core_configured:Boolean(state.connection.configured),mail_configured:false,payment_configured:Boolean(state.public.features.payment),https:false,schema_version:3,runtime_limit:8}});
+      if (path === '/api/admin/operations') return reply(200,{pending_customers:[],unassigned_customers:[],rentals:[],payments_pending:0,worker:{interval_ms:15000,max_attempts:8},readiness:{core_configured:Boolean(state.connection.configured),mail_configured:false,payment_configured:Boolean(state.public.features.payment),https:false,schema_version:3,runtime_limit:8}});
       if (path === '/api/admin/settings' && req.method === 'PATCH') {
         Object.assign(state.public.site,{name:body.name,description:body.description,support_email:body.support_email}); state.public.features.registration = body.registration_enabled; return reply(200,{site:state.public.site,features:state.public.features});
       }

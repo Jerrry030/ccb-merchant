@@ -99,7 +99,7 @@ test('registration requires verification; tokens are hashed, expire, single-use 
   const admin=await f.request('POST','/api/setup',{...credentials,setup_token:f.setupToken});
   await f.request('PATCH','/api/admin/settings',{registration_enabled:true},admin);
   const registered=await f.request('POST','/api/auth/register',{email:'new@example.test',password,display_name:'New'});
-  assert.deepEqual(registered.data,{status:'verification_required'});
+  assert.deepEqual(registered.data,{status:'verification_required',delivery:'sent'});
   assert.equal((await f.request('POST','/api/auth/login',{email:'new@example.test',password})).status,401);
   assert.equal(deliveries[0].kind,'verify');
   const token=deliveries[0].token;
@@ -166,7 +166,7 @@ test('mail delivery errors reveal neither transport credentials nor verification
   const admin=await f.request('POST','/api/setup',{...credentials,setup_token:f.setupToken});
   await f.request('PATCH','/api/admin/settings',{registration_enabled:true},admin);
   const registered=await f.request('POST','/api/auth/register',{email:'mail@example.test',display_name:'Mail',password});
-  assert.equal(registered.status,200);assert.equal(registered.raw.includes('PRIVATE_DELIVERY_TOKEN'),false);
+  assert.equal(registered.status,200);assert.equal(registered.data.delivery,'unconfirmed');assert.equal(registered.raw.includes('PRIVATE_DELIVERY_TOKEN'),false);
   const audit=await f.request('GET','/api/admin/audit',undefined,admin);
   assert.ok(audit.data.events.some(event=>event.outcome==='delivery_unknown'));
   assert.equal(audit.raw.includes('SMTP_PASSWORD'),false);

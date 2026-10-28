@@ -30,7 +30,7 @@ const navigation = [
   { path:'/admin/inventory',title:'账号库存',icon:'layers',admin:true,description:'查看平台管理员分配的账号、有效期和客户分配状态。每个账号最多绑定 1 台设备。' },
   { path:'/admin/plans',hidden:true,title:'套餐管理',icon:'layers',admin:true,description:'只为订阅分组设置有效期和金额。普通分组不在这里出售。' },
   { path:'/admin/rentals',hidden:true,title:'销售与交付',icon:'receipt',admin:true,description:'核对销售订单和交付结果，处理尚未交付的订单。' },
-  { path:'/admin/operations',title:'运营待办',icon:'overview',admin:true,description:'处理客户同步、支付核对和交付异常。' },
+  { path:'/admin/operations',title:'运营待办',icon:'overview',admin:true,description:'处理新注册待分配、客户同步、支付核对和交付异常。' },
   { path: '/admin/orders',hidden:true, title: '支付订单', icon: 'receipt', admin: true, description: '核对服务端记录的支付状态，不以回跳参数判定到账。' },
   { path: '/admin/audit', title: '审计日志', icon: 'shield', admin: true, description: '查看管理操作记录，追溯变更与授权。' },
   { path: '/admin/settings', title: '站点设置', icon: 'settings', admin: true, description: '管理公开信息、注册策略、上游连接，以及邮件和支付服务。' },
@@ -151,7 +151,7 @@ async function api(path, {method = 'GET', body} = {}) {
     }
     if (!data || typeof data !== 'object' || Array.isArray(data)) throw Object.assign(new Error('服务器响应格式异常。'),{uncertain:write});
     if (write) {
-      const expectsOk = method === 'DELETE' || ['/api/auth/logout','/api/auth/verify','/api/auth/forgot-password','/api/auth/reset-password','/api/auth/password','/api/me/devices/approve'].includes(url.pathname);
+      const expectsOk = method === 'DELETE' || ['/api/auth/logout','/api/auth/verify','/api/auth/resend-verification','/api/auth/forgot-password','/api/auth/reset-password','/api/auth/password','/api/me/devices/approve'].includes(url.pathname);
       if (expectsOk && data.ok !== true) throw Object.assign(new Error('服务器未明确确认操作成功。'),{uncertain:true});
       const required = [];
       if (['/api/setup','/api/auth/login'].includes(url.pathname)) required.push('user','csrf_token');
@@ -369,28 +369,64 @@ async function render() {
   }
 }
 
+function supportContact() {
+  const address = String(state.public?.site?.support_email || '').trim();
+  return address ? `请联系 ${address}。` : '请联系商户管理员。';
+}
+function registrationPolicyNote() {
+  const site = state.public?.site || {};
+  const list = Array.isArray(site.registration_email_suffix_whitelist) ? site.registration_email_suffix_whitelist : [];
+  if (!list.length) return null;
+  const domains = list.join('、');
+  const text = site.registration_email_domain_quota_enabled === true
+    ? `这些域名不限注册数量：${domains}。其他域名每个最多注册一个账户。`
+    : `仅允许这些邮箱域名：${domains}。`;
+  return el('p',{class:'inline-info',text});
+}
+function resendVerificationForm() {
+  const form = el('form',{class:'form-narrow'},field('电子邮箱','email',{type:'email',required:true,maxlength:254,autocomplete:'email',placeholder:'you@example.com'}),el('button',{class:'btn',type:'submit',text:'重新发送验证邮件'}));
+  bindForm(form, values => api('/api/auth/resend-verification',{method:'POST',body:{email:values.get('email').trim()}}), (data, message) => {
+    if (data.ok !== true) throw new Error('服务器尚未确认是否发送。');
+    message.replaceChildren(notice('已提交','如果这个邮箱仍需验证，我们已重新发送 24 小时内有效的验证邮件。已经可以登录的账户不会修改密码，也不会收到新的验证链接。请检查垃圾邮件。','success'));
+  });
+  return el('div',{class:'resend-verification'},el('p',{class:'inline-info',text:'没收到邮件？填写邮箱即可重发，不需要密码。'}),form);
+}
+function authUnavailable(path) {
+  if (path === '/setup') return '站点已完成初始化，请直接登录。';
+  if (path === '/register') return (state.public.site?.registration_enabled === true ? '已允许自助注册，但邮箱验证需要先配置邮件服务。' : '站点当前未开放自助注册。') + supportContact();
+  if (path === '/verify') return '邮箱验证尚未开启，或邮件服务还没配置。' + supportContact();
+  return '邮件服务尚未配置，暂时不能找回或重置密码。' + supportContact();
+}
+function registerResultCopy(data) {
+  if (data.status === 'verification_required') {
+    const base = '请查看邮箱。新注册或尚未验证的账户会收到 24 小时内有效的验证邮件，并使用你刚刚填写的密码。已经可以登录的账户不会被修改，请用原密码登录或找回密码。';
+    return data.delivery === 'unconfirmed' ? base + '邮件服务器没有确认发出，请稍后用同一邮箱重新发送。' : base;
+  }
+  return '如果这是新账户，现在可以用刚刚设置的密码登录。权益仍需管理员分配。如果这个邮箱已经注册，本次不会覆盖原密码。';
+}
 function renderAuth(path) {
   const features = state.public.features;
   const labels = {
     '/login':['欢迎回来','使用邮箱和密码登录。','登录'],
     '/setup':['初始化','使用本机的一次性初始化令牌创建管理员。令牌、上游密钥和管理员密码是三项不同凭证。','创建管理员'],
     '/register':['创建您的账户','注册只创建登录账户。资源需要管理员另行分配。','创建账户'],
-    '/verify':['验证电子邮箱','提交邮件中的验证令牌，完成账户验证。','确认验证'],
-    '/forgot':['找回您的密码','输入注册邮箱。如果账户符合条件，我们会发送重置邮件。','发送重置邮件'],
-    '/reset':['设置新密码','使用重置邮件中的令牌，为账户设置一个新密码。','重置密码'],
+    '/verify':['验证电子邮箱','打开邮件中的链接。令牌会填入下面，24 小时内有效，确认后才完成验证。','确认验证'],
+    '/forgot':['找回您的密码','输入注册邮箱。可以重置的账户会收到重置邮件；尚未验证的账户会收到验证邮件。','发送重置邮件'],
+    '/reset':['设置新密码','使用重置邮件中的令牌设置新密码。链接 30 分钟内有效。','重置密码'],
   };
   const [title,description,submitLabel] = labels[path];
   document.title = `${title} · ${state.public.site.name}`;
   const inner = el('div',{class:'auth-form'},el('h1',{text:title}),el('p',{class:'auth-description',text:description}));
   const disabled = (path === '/setup' && !state.public.setup_required) || (path === '/register' && features.registration !== true) || (path === '/verify' && features.email_verification !== true) || (['/forgot','/reset'].includes(path) && features.password_reset !== true);
-  if (disabled) inner.append(notice('此功能当前不可用',path === '/setup' ? '站点已完成初始化，请直接登录。' : '管理员尚未启用此功能或相关服务尚未配置。','warn'),el('div',{class:'auth-links'},el('a',{href:'/login',text:'返回登录'})));
+  if (disabled) inner.append(notice('此功能当前不可用',authUnavailable(path),'warn'),el('div',{class:'auth-links'},el('a',{href:'/login',text:'返回登录'})));
   else {
     const form = el('form',{});
+    const resendHost = el('div');
     if (path === '/setup') form.append(field('初始化令牌','setup_token',{type:'password',required:true,autocomplete:'off',hint:'仅在服务器终端或受保护文件中提供，不会保存在浏览器。'}));
     if (['/setup','/register'].includes(path)) form.append(field('显示名称','display_name',{required:true,maxlength:100,autocomplete:'name',placeholder:'您希望如何被称呼'}));
     if (['/login','/setup','/register','/forgot'].includes(path)) form.append(field('电子邮箱','email',{type:'email',required:true,autocomplete:'email',maxlength:254,placeholder:'you@example.com'}));
-    if (path === '/register' && Array.isArray(state.public.site?.registration_email_suffix_whitelist) && state.public.site.registration_email_suffix_whitelist.length) form.append(el('p',{class:'inline-info',text:'仅允许这些邮箱域名：' + state.public.site.registration_email_suffix_whitelist.slice(0,5).join('、') + (state.public.site.registration_email_suffix_whitelist.length > 5 ? ' 等' : '')}));
-    if (['/verify','/reset'].includes(path)) form.append(field(path === '/verify' ? '验证令牌' : '重置令牌','token',{type:'password',required:true,autocomplete:'off',value:state.token,spellcheck:'false',hint:'邮件链接中的令牌已从地址栏移除，请勿分享。'}));
+    if (path === '/register') { const note = registrationPolicyNote(); if (note) form.append(note); }
+    if (['/verify','/reset'].includes(path)) form.append(field(path === '/verify' ? '验证令牌' : '重置令牌','token',{type:'password',required:true,autocomplete:'off',value:state.token,spellcheck:'false',hint:path === '/verify' ? '验证链接 24 小时内有效。令牌已从地址栏移除，提交后才会完成验证。' : '重置链接 30 分钟内有效。令牌已从地址栏移除，请勿分享。'}));
     if (['/login','/setup','/register','/reset'].includes(path)) form.append(field(path === '/reset' ? '新密码' : '密码','password',{type:'password',required:true,autocomplete:path === '/login' ? 'current-password' : 'new-password',...(path === '/login' ? {} : {minlength:7}),maxlength:256,placeholder:path === '/login' ? '请输入您的密码' : '至少 7 个字符'}));
     if (['/setup','/register','/reset'].includes(path)) form.append(field('确认密码','confirmation',{type:'password',required:true,autocomplete:'new-password',minlength:7,maxlength:256}));
     form.append(el('button',{class:'btn primary',type:'submit',text:submitLabel}));
@@ -404,16 +440,18 @@ function renderAuth(path) {
       if (path === '/login' || path === '/setup') {
         adoptSession(data); if (path === '/setup') state.public.setup_required = false; const next = path==='/setup'?'/admin/settings#upstream':state.returnTo; state.returnTo = '/'; navigate(next,true);
       } else {
-        if (path === '/register' && !['created','verification_required'].includes(data.status)) throw new Error('注册结果无法识别，请联系管理员确认。');
+        if (path === '/register' && (!['created','verification_required'].includes(data.status) || (data.delivery && !['sent','unconfirmed','not_required'].includes(data.delivery)))) throw new Error('注册结果无法识别，请联系管理员确认。');
         if (path !== '/register' && data.ok !== true) throw new Error('服务器尚未确认操作完成，请联系管理员确认。');
         state.token = ''; form.querySelector('input[name=token]')?.setAttribute('value','');
         const input = form.querySelector('input[name=token]'); if (input) input.value = '';
         form.querySelector('button[type=submit]').textContent = '已提交';
-        const messages = {'/register':data.status === 'verification_required' ? '请前往邮箱完成验证，然后返回登录。' : '账户已创建，请登录。权益仍需由管理员分配。','/verify':'邮箱已验证，请返回登录。','/forgot':'如果账户符合条件，您将收到重置邮件。请同时检查垃圾邮件。','/reset':'密码已重置，请使用新密码登录。'};
+        const messages = {'/register':registerResultCopy(data),'/verify':'邮箱已验证，请返回登录。','/forgot':'如果这个邮箱可以重置密码，你会收到 30 分钟内有效的重置邮件。如果账户还没完成验证，你会收到验证邮件，而不是重置链接。请同时检查垃圾邮件。','/reset':'密码已重置，请使用新密码登录。'};
         message.replaceChildren(notice('请求已完成',messages[path],'success',el('a',{class:'btn small',href:'/login',text:'返回登录'})));
+        if (path === '/register' && data.status === 'verification_required') resendHost.replaceChildren(resendVerificationForm());
       }
     });
-    inner.append(form);
+    if (path === '/verify') resendHost.replaceChildren(resendVerificationForm());
+    inner.append(form, resendHost);
     const links = el('div',{class:'auth-links'});
     if (path === '/login') {
       if (features.password_reset === true) links.append(el('a',{href:'/forgot',text:'忘记密码？'}));
@@ -422,6 +460,8 @@ function renderAuth(path) {
     } else links.append(el('a',{href:'/login',text:'← 返回登录'}));
     inner.append(links);
   }
+  const support = String(state.public?.site?.support_email || '').trim();
+  if (support) inner.append(el('p',{class:'inline-info'},'需要帮助？',el('a',{href:`mailto:${support}`,text:support})));
   if (path === '/login' && state.returnTo.startsWith('/connect')) inner.append(notice('登录后继续开始使用','我们会在登录后返回开始使用页面。登录本身不会授权设备。'));
   app.replaceChildren(el('main',{class:'auth-page',id:'main'},el('aside',{class:'auth-art'},brand(),el('div',{class:'auth-art-copy'},el('h1',{},'管理权益、设备与用量。'),el('p',{text:state.public.site.description || '集中查看 Code 权益、已连接的设备和用量。'}),artwork())),el('section',{class:'auth-form-side'},themeButton('auth-theme'),inner)));
 }
@@ -666,7 +706,9 @@ async function overviewView() {
   const root = el('div',{class:'page-content overview-page'});
   if (previewing) root.append(notice('预览数据','这一组用量和余额只用来看首页效果，不是当前账户的真实记录。','warn'));
   else if (!configured || !available) root.append(notice(configured ? '上游连接暂不可用' : '工作空间尚未连接上游服务',configured ? '当前无法确认用量的实时状态；请稍后重试或联系管理员。' : '请联系管理员完成服务端连接配置。账单与用量不会用示例数据替代。','warn'));
-  if (!previewing && pending.size) root.append(notice('还有待完成的事项',[...pending].map(item => pendingLabels[item] || item).join(' · '),'warn'));
+  if (!previewing && pending.has('customer_not_provisioned')) root.append(notice('下一步','登录账户已经可用，但还没有分配账号。分配完成后，再打开「开始使用」安装并连接设备。在此之前不需要运行安装命令。'+supportContact(),'warn',el('a',{class:'btn small',href:'/accounts',text:'查看我的账号'})));
+  const otherPending = [...pending].filter(item => item !== 'customer_not_provisioned');
+  if (!previewing && otherPending.length) root.append(notice('还有待完成的事项',otherPending.map(item => pendingLabels[item] || item).join(' · '),'warn'));
   const cumulativeCost = usageKnown ? formatUSD(usage.cost_usd) : null;
   const cumulativeRequests = usageKnown ? number(usage.requests) : null;
   root.append(el('section',{class:'stat-strip','aria-label':'账单与用量'},
@@ -801,7 +843,7 @@ function extendCustomerAccount(account){
 }
 async function accountsView() {
   const accounts = collection(await api('/api/me/accounts'),'accounts');
-  if (!accounts.length) return panel('我的账号','管理员分配后，账号会自动出现在这里。',emptyState('还没有账号','请联系管理员分配账号，无需充值或另行开通。','layers'));
+  if (!accounts.length) return panel('我的账号','管理员分配后，账号会自动出现在这里。',emptyState('还没有账号','注册只创建登录账户。分配完成前不需要充值，也不需要安装或连接设备。'+supportContact(),'layers'));
   return el('div',{class:'page-content'},el('a',{href:'/devices',class:'btn small',text:'查看全部设备'}),el('div',{class:'account-grid'},accounts.map(account=>accountCard(account))),el('p',{class:'inline-info',text:'\u6362\u8d26\u53f7\uff1a\u5728\u9879\u76ee\u76ee\u5f55\u8fd0\u884c ccb account\u3002\u989d\u5ea6\u7528\u5b8c\u4f1a\u5728\u7a97\u53e3\u91cd\u7f6e\u540e\u81ea\u52a8\u6062\u590d\uff0c\u4e0d\u4ece\u94b1\u5305\u6263\u8d39\u3002'}));
 }
 function accountCard(account, inventory = false) {
@@ -867,10 +909,15 @@ async function connectView() {
   if (query.has('code')) { state.code = query.get('code').slice(0,128); history.replaceState({},'','/connect'); }
   const ticket = state.view;
   const accountId = query.get('account_id');
+  const accounts = collection(await api('/api/me/accounts'),'accounts');
+  if (ticket !== state.view) return;
+  if (!accounts.length) {
+    const lead = document.getElementById('connect-lead');
+    if (lead) lead.textContent = '分配到账号之后，再安装并确认设备。';
+    return panel('等待分配账号','没有账号时不能连接设备。',emptyState('请先等待账号分配','管理员分配账号后，再回到这里安装 ccb 并确认设备。在此之前不需要运行安装命令。'+supportContact(),'layers',el('a',{class:'btn',href:'/accounts',text:'返回我的账号'})));
+  }
   let selected = null;
   if (accountId) {
-    const accounts = collection(await api('/api/me/accounts'),'accounts');
-    if (ticket !== state.view) return;
     selected = accounts.find(account => account.id === accountId);
     if (!selected || !['available','limited'].includes(selected.state) || !/^[A-Za-z0-9_.-]+$/.test(accountId)) return panel('账号暂不可用','请返回我的账号重新选择。',el('a',{href:'/accounts',class:'btn',text:'返回我的账号'}));
   }
@@ -1274,7 +1321,7 @@ async function profileView() {
     if (!await confirmAction('更新登录密码','确认修改当前账户的密码？更新后请使用新密码重新登录。','更新密码')) return CANCEL;
     return api('/api/auth/password',{method:'PATCH',body:{current_password:values.get('current_password'),new_password:values.get('new_password')}});
   },(data,message) => { if (data.ok !== true) throw Object.assign(new Error('密码更新尚未确认。'),{uncertain:true}); state.user = null; state.csrf = null; state.returnTo = '/profile'; navigate('/login',true); toast('密码已更新，请使用新密码重新登录。'); });
-  return el('div',{class:'equal-col'},panel('账户信息','身份由当前服务端会话确定',el('div',{class:'card-body'},el('div',{class:'identity-card'},el('span',{class:'avatar',text:(user.display_name || user.email).slice(0,1).toUpperCase()}),el('div',{},el('h2',{text:user.display_name}),el('p',{class:'muted',text:user.email}))),el('dl',{class:'detail-list'},el('dt',{text:'账户角色'}),el('dd',{},badge(user.role)),el('dt',{text:'账户状态'}),el('dd',{},badge(user.status)),el('dt',{text:'账号交付'}),el('dd',{},el('a',{href:'/accounts',text:'查看我的账号'}))),el('hr',{class:'form-divider'}),notice('需要修改账户资料？','请联系商户管理员。账户身份不可在浏览器中手动切换。'))),panel('登录安全','修改您的站点登录密码',el('div',{class:'card-body'},form)));
+  return el('div',{class:'equal-col'},panel('账户信息','身份由当前服务端会话确定',el('div',{class:'card-body'},el('div',{class:'identity-card'},el('span',{class:'avatar',text:(user.display_name || user.email).slice(0,1).toUpperCase()}),el('div',{},el('h2',{text:user.display_name}),el('p',{class:'muted',text:user.email}))),el('dl',{class:'detail-list'},el('dt',{text:'账户角色'}),el('dd',{},badge(user.role)),el('dt',{text:'账户状态'}),el('dd',{},badge(user.status)),el('dt',{text:'账号交付'}),el('dd',{},el('a',{href:'/accounts',text:'查看我的账号'}))),el('hr',{class:'form-divider'}),notice('需要修改账户资料？','显示名称和邮箱不能在这里修改。'+supportContact()))),panel('登录安全','修改您的站点登录密码',el('div',{class:'card-body'},form)));
 }
 
 function editorDialog(title, form) {
@@ -1574,8 +1621,10 @@ async function rentalsView() {
 async function operationsView() {
  const data=await api('/api/admin/operations');
  const tasks=collection(data,'pending_customers');
+ const unassigned=collection(data,'unassigned_customers');
  return el('div',{class:'page-content'},
- el('div',{class:'stats-grid'},stat('待同步客户',number(tasks.length),'本页最多列出 100 个','users'),stat('待确认支付',number(data.payments_pending),'包括结果未知的订单','wallet'),stat('待核对交付',number(data.rentals.filter(r=>['review','refund_pending'].includes(r.status)).reduce((n,r)=>n+r.count,0)),'可在销售与交付处理','receipt')),
+ el('div',{class:'stats-grid'},stat('待分配客户',number(unassigned.length),'已可登录但还没有账号','users'),stat('待同步客户',number(tasks.length),'本页最多列出 100 个','users'),stat('待确认支付',number(data.payments_pending),'包括结果未知的订单','wallet'),stat('待核对交付',number(data.rentals.filter(r=>['review','refund_pending'].includes(r.status)).reduce((n,r)=>n+r.count,0)),'可在销售与交付处理','receipt')),
+ panel('待分配账号','这些客户已经可以登录，但还没有分配账号。已下单未交付的，请同时到销售与交付核对。',table([{label:'客户',render:u=>el('div',{},el('strong',{text:u.display_name||'未命名客户'}),el('span',{class:'table-sub',text:u.email}))},{label:'注册时间',render:u=>date(u.created_at)},{label:'操作',render:u=>el('a',{class:'btn small',href:`/admin/inventory?user_id=${encodeURIComponent(u.id)}`,text:'查看与分配账号'})}],unassigned,'没有待分配客户','新注册并可以登录的客户，在分配账号前会显示在这里。')),
  panel('客户同步待办','停用尚未确认时，会暂停该客户的新运行请求，直到上游确认。',table([{label:'客户',render:u=>u.display_name},{label:'状态',render:u=>badge(u.status)},{label:'提示',render:u=>u.sync_error||'等待同步'},{label:'操作',render:u=>actionButton('重新核对',()=>api(`/api/admin/users/${encodeURIComponent(u.id)}${u.core_customer_id?'':'/provision'}`,{method:u.core_customer_id?'PATCH':'POST',body:{}}))}],tasks,'没有待同步客户','当前没有持久化客户同步待办。')),
  el('p',{class:'inline-info'},'邮件、支付和公开地址是否已配置，请在',el('a',{href:'/admin/settings#payment',text:'站点设置'}),'中查看。'),el('a',{class:'btn',href:'/admin/rentals?status=review',text:'处理交付待办 →'}));
 }

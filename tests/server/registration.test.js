@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { isRegistrationEmailSuffixAllowed, normalizeRegistrationEmailSuffixWhitelist } from '../../public/registration-policy.js';
+import { mailMessage } from '../../src/mail.js';
 import { fixture, stripeFixture, password } from './fixtures.js';
 
 const credentials = { email: 'admin@example.test', password, display_name: 'Administrator' };
@@ -65,6 +66,7 @@ test('registration whitelist and domain quota follow the saved policy', async t 
   assert.equal((await f.request('POST', '/api/auth/register', { email: 'two@sub.qq.com', password, display_name: 'Sub' })).data.error.code, 'email_suffix_not_allowed');
   assert.equal((await f.request('POST', '/api/auth/register', { email: 'student@cs.edu.cn', password, display_name: 'Student' })).status, 200);
   await f.request('PATCH', '/api/admin/settings', { email_domain_quota_enabled: true }, admin);
+  assert.equal((await f.request('GET', '/api/public')).data.site.registration_email_domain_quota_enabled, true);
   assert.equal((await f.request('POST', '/api/auth/register', { email: 'first@gmail.com', password, display_name: 'First' })).status, 200);
   assert.equal((await f.request('POST', '/api/auth/register', { email: 'second@gmail.com', password, display_name: 'Second' })).data.error.code, 'email_domain_registration_limit');
   assert.equal((await f.request('POST', '/api/auth/register', { email: 'third@qq.com', password, display_name: 'Third' })).status, 200);
@@ -80,8 +82,15 @@ test('turning off email verification allows registration before mail is configur
   assert.equal(saved.data.features.registration, true);
   assert.equal(saved.data.features.email_verification, false);
   const registered = await f.request('POST', '/api/auth/register', { email: 'open@example.test', password, display_name: 'Open' });
-  assert.deepEqual(registered.data, { status: 'created' });
+  assert.deepEqual(registered.data, { status: 'created', delivery: 'not_required' });
+  assert.equal((await f.request('GET', '/api/public')).data.site.registration_enabled, true);
   assert.equal((await f.request('POST', '/api/auth/login', { email: 'open@example.test', password })).status, 200);
+  const again = await f.request('POST', '/api/auth/register', { email: 'open@example.test', password: 'other password 789', display_name: 'Other' });
+  assert.deepEqual(again.data, registered.data);
+  assert.equal((await f.request('POST', '/api/auth/login', { email: 'open@example.test', password: 'other password 789' })).status, 401);
+  assert.equal((await f.request('POST', '/api/auth/login', { email: 'open@example.test', password })).status, 200);
+  const ops = await f.request('GET', '/api/admin/operations', undefined, admin);
+  assert.deepEqual(ops.data.unassigned_customers.map(user => user.email), ['open@example.test']);
 });
 
 test('environment mail and stripe cannot be overwritten from the browser', async t => {
@@ -95,4 +104,68 @@ test('environment mail and stripe cannot be overwritten from the browser', async
   assert.equal(settings.data.mail.editable, false);
   assert.equal(payment.data.payment.providers.find(p=>p.id==='stripe').source, 'environment');
   assert.equal(settings.raw.includes('whsec_test_fixture'), false);
+});
+
+test('repeat registration does not reveal whether an email exists', async t => {
+  const deliveries = [];
+  const f = await fixture(t, { withoutCore: true, mailer: { async send(address, kind, token) { deliveries.push({ address, kind, token }); } } });
+  const admin = await f.request('POST', '/api/setup', { ...credentials, setup_token: f.setupToken });
+  await f.request('PATCH', '/api/admin/mail', { expected_revision: 1, mail }, admin);
+  await f.request('PATCH', '/api/admin/settings', { registration_enabled: true }, admin);
+  const first = await f.request('POST', '/api/auth/register', { email: 'again@example.test', password, display_name: 'First' });
+  const refreshed = await f.request('POST', '/api/auth/register', { email: 'again@example.test', password: 'replacement password 456', display_name: 'Second' });
+  assert.deepEqual(refreshed.data, first.data);
+  assert.equal(first.data.status, 'verification_required');
+  assert.equal(first.data.delivery, 'sent');
+  assert.equal(deliveries.at(-1).kind, 'verify');
+  assert.equal((await f.request('POST', '/api/auth/login', { email: 'again@example.test', password })).status, 401);
+  assert.equal((await f.request('POST', '/api/auth/verify', { token: deliveries.at(-1).token })).status, 200);
+  assert.equal((await f.request('POST', '/api/auth/login', { email: 'again@example.test', password })).status, 401);
+  assert.equal((await f.request('POST', '/api/auth/login', { email: 'again@example.test', password: 'replacement password 456' })).status, 200);
+  const named = f.store.db.prepare('SELECT display_name,password_hash FROM users WHERE email=?').get('again@example.test');
+  assert.equal(named.display_name, 'Second');
+  const active = await f.request('POST', '/api/auth/register', { email: 'again@example.test', password: 'other password 789', display_name: 'Third' });
+  assert.deepEqual(active.data, first.data);
+  assert.equal(deliveries.at(-1).kind, 'login');
+  assert.equal(f.store.db.prepare('SELECT password_hash,display_name FROM users WHERE email=?').get('again@example.test').password_hash, named.password_hash);
+  assert.equal(f.store.db.prepare('SELECT display_name FROM users WHERE email=?').get('again@example.test').display_name, 'Second');
+  assert.equal((await f.request('POST', '/api/auth/login', { email: 'again@example.test', password: 'other password 789' })).status, 401);
+  const absent = await f.request('POST', '/api/auth/forgot-password', { email: 'absent@example.test' });
+  const pending = await f.request('POST', '/api/auth/register', { email: 'pending@example.test', password, display_name: 'Pending' });
+  assert.equal(pending.data.status, 'verification_required');
+  const before = deliveries.length;
+  const forgotten = await f.request('POST', '/api/auth/forgot-password', { email: 'pending@example.test' });
+  assert.deepEqual(forgotten.data, absent.data);
+  assert.equal(deliveries.at(-1).kind, 'verify');
+  assert.equal(deliveries.length, before + 1);
+  const resent = await f.request('POST', '/api/auth/resend-verification', { email: 'pending@example.test' });
+  const missing = await f.request('POST', '/api/auth/resend-verification', { email: 'nobody@example.test' });
+  assert.deepEqual(resent.data, missing.data);
+  assert.equal(resent.data.ok, true);
+  assert.equal(deliveries.at(-1).kind, 'verify');
+  const made = await f.request('POST', '/api/admin/users', { email: 'stopped@example.test', password, display_name: 'Stopped', role: 'member' }, admin);
+  assert.equal(made.status, 201);
+  const hash = f.store.db.prepare('SELECT password_hash FROM users WHERE email=?').get('stopped@example.test').password_hash;
+  assert.equal((await f.request('PATCH', `/api/admin/users/${made.data.user.id}`, { status: 'disabled' }, admin)).status, 200);
+  const disabled = await f.request('POST', '/api/auth/register', { email: 'stopped@example.test', password: 'disabled password 123', display_name: 'Disabled' });
+  assert.deepEqual(disabled.data, first.data);
+  assert.equal(deliveries.at(-1).kind, 'unavailable');
+  assert.equal(f.store.db.prepare('SELECT password_hash,display_name FROM users WHERE email=?').get('stopped@example.test').password_hash, hash);
+  assert.equal(f.store.db.prepare('SELECT display_name FROM users WHERE email=?').get('stopped@example.test').display_name, 'Stopped');
+  const ops = await f.request('GET', '/api/admin/operations', undefined, admin);
+  assert.deepEqual(ops.data.unassigned_customers.map(user => user.email), ['again@example.test']);
+});
+
+test('verification and reset messages are Chinese and state their lifetime', () => {
+  const verify = mailMessage('verify', 'https://merchant.example/verify?token=secret');
+  assert.match(verify.subject, /验证/);
+  assert.match(verify.text, /24 小时/);
+  assert.match(verify.text, /https:\/\/merchant\.example\/verify\?token=secret/);
+  const reset = mailMessage('reset', 'https://merchant.example/reset?token=secret');
+  assert.match(reset.subject, /重置/);
+  assert.match(reset.text, /30 分钟/);
+  const existing = mailMessage('login', '');
+  assert.equal(existing.text.includes('http'), false);
+  assert.match(existing.text, /没有修改密码/);
+  assert.match(mailMessage('unavailable', '').text, /不能登录/);
 });
