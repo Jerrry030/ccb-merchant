@@ -1,0 +1,7 @@
+# Replace the hostname with this merchant site's domain.
+# SSE is flushed automatically. A negative flush_interval prevents prompt
+# cancellation of the provider request when the client disconnects.
+merchant.example.com {
+    encode gzip
+    reverse_proxy 127.0.0.1:8787
+}

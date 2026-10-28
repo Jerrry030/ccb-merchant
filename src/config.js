@@ -45,7 +45,7 @@ export function loadConfig(env = process.env, root = process.cwd()) {
     upstreamTimeoutMs: integer('UPSTREAM_TIMEOUT_MS', 15000, 100, 120000),
     reconcileIntervalMs: integer('RECONCILE_INTERVAL_MS', 10000, 1000, 300000),
     runtimeMaxInFlight: integer('RUNTIME_MAX_IN_FLIGHT', 8, 1, 128),
-    runtimeTimeoutMs: integer('RUNTIME_TIMEOUT_MS', 600000, 100, 3600000),
+    runtimeHeaderTimeoutMs: integer('RUNTIME_HEADER_TIMEOUT_MS', 600000, 100, 3600000),
     runtimeBodyLimit: integer('RUNTIME_BODY_LIMIT', 33554432, 4096, 33554432),
     jsonBodyLimit: 65536, sessionMs: 12 * 60 * 60 * 1000,
     siteName: env.SITE_NAME || 'CCB Merchant',

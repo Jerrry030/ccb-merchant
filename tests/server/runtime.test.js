@@ -68,8 +68,8 @@ test('SSE is streamed before completion, unwanted upstream headers are stripped 
   assert.equal(f.state.runtimeCancelled,1);assert.equal(f.state.requests.filter(r=>r.path==='/bridge/v1/messages').length,1);
 });
 
-test('body and overall runtime timeout are bounded; errors are sanitized, writes never replay',async t=>{
-  const f=await fixture(t,{env:{RUNTIME_BODY_LIMIT:'4096',RUNTIME_TIMEOUT_MS:'100'},onCore:async({url,res,json})=>{
+test('body and control runtime timeout are bounded; errors are sanitized, writes never replay',async t=>{
+  const f=await fixture(t,{env:{RUNTIME_BODY_LIMIT:'4096',UPSTREAM_TIMEOUT_MS:'100'},onCore:async({url,res,json})=>{
     if(url.pathname==='/bridge/v1/device/status') {
       const timer=setTimeout(()=>json({id:'late'}),1000);res.once('close',()=>clearTimeout(timer));return true;
     }
@@ -85,3 +85,94 @@ test('body and overall runtime timeout are bounded; errors are sanitized, writes
   assert.equal((await f.request('POST','/bridge/v1/messages',{}, {native:true,headers:{...native.headers,'Content-Encoding':'gzip'}})).status,415);
 });
 
+
+test('thinking-only SSE stays alive beyond the header deadline and completes without replay',async t=>{
+  const frames=['event: message_start\ndata: {"type":"message_start"}\n\n',
+    ...Array.from({length:8},()=> 'event: content_block_delta\ndata: {"type":"content_block_delta","delta":{"type":"thinking_delta","thinking":"","estimated_tokens":100}}\n\n'),
+    'event: message_stop\ndata: {"type":"message_stop"}\n\n'];
+  const f=await fixture(t,{env:{RUNTIME_HEADER_TIMEOUT_MS:'200'},onCore:async({url,res})=>{
+    if(url.pathname!=='/bridge/v1/messages') return;
+    res.writeHead(200,{'Content-Type':'text/event-stream'});res.write(frames[0]);
+    let index=1;
+    const timer=setInterval(()=>{res.write(frames[index++]);if(index===frames.length){clearInterval(timer);res.end();}},60);
+    res.once('close',()=>clearInterval(timer));return true;
+  }});
+  const response=await fetch(`${f.config.publicOrigin}/bridge/v1/messages`,{
+    method:'POST',headers:{Authorization:bearer,'Content-Type':'application/json'},
+    body:JSON.stringify({stream:true}),signal:AbortSignal.timeout(5000),
+  });
+  assert.equal(response.status,200);
+  assert.equal(await response.text(),frames.join(''));
+  assert.equal(f.state.requests.filter(r=>r.path==='/bridge/v1/messages').length,1);
+});
+
+test('a non-streaming response body may outlive the header deadline',async t=>{
+  const payload=JSON.stringify({type:'message',content:[{type:'text',text:'complete'}],usage:{output_tokens:1}});
+  const f=await fixture(t,{env:{RUNTIME_HEADER_TIMEOUT_MS:'200'},onCore:async({url,res})=>{
+    if(url.pathname!=='/bridge/v1/messages') return;
+    res.writeHead(200,{'Content-Type':'application/json'});res.flushHeaders();
+    const timer=setTimeout(()=>res.end(payload),500);
+    res.once('close',()=>clearTimeout(timer));return true;
+  }});
+  const response=await fetch(`${f.config.publicOrigin}/bridge/v1/messages`,{
+    method:'POST',headers:{Authorization:bearer,'Content-Type':'application/json'},
+    body:JSON.stringify({stream:false}),signal:AbortSignal.timeout(5000),
+  });
+  assert.equal(response.status,200);assert.equal(await response.text(),payload);
+  assert.equal(f.state.requests.filter(r=>r.path==='/bridge/v1/messages').length,1);
+});
+
+test('missing model response headers time out, cancel upstream and never replay',async t=>{
+  const f=await fixture(t,{env:{RUNTIME_HEADER_TIMEOUT_MS:'100'},onCore:async({url,res,state})=>{
+    if(url.pathname!=='/bridge/v1/messages') return;
+    res.once('close',()=>{state.runtimeCancelled++;});return true;
+  }});
+  const result=await f.request('POST','/bridge/v1/messages',{stream:false},native);
+  assert.equal(result.status,503);assert.equal(result.data.error.code,'runtime_header_timeout');
+  for(let i=0;i<30&&f.state.runtimeCancelled===0;i++) await delay(20);
+  assert.equal(f.state.runtimeCancelled,1);
+  assert.equal(f.state.requests.filter(r=>r.path==='/bridge/v1/messages').length,1);
+});
+
+test('control response bodies remain bounded after receiving headers',async t=>{
+  const f=await fixture(t,{env:{UPSTREAM_TIMEOUT_MS:'100'},onCore:async({url,res,state})=>{
+    if(url.pathname!=='/bridge/v1/device/status') return;
+    res.writeHead(200,{'Content-Type':'application/json'});res.write('{');
+    res.once('close',()=>{state.runtimeCancelled++;});return true;
+  }});
+  const result=await f.request('GET','/bridge/v1/device/status',undefined,native);
+  assert.equal(result.status,503);assert.equal(result.data.error.code,'runtime_timeout');
+  for(let i=0;i<30&&f.state.runtimeCancelled===0;i++) await delay(20);
+  assert.equal(f.state.runtimeCancelled,1);
+});
+
+test('disconnect before upstream headers cancels the pending request', {timeout:5000},async t=>{
+  const entered=Promise.withResolvers(),closed=Promise.withResolvers();
+  const f=await fixture(t,{onCore:async({url,res})=>{
+    if(url.pathname!=='/bridge/v1/messages') return;
+    res.once('close',closed.resolve);entered.resolve();return true;
+  }});
+  const controller=new AbortController();t.after(()=>controller.abort());
+  const result=fetch(`${f.config.publicOrigin}/bridge/v1/messages`,{
+    method:'POST',headers:{Authorization:bearer,'Content-Type':'application/json'},
+    body:JSON.stringify({stream:false}),signal:controller.signal,
+  }).catch(error=>error);
+  await entered.promise;controller.abort();
+  assert.equal((await result).name,'AbortError');await closed.promise;
+  assert.equal(f.state.requests.filter(r=>r.path==='/bridge/v1/messages').length,1);
+});
+
+test('an interrupted upstream stream stays incomplete and is never replayed',async t=>{
+  const f=await fixture(t,{onCore:async({url,res})=>{
+    if(url.pathname!=='/bridge/v1/messages') return;
+    res.writeHead(200,{'Content-Type':'text/event-stream'});res.write('event: message_start\ndata: {"type":"message_start"}\n\n');
+    const timer=setTimeout(()=>res.destroy(),50);res.once('close',()=>clearTimeout(timer));return true;
+  }});
+  const response=await fetch(`${f.config.publicOrigin}/bridge/v1/messages`,{
+    method:'POST',headers:{Authorization:bearer,'Content-Type':'application/json'},
+    body:JSON.stringify({stream:true}),signal:AbortSignal.timeout(5000),
+  });
+  assert.equal(response.status,200);await assert.rejects(response.text());
+  assert.equal(f.state.requests.filter(r=>r.path==='/bridge/v1/messages').length,1);
+  assert.equal((await f.request('GET','/bridge/v1/device/status',undefined,native)).status,200);
+});

@@ -48,7 +48,9 @@ npm start
 - 远程访问必须显式配置 `ALLOW_REMOTE`、`PUBLIC_ORIGIN` 和 HTTPS。
 - `DATA_DIR` 必须位于静态资源目录之外，并限制为运行账号可访问。
 - 数据库、加密密钥和运行身份数据需要成套受保护备份，不能只备份数据库。
-- 流式反向代理应关闭缓冲，并使用与应用匹配的超时。
+- HTTPS 反向代理示例见 `Caddyfile.example`。Caddy 自动及时刷新 SSE；不要设置负值 `flush_interval`，否则客户端断开后提供方请求可能继续运行。
+- `RUNTIME_HEADER_TIMEOUT_MS` 默认 600000，仅限制模型/透传请求等待上游响应头的时间；收到成功响应头后不再按总时长截断 SSE 或非流式正文。升级时将部署配置中的 `RUNTIME_TIMEOUT_MS` 改为该名称，旧配置项不再使用。
+- 控制接口仍由 `UPSTREAM_TIMEOUT_MS` 限制完整响应时间。客户端断开或授权撤销会取消进行中的请求，本站不会自动重放请求。
 - Docker 构建采用输入白名单，不发送本机预览、凭据、日志、备份和测试数据。
 
 部署前逐项执行 [发布检查清单](docs/RELEASE-CHECKLIST.md)。
@@ -60,9 +62,12 @@ npm test
 npm run test:security
 npm run check:security
 npm run test:browser
+npm run test:proxy
 ```
 
 `test:security` 和 `check:security` 需要 PATH 中已有 Gitleaks 8.30.1；不会自动下载或跳过缺失的扫描器。浏览器环境见 [浏览器测试](tests/browser/README.md)。
+
+`test:proxy` 使用实际 Caddy 验证示例配置的长流及取消传递；需要 PATH 中的 Caddy，或通过 `CADDY_BIN` 指定可执行文件。测试仅启动隔离的本机临时端口，不调用真实提供方。
 
 本地启用 Git 门禁：
 

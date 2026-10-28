@@ -51,7 +51,10 @@ export async function proxyRuntime(req, res, integration, store, url, access) {
   const abort = () => { controller.abort(); if (!req.complete) req.destroy(); };
   const onClose = () => { if (!res.writableEnded) abort(); };
   req.once('aborted',abort); res.once('close',onClose);
-  const timer = setTimeout(abort, config.runtimeTimeoutMs); timer.unref();
+  let timedOut=false, guard;
+  // Data requests are bounded until headers arrive, not while the provider
+  // streams. Control replies remain bounded through their complete JSON body.
+  const timer = setTimeout(()=>{timedOut=true;abort();}, kind==='control' ? config.upstreamTimeoutMs : config.runtimeHeaderTimeoutMs); timer.unref();
   try {
     const headers = { 'x-ccb-access-key':config.upstreamKey, 'accept-encoding':'identity' };
     for (const key of runtimeHeaders) if (typeof req.headers[key] === 'string') headers[key] = req.headers[key];
@@ -61,8 +64,7 @@ export async function proxyRuntime(req, res, integration, store, url, access) {
     if (controller.signal.aborted) return;
     const boundary=await access.prepareRuntime(req,url,body);
     body=boundary.body;
-    let guard;
-    if(boundary.peer){guard=setInterval(()=>{try{access.authenticate(req,'runtime');if(boundary.selected&&!access.runtimeGrant(access.object('access_grants',boundary.selected.id,boundary.peer.account.id)))throw new Error('revoked');if(boundary.device.customer_id){const c=access.object('access_customers',boundary.device.customer_id,boundary.peer.account.id);if(c.status!=='active'||c.pending)throw new Error('revoked');}}catch{abort();}},2000);guard.unref();controller.signal.addEventListener('abort',()=>clearInterval(guard),{once:true});res.once('close',()=>clearInterval(guard));}
+    if(boundary.peer){guard=setInterval(()=>{try{access.authenticate(req,'runtime');if(boundary.selected&&!access.runtimeGrant(access.object('access_grants',boundary.selected.id,boundary.peer.account.id)))throw new Error('revoked');if(boundary.device.customer_id){const c=access.object('access_customers',boundary.device.customer_id,boundary.peer.account.id);if(c.status!=='active'||c.pending)throw new Error('revoked');}}catch{abort();}},2000);guard.unref();}
     await integration.inspect(config,true,controller.signal);
     if(boundary.peer){access.authenticate(req,'runtime');if(boundary.selected&&!access.runtimeGrant(access.object('access_grants',boundary.selected.id,boundary.peer.account.id)))throw new HttpError(403,'grant_unavailable','Grant changed before admission.');}
     const upstream = await upstreamFetch(config,`${config.upstreamUrl}${boundary.path}${url.search}`, { method:req.method,headers,body:body?.length?body:undefined,signal:controller.signal,redirect:'error' });
@@ -72,6 +74,7 @@ export async function proxyRuntime(req, res, integration, store, url, access) {
       const status = [400,401,403,404,409,413,415,429].includes(upstream.status) ? upstream.status : 503;
       throw new HttpError(status,'runtime_rejected','Core rejected the runtime request. It was not retried.');
     }
+    if (kind === 'data') clearTimeout(timer);
     if (kind === 'control') {
       const chunks=[]; let size=0;
       for await (const chunk of upstream.body) { size+=chunk.length; if(size>1024*1024) throw new Error('Control response too large'); chunks.push(chunk); }
@@ -99,8 +102,9 @@ export async function proxyRuntime(req, res, integration, store, url, access) {
     if (res.destroyed || req.aborted) return;
     if (res.headersSent) { res.destroy(); return; }
     if (error instanceof HttpError) throw error;
-    throw new HttpError(503,controller.signal.aborted?'runtime_timeout':'runtime_unavailable','Runtime connection ended or timed out. No automatic replay was attempted.');
-  } finally { clearTimeout(timer); req.removeListener('aborted',abort); res.removeListener('close',onClose); }
+    const code=timedOut ? (kind==='control' ? 'runtime_timeout' : 'runtime_header_timeout') : 'runtime_unavailable';
+    throw new HttpError(503,code,'Runtime connection ended or timed out. No automatic replay was attempted.');
+  } finally { clearTimeout(timer); clearInterval(guard); req.removeListener('aborted',abort); res.removeListener('close',onClose); }
 }
 
 
