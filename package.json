@@ -9,7 +9,9 @@
   "scripts": {
     "start": "node --env-file-if-exists=.env src/main.js",
     "test": "node --test tests/server/*.test.js",
-    "test:browser": "node --test --test-concurrency=1 tests/browser/*.test.mjs"
+    "test:browser": "node --test --test-concurrency=1 tests/browser/*.test.mjs",
+    "check:security": "node scripts/check-repository.mjs",
+    "test:security": "node --test tests/security/*.test.js"
   },
   "dependencies": {
     "@airwallex/components-sdk": "1.36.0",

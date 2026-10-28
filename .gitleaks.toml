@@ -1,0 +1,18 @@
+title = "Merchant repository secret rules"
+
+[extend]
+useDefault = true
+
+[[rules]]
+id = "merchant-service-key"
+description = "Service access credential"
+regex = '''\bccb[km]_[A-Za-z0-9_-]{16,}\b'''
+keywords = ["ccbm_", "ccbk_"]
+
+# One synthetic response sentinel, scoped to its exact fixture and full value.
+# No directory-wide or substring-based test exclusions.
+[[rules.allowlists]]
+condition = "AND"
+paths = ['''(?:^|/)tests/server/fixtures\.js$''']
+regexTarget = "secret"
+regexes = ['''^ccb[m]_once_only_test_token_value_123$''']

@@ -1,12 +1,20 @@
-node_modules
-.git
-.env
-.env.*
-!.env.example
-data
-*.sqlite
-*.sqlite-shm
-*.sqlite-wal
-*.log
-tests
-docs
+# Build inputs are opt-in. Keep this list aligned with Dockerfile and security tests.
+**
+!Dockerfile
+!package.json
+!package-lock.json
+!src/
+src/**
+!src/*.js
+!src/*.sql
+!public/
+public/**
+!public/*.html
+!public/*.js
+!public/*.css
+!public/*.svg
+# Source inputs are flat; a directory named like a source file must not reopen its children.
+src/*/**
+public/*/**
+# Hidden local/config files are never build inputs, even inside allowed directories.
+**/.*
