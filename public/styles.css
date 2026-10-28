@@ -193,3 +193,5 @@ a.stat-cell:hover { background:var(--soft); text-decoration:none; color:inherit;
 #mail > .card + .card{margin-top:20px}.payment-summary{margin-bottom:18px}.payment-tabs{display:flex;gap:6px;margin-bottom:18px;padding:4px;background:var(--soft);border:1px solid var(--line);border-radius:12px;width:fit-content}.payment-tabs .btn{border:0;background:transparent;box-shadow:none}.payment-tabs .selected{background:var(--panel);color:var(--primary);box-shadow:0 1px 4px #0000000a}#payment [role=tabpanel][hidden]{display:none}
 
 .payment-qr{display:flex;flex-direction:column;align-items:center;gap:12px;margin:18px 0}.payment-qr img{background:#fff;max-width:100%;height:auto;border:1px solid var(--line);border-radius:12px}.payment-qr p{color:var(--muted);font-size:13px}.payment-checkout .button-row{flex-wrap:wrap;margin:14px 0}.checkout-page{max-width:680px;padding:32px;margin:8vh auto}.checkout-page p{margin:22px 0}
+
+.usage-trend{height:160px;display:flex;align-items:flex-end;gap:2px;padding:14px;overflow:hidden}.usage-trend-bar{flex:1;min-width:1px;background:var(--accent,#648c6b);border-radius:3px 3px 0 0}

@@ -199,11 +199,34 @@ export class Access {
    const data=await this.upstream.request('GET',base+'/devices');check();
    return {devices:(data.devices||[]).flatMap(item=>{const d=this.db.prepare('SELECT * FROM access_devices WHERE upstream_id=? AND account_id=? AND customer_id=?').get(item.id,account.id,c.id);if(!d)return [];const v=project(item,schemas.device);v.id=d.id;v.name=d.name;v.current_grant_id=this.db.prepare('SELECT id FROM access_grants WHERE upstream_id=? AND account_id=?').get(item.current_grant_id||'',account.id)?.id||null;return [v];})};
   }
-  if(!(method==='DELETE'&&/^\/devices\/[A-Za-z0-9_-]+$/.test(suffix))&&!(method==='POST'&&['/devices/preview','/devices/approve'].includes(suffix)))throw new HttpError(404,'not_found','Unsupported device operation.');
+  if(!(['DELETE','PATCH'].includes(method)&&/^\/devices\/[A-Za-z0-9_-]+$/.test(suffix))&&!(method==='PUT'&&/^\/devices\/[A-Za-z0-9_-]+\/selection$/.test(suffix))&&!(method==='POST'&&['/devices/preview','/devices/approve'].includes(suffix)))throw new HttpError(404,'not_found','Unsupported device operation.');
   return await this.mutate(async()=>{
+   if(method==='PATCH'||method==='PUT') {
+    const d=this.object('access_devices',suffix.split('/')[2],account.id);
+    if(d.customer_id!==c.id||!d.upstream_id||d.disabled||c.pending||c.status!=='active')throw new HttpError(404,'not_found','Device is unavailable.');
+    let value;
+    if(method==='PATCH') {
+     fields(body,['name','expected_name'],['name','expected_name']);
+     const name=text(body.name,'name',80);if(body.expected_name!==d.name)throw new HttpError(409,'device_stale','Device name changed.');
+     const data=await this.upstream.request('GET',base+'/devices');check();
+     value=data.devices?.find(v=>v.id===d.upstream_id);if(!value)throw new HttpError(404,'not_found','Device not found.');
+     this.db.prepare('UPDATE access_devices SET name=? WHERE id=?').run(name,d.id);
+     d.name=name;
+    } else {
+     fields(body,['surface','grant_id','expected_selection_version'],['surface','grant_id','expected_selection_version']);
+     if(body.surface!=='code'||!Number.isSafeInteger(body.expected_selection_version)||body.expected_selection_version<0)throw new HttpError(400,'invalid_selection','A Code selection and observed version are required.');
+     let grant=null;
+     if(body.grant_id!==null){const g=this.object('access_grants',body.grant_id,account.id);if(g.customer_id!==c.id||!this.runtimeGrant(g))throw new HttpError(403,'grant_unavailable','Grant is not usable for this customer.');grant=g.upstream_id;}
+     const result=await this.upstream.request('PUT',base+'/devices/'+opaqueId(d.upstream_id)+'/selection',{...body,grant_id:grant},undefined,{authorize:check});try{check();}catch{throw new HttpError(503,'core_outcome_unknown','Permission changed after a device write; reconcile with an authorized key.');}value=result.device;
+     if(!value||value.id!==d.upstream_id)throw new HttpError(503,'core_outcome_unknown','Device selection unconfirmed.');
+    }
+    const v=project(value,schemas.device);v.id=d.id;v.name=d.name;v.current_grant_id=this.db.prepare('SELECT id FROM access_grants WHERE upstream_id=? AND account_id=? AND customer_id=?').get(value.current_grant_id||'',account.id,c.id)?.id||null;
+    if(Number.isSafeInteger(v.selection_version))this.db.prepare('UPDATE access_devices SET current_grant_id=?,selection_version=? WHERE id=? AND selection_version<=?').run(v.current_grant_id||null,v.selection_version,d.id,v.selection_version);
+    return {device:v};
+   }
    if(method==='DELETE'){
     fields(body,[]);const d=this.object('access_devices',suffix.split('/').at(-1),account.id);if(d.customer_id!==c.id||!d.upstream_id)throw new HttpError(404,'not_found','Device not found.');
-    this.db.prepare('UPDATE access_devices SET disabled=1 WHERE id=?').run(d.id);const result=await this.upstream.request('DELETE',base+'/devices/'+opaqueId(d.upstream_id));check();if(result.ok!==true)throw new HttpError(503,'core_outcome_unknown','Device revocation unconfirmed.');return {ok:true};
+    this.db.prepare('UPDATE access_devices SET disabled=1 WHERE id=?').run(d.id);const result=await this.upstream.request('DELETE',base+'/devices/'+opaqueId(d.upstream_id),undefined,undefined,{authorize:check});try{check();}catch{throw new HttpError(503,'core_outcome_unknown','Permission changed after device revocation; reconcile with an authorized key.');}if(result.ok!==true)throw new HttpError(503,'core_outcome_unknown','Device revocation unconfirmed.');return {ok:true};
    }
    fields(body,['code'],['code']);const code=text(body.code,'code',128).replaceAll('-','').toUpperCase();
    const d=this.db.prepare('SELECT * FROM access_devices WHERE pairing_code=? AND account_id=?').get(code,account.id);
@@ -216,9 +239,17 @@ export class Access {
  }
  async usage(account,customerId,query,check){
   const c=this.object('access_customers',customerId,account.id);if(!c.upstream_id)throw new HttpError(409,'customer_pending','Customer not ready.');
-  for(const [key,value] of query)if(!['from','to','limit','offset'].includes(key)||query.getAll(key).length!==1||value.length>100)throw new HttpError(400,'invalid_query','Unsupported usage filter.');
-  const data=await this.upstream.request('GET',`/access/v1/customers/${opaqueId(c.upstream_id)}/usage?${query}`);check();
-  return {usage:project(data.usage,schemas.usage),total:data.total,requests:(data.requests||[]).map(row=>{const v=project(row,schemas.request);v.grant_id=this.db.prepare('SELECT id FROM access_grants WHERE upstream_id=? AND account_id=?').get(row.grant_id||'',account.id)?.id||null;return v;})};
+  for(const [key,value] of query)if(!['from','to','limit','offset','device_id','grant_id','model','result','session_id','view'].includes(key)||query.getAll(key).length!==1||value.length>150)throw new HttpError(400,'invalid_query','Unsupported usage filter.');
+  const forwarded=new URLSearchParams(query);
+  for(const [key,table] of [['device_id','access_devices'],['grant_id','access_grants']]) if(query.has(key)) {
+   const object=this.object(table,query.get(key),account.id);if(object.customer_id!==c.id||!object.upstream_id)throw new HttpError(404,'not_found','Filter is outside the customer.');forwarded.set(key,object.upstream_id);
+  }
+  const data=await this.upstream.request('GET',`/access/v1/customers/${opaqueId(c.upstream_id)}/usage?${forwarded}`);check();
+  return {usage:project(data.usage,schemas.usage),total:data.total,timeline:project(data.timeline,schemas.timeline)||null,sessions:project(data.sessions||[],[schemas.session]),requests:(data.requests||[]).map(row=>{
+   const v=project(row,schemas.request);
+   v.grant_id=this.db.prepare('SELECT id FROM access_grants WHERE upstream_id=? AND account_id=? AND customer_id=?').get(row.grant_id||'',account.id,c.id)?.id||null;
+   v.device_id=this.db.prepare('SELECT id FROM access_devices WHERE upstream_id=? AND account_id=? AND customer_id=?').get(row.device_id||'',account.id,c.id)?.id||null;return v;
+  })};
  }
  async protocol(req,res,url){
   const path=url.pathname,method=req.method;let match,scope;
@@ -226,10 +257,11 @@ export class Access {
   else if(path==='/access/v1/resources')scope='resources.read';
   else if(/^\/access\/v1\/customers(?:\/[A-Za-z0-9_-]+)?$/.test(path))scope=method==='GET'?'customers.read':'customers.write';
   else if(/^\/access\/v1\/grants(?:\/[A-Za-z0-9_-]+)?$/.test(path)||path.startsWith('/access/v1/fulfillments/'))scope=method==='GET'?'delegation.grants.read':'delegation.grants.write';
+  else if(path.endsWith('/accounts'))scope='delegation.grants.read';
   else if(path.endsWith('/usage'))scope='delegation.usage.read';
   else if(path.includes('/devices'))scope=method==='GET'?'delegation.devices.read':'delegation.devices.write';
   else throw new HttpError(404,'not_found','No local API operation at this path.');
-  const allowedQuery=path==='/access/v1/grants'?['customer_id','resource_id','limit','offset']:path==='/access/v1/customers'?['external_id','limit','offset']:path.endsWith('/usage')?['from','to','limit','offset']:[];
+  const allowedQuery=path==='/access/v1/grants'?['customer_id','resource_id','limit','offset']:path==='/access/v1/customers'?['external_id','limit','offset']:path.endsWith('/usage')?['from','to','limit','offset','device_id','grant_id','model','result','session_id','view']:[];
   for(const [name,value] of url.searchParams)if(!allowedQuery.includes(name)||url.searchParams.getAll(name).length!==1||value.length>150)throw new HttpError(400,'invalid_query','Unsupported query.');
   const p=this.authenticate(req,scope),check=()=>this.authenticate(req,scope);
   this.store.throttle(`access:${p.account.id}`,300,60000);
@@ -241,7 +273,12 @@ export class Access {
   else if((match=path.match(/^\/access\/v1\/customers(?:\/([A-Za-z0-9_-]+))?$/))&&((!match[1]&&['GET','POST'].includes(method))||(match[1]&&method==='PATCH')))result=await this.customers(p.account,method,match[1],body,url.searchParams,check);
   else if((match=path.match(/^\/access\/v1\/grants(?:\/([A-Za-z0-9_-]+))?$/))&&((!match[1]&&['GET','POST'].includes(method))||(match[1]&&method==='PATCH')))result=await this.grants(p.account,method,match[1],body,url.searchParams,check);
   else if((match=path.match(/^\/access\/v1\/fulfillments\/([A-Za-z0-9_-]+)$/))&&method==='PUT')result=await this.fulfillment(p.account,match[1],body,check);
-  else if((match=path.match(/^\/access\/v1\/customers\/([A-Za-z0-9_-]+)(\/devices(?:\/[A-Za-z0-9_-]+)?)$/)))result=await this.devices(p.account,match[1],method,match[2],body,check);
+  else if((match=path.match(/^\/access\/v1\/customers\/([A-Za-z0-9_-]+)(\/devices(?:\/[A-Za-z0-9_-]+(?:\/selection)?)?)$/)))result=await this.devices(p.account,match[1],method,match[2],body,check);
+  else if((match=path.match(/^\/access\/v1\/customers\/([A-Za-z0-9_-]+)\/accounts$/))&&method==='GET') {
+   const customer=this.object('access_customers',match[1],p.account.id);if(!customer.upstream_id||customer.pending)throw new HttpError(409,'customer_pending','Customer not ready.');
+   const data=await this.upstream.request('GET',`/access/v1/customers/${opaqueId(customer.upstream_id)}/accounts`);check();
+   result={accounts:(data.accounts||[]).flatMap(item=>{const g=this.db.prepare('SELECT * FROM access_grants WHERE upstream_id=? AND account_id=? AND customer_id=?').get(item.id,p.account.id,customer.id);if(!g||!this.runtimeGrant(g))return [];const v=project(item,schemas.account);v.id=g.id;return [v];})};
+  }
   else if((match=path.match(/^\/access\/v1\/customers\/([A-Za-z0-9_-]+)\/usage$/))&&method==='GET')result=await this.usage(p.account,match[1],url.searchParams,check);
   else throw new HttpError(404,'not_found','No local API operation.');
   try{check();}catch(error){if(method==='GET')throw error;throw new HttpError(503,'core_outcome_unknown','Permission changed; another valid key must reconcile the outcome.');}
@@ -369,13 +406,19 @@ export class Access {
   if(Array.isArray(value.accounts))value.accounts=value.accounts.map(mapOption).filter(Boolean);
   if(value.account)value.account=mapOption(value.account);
   const isDevice=url.pathname.startsWith('/bridge/v1/device');
-  if(isDevice&&value.id){if(device.upstream_id&&device.upstream_id!==value.id)throw new HttpError(409,'device_mapping_conflict','Upstream device changed.');this.db.prepare('UPDATE access_devices SET upstream_id=? WHERE id=?').run(value.id,device.id);value.id=device.id;if(value.name)value.name=device.name;}
+  const remoteDevice=isDevice?(value.id||value.device?.id):null;
+  if(remoteDevice){
+   if(device.upstream_id&&device.upstream_id!==remoteDevice||value.id&&value.device?.id&&value.id!==value.device.id)throw new HttpError(409,'device_mapping_conflict','Upstream device changed.');
+   const saved=this.db.prepare('UPDATE access_devices SET upstream_id=? WHERE id=? AND (upstream_id IS NULL OR upstream_id=?)').run(remoteDevice,device.id,remoteDevice);
+   if(saved.changes!==1)throw new HttpError(409,'device_mapping_conflict','Upstream device mapping changed.');
+   if(value.id){value.id=device.id;if(value.name)value.name=device.name;}
+  }
   if(value.device_id)value.device_id=device.id;
   if(value.device?.id){value.device.id=device.id;value.device.name=device.name;}
   if(value.code){this.db.prepare('UPDATE access_devices SET pairing_code=?,expires_at=? WHERE id=?').run(String(value.code).replaceAll('-','').toUpperCase(),value.expires_at||null,device.id);}
   for(const target of [value,value.device].filter(Boolean))if(Object.hasOwn(target,'current_grant_id')){
    const g=grant(target.current_grant_id);target.current_grant_id=g?.id||null;
-   if(g&&target.selection_version>=device.selection_version)this.db.prepare('UPDATE access_devices SET current_grant_id=?,selection_version=? WHERE id=? AND selection_version<=?').run(g.id,target.selection_version,device.id,target.selection_version);
+   if(Number.isSafeInteger(target.selection_version)&&target.selection_version>=device.selection_version)this.db.prepare('UPDATE access_devices SET current_grant_id=?,selection_version=? WHERE id=? AND selection_version<=?').run(g?.id||null,target.selection_version,device.id,target.selection_version);
    if(target.account_name)target.account_name=g?this.grantView(g).name:null;
   }
   if(context.selected&&url.pathname==='/bridge/v1/device/account'&&value.selection_version>=device.selection_version)this.db.prepare('UPDATE access_devices SET current_grant_id=?,selection_version=? WHERE id=? AND selection_version<=?').run(context.selected.id,value.selection_version,device.id,value.selection_version);

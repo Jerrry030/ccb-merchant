@@ -67,3 +67,14 @@
 ## 变更边界
 
 对外契约变更必须同时更新调用方和回归测试，不保留重复入口或只为旧调用方式存在的转发兼容层。仅移除内部文档，不代表本次修改了上述运行行为。
+
+
+## 设备管理与用量筛选
+
+设备页现为独立导航入口。管理员从“客户管理 → 管理设备”进入，使用本站 `/api/admin/users/:id/devices`，其中 `id` 是本站用户 ID；服务端解析其提供方客户映射，浏览器不能指定其他提供方客户。
+
+本站个人与管理端使用同一套校验：读取设备返回 `devices/accounts`；设备子路径 `PATCH` 修改 `{name,expected_name}`，`PUT .../selection` 提交 `{surface:"code",grant_id,expected_selection_version}`，`DELETE` 撤销。`grant_id:null` 清空所选账号但保留登录，成功变更返回 `{device}`。版本冲突显示 `device_stale`，不自动取新版本覆盖；未知结果关闭编辑并刷新核对。管理员变更会写本站审计，提供方响应前后重新检查权限。
+
+对直接提供方和 API 客户，设备修改使用公开的 `/access/v1/customers/:id/devices/:device_id` 与 `/selection`；设备、客户、授权 ID 逐跳映射。设备选择的嵌套响应同样建立映射，不再依赖额外的首次状态轮询。本站 API 客户的设备名称留在本站，不将经营资料传播给更上游。Desktop 仍未开放。
+
+本站 `/api/me/usage` 与管理员 `/api/admin/users/:id/usage` 支持时间、分页、`device_id/grant_id/model/result/session_id/view`。`result` 为 `success/error`，`view` 为 `requests/sessions`。提供方返回的 `timeline` 必须是完整筛选范围的聚合，不能使用本页数据替代；缺少聚合时页面明确显示不可用。图表展示返回的实际范围和 UTC 分桶，未知 Token 与已知用量区分。调用下级接口时筛选 ID 同样先校验归属再映射，不泄露更上游 ID。

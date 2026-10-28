@@ -207,3 +207,20 @@ test('API customer pagination works beyond one thousand local customers without 
  const exact=await f.request('GET','/access/v1/customers?external_id=after-1000',undefined,c.actor);assert.equal(exact.data.total,1);assert.equal(exact.data.customers[0].id,created.data.customer.id);
  assert.equal('public_origin' in c.account,false);assert.equal('capacity' in c.resource,false);
 });
+
+
+test('nested selection replies persist the owned device mapping before a status poll',async t=>{
+ const token='nested-selection-fixture-token',hash=createHash('sha256').update(token).digest('hex');
+ const {f,c}=await provider(t,{onCore:({req,url,body,json})=>{
+  if(url.pathname==='/bridge/v1/device/start'){json({code:'NESTED123456',expires_at:new Date(Date.now()+60000).toISOString(),interval:3},201);return true;}
+  if(url.pathname==='/bridge/v1/device/account'){json({device:{id:'remote-nested-device',current_grant_id:body.grant_id,selection_version:1,state:'approved'}});return true;}
+  if(url.pathname.endsWith('/devices')&&req.method==='GET'){json({devices:[{id:'remote-nested-device',name:'API device',state:'approved',selection_version:1}]});return true;}
+ }});
+ const customer=(await f.request('POST','/access/v1/customers',{external_id:'nested-owner',display_name:'Owner'},c.actor)).data.customer;
+ const grant=(await f.request('POST','/access/v1/grants',{customer_id:customer.id,resource_id:c.resource.id},c.actor)).data.grant;
+ const native={native:true,headers:{Authorization:`Bearer ${token}`,'X-CCB-Access-Key':c.key.token}};
+ await f.request('POST','/bridge/v1/device/start',{name:'Owned laptop',platform:'Windows/x64',token_hash:hash},{native:true,headers:{'X-CCB-Access-Key':c.key.token}});
+ await f.request('POST',`/access/v1/customers/${customer.id}/devices/approve`,{code:'NESTED123456'},c.actor);
+ const selected=await f.request('POST','/bridge/v1/device/account',{grant_id:grant.id},native);assert.equal(selected.status,200,selected.raw);
+ const list=await f.request('GET',`/access/v1/customers/${customer.id}/devices`,undefined,c.actor);assert.equal(list.status,200,list.raw);assert.equal(list.data.devices.length,1);assert.equal(list.data.devices[0].id,selected.data.device.id);assert.equal(list.data.devices[0].name,'Owned laptop');assert.equal(list.raw.includes('remote-nested-device'),false);
+});

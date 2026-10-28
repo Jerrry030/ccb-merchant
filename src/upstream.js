@@ -15,10 +15,12 @@ export const schemas = {
   account: { device_limit:N,platform:S,expires_at:S,id:S, name:S, plan:S, state:S, device_name:S, surfaces:[S], quota:{status:S,updated_at:S,windows:[{key:S,label:S,used_percent:N,resets_at:S,reset:B}]} },
   customer: { id:S, external_id:S, display_name:S, status:S, revision:N, created_at:S },
   grant: { account_lease_id:S,id:S, customer_id:S, resource_id:S, name:S, status:S, surfaces:[S], expires_at:S, revision:N, updated_at:S, pending:B },
-  device: { id:S, name:S, platform:S, state:S, created_at:S, expires_at:S, last_seen:S, current_grant_id:S, account_name:S },
+  device: { id:S, name:S, platform:S, state:S, created_at:S, expires_at:S, last_seen:S, selection_version:N, current_grant_id:S, account_name:S },
   preview: { name:S, platform:S, code:S, expires_at:S, renewal:B },
   usage: { requests:N, errors:N, ...tokenUsage, cost_usd:N, unknown_usage:N, average_duration_ms:N, average_first_token_ms:N },
-  request: { id:'identifier', time:S, model:S, status:N, duration_ms:N, first_token_ms:N, count_only:B, stream:B, usage:tokenUsage, usage_complete:B, cost_usd:N, grant_id:S, session_id:S },
+  timeline:{from:S,to:S,interval:S,points:[{time:S,requests:N,errors:N,input_tokens:N,output_tokens:N,unknown_usage:N}]},
+  session:{session_id:S,first_time:S,last_time:S,requests:N,errors:N,model:S,status:N,active:B},
+  request: { device_id:S, id:'identifier', time:S, model:S, status:N, duration_ms:N, first_token_ms:N, count_only:B, stream:B, usage:tokenUsage, usage_complete:B, cost_usd:N, grant_id:S, session_id:S },
 };
 export function project(value, schema) {
   if (schema === 'identifier') {
@@ -118,14 +120,14 @@ export class Upstream {
    const identity=await this.inspect(config,true,combined);
    if(method==='GET'&&path==='/access/v1/me')return identity;
    allocation?.authorize?.();
-   if(allocation && body?.status!=='revoked' && body?.action!=='cancel'){
+   if(allocation?.resourceId && body?.status!=='revoked' && body?.action!=='cancel'){
     const local=this.store.db.prepare('SELECT * FROM access_resources WHERE id=? AND account_id=?').get(allocation.resourceId,allocation.accountId);
     if(!local||local.status!=='active'||local.expires_at&&Date.parse(local.expires_at)<=Date.now())throw new HttpError(409,'supply_unavailable','Local resource authorization is unavailable.');
    }
    const headers={Authorization:`Bearer ${config.upstreamKey}`,Accept:'application/json',...(body?{'Content-Type':'application/json'}:{})};
    const response=await upstreamFetch(config,`${config.upstreamUrl}${path}`,{method,headers,body:body?JSON.stringify(body):undefined,signal:combined});
    if(!response.ok){
-    const safeErrors={account_device_limit:'每个账号最多绑定 1 台设备，请先在我的设备中撤销旧设备。',account_out_of_stock:'没有符合平台和期限的账号，请联系平台管理员分配或延长有效期。'};
+    const safeErrors={device_stale:'设备已变更，请刷新核对后重新操作。',grant_unavailable:'该账号授权不能用于此设备。',account_device_limit:'每个账号最多绑定 1 台设备，请先在我的设备中撤销旧设备。',account_out_of_stock:'没有符合平台和期限的账号，请联系平台管理员分配或延长有效期。'};
     let code;try{const failure=await readUpstreamJSON(response);code=failure?.error?.code||failure?.code;}catch{}
     if(response.status===409&&Object.hasOwn(safeErrors,code))throw new HttpError(409,code,safeErrors[code]);
     if(![400,401,403,404,409,429].includes(response.status))throw new HttpError(503,method==='GET'?'core_unavailable':'core_outcome_unknown',method==='GET'?'Upstream unavailable.':'Write result is unknown. Read/reconcile before another change.');

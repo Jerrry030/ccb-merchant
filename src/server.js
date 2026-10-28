@@ -27,11 +27,15 @@ function listQuery(params) {
 function usageQuery(params) {
   const out=new URLSearchParams();
   for(const [key,value] of params) {
-    if(!['from','to','limit','offset'].includes(key) || params.getAll(key).length!==1) throw new HttpError(400,'invalid_query','Unsupported usage query.');
+    if(!['from','to','limit','offset','device_id','grant_id','model','result','session_id','view'].includes(key) || params.getAll(key).length!==1) throw new HttpError(400,'invalid_query','Unsupported usage query.');
     if(key==='limit' || key==='offset') {
       const number=Number(value);
       if(!/^\d+$/.test(value) || !Number.isSafeInteger(number) || number<(key==='limit'?1:0) || number>(key==='limit'?100:1000000)) throw new HttpError(400,'invalid_query','Invalid pagination.');
-    } else expiry(value);
+    } else if(['from','to'].includes(key)) expiry(value);
+    else if(['device_id','grant_id'].includes(key))opaqueId(value);
+    else if(key==='session_id')text(value,'session_id',128);
+    else if(key==='model')text(value,'model',128);
+    else if(key==='result'&&!['success','error'].includes(value)||key==='view'&&!['requests','sessions'].includes(value))throw new HttpError(400,'invalid_query','Invalid usage filter.');
     out.set(key,value);
   }
   if(out.has('from') && out.has('to') && Date.parse(out.get('from'))>Date.parse(out.get('to'))) throw new HttpError(400,'invalid_query','Usage date range is reversed.');
@@ -157,6 +161,52 @@ export function createMerchant(config, options={}) {
         if(!memberPrefix) throw new HttpError(409,'not_provisioned','Contact the administrator to assign an account first.');
         if(user.core_pending) throw new HttpError(409,'core_sync_pending','Customer synchronization must be reconciled first.');
       };
+      // Both personal and staff device operations resolve the customer from a local user,
+      // never from a browser-supplied provider identifier.
+      const deviceRoute=path.match(/^\/api\/(me|admin\/users\/([A-Za-z0-9_-]+))\/devices(?:\/([A-Za-z0-9_-]+)(\/selection)?)?$/);
+      if(deviceRoute && !['preview','approve'].includes(deviceRoute[3])) {
+        const staff=deviceRoute[1]!=='me', targetId=staff?deviceRoute[2]:user.id;
+        const target=store.db.prepare('SELECT * FROM users WHERE id=?').get(targetId);
+        if(!target) throw new HttpError(404,'not_found','Customer not found.');
+        const id=deviceRoute[3], selection=Boolean(deviceRoute[4]), write=req.method!=='GET';
+        const check=()=>{auth.require(req,staff);const current=store.db.prepare('SELECT * FROM users WHERE id=?').get(targetId);if(!current||current.core_customer_id!==target.core_customer_id||current.core_pending||(write&&current.status!=='active'&&req.method!=='DELETE'))throw new HttpError(409,'customer_changed','Customer changed; refresh before continuing.');};
+        if(req.method==='GET'&&!id&&!target.core_customer_id){respond(res,200,{devices:[],accounts:[]});return;}
+        if(!target.core_customer_id)throw new HttpError(409,'not_provisioned','Assign an account first.');
+        check();
+        const base=`/access/v1/customers/${opaqueId(target.core_customer_id)}`;
+        if(req.method==='GET'&&!id) {
+          const [data,accounts]=await Promise.all([core.request('GET',base+'/devices'),core.request('GET',base+'/accounts')]);check();
+          respond(res,200,{devices:collection(data.devices,schemas.device),accounts:collection(accounts.accounts,schemas.account)});return;
+        }
+        if(!id||!(req.method==='DELETE'&&!selection||req.method==='PATCH'&&!selection||req.method==='PUT'&&selection))throw new HttpError(404,'not_found','Unsupported device operation.');
+        let payload={};
+        if(req.method==='PATCH') {fields(body,['name','expected_name'],['name','expected_name']);payload={name:text(body.name,'name',80),expected_name:text(body.expected_name,'expected_name',80)};}
+        else if(selection) {
+          fields(body,['surface','grant_id','expected_selection_version'],['surface','grant_id','expected_selection_version']);
+          if(body.surface!=='code'||!Number.isSafeInteger(body.expected_selection_version)||body.expected_selection_version<0)throw new HttpError(400,'invalid_device_selection','A Code selection and its observed version are required.');
+          payload={surface:'code',grant_id:body.grant_id===null?null:opaqueId(body.grant_id),expected_selection_version:body.expected_selection_version};
+        } else fields(body,[]);
+        if(lockedUsers.has(targetId))throw new HttpError(409,'user_busy','A customer change is in progress.');
+        lockedUsers.add(targetId);
+        try {
+          check();const result=await core.request(req.method,base+'/devices/'+opaqueId(id)+(selection?'/selection':''),req.method==='DELETE'?undefined:payload,undefined,{authorize:check});
+          try {check();} catch {throw new HttpError(503,'core_outcome_unknown','Permission changed; refresh with an authorized session to reconcile the device.');}
+          if(req.method==='DELETE') {if(result.ok!==true)throw new HttpError(503,'core_outcome_unknown','Device revocation unconfirmed.');respond(res,200,{ok:true});}
+          else {const device=project(result.device,schemas.device);if(!device||device.id!==id)throw new HttpError(503,'core_outcome_unknown','Device change unconfirmed.');respond(res,200,{device});}
+          store.audit(user.id,selection?'device.select':req.method==='PATCH'?'device.rename':'device.revoke',targetId+':'+id);
+        } finally {lockedUsers.delete(targetId);}
+        return;
+      }
+      const historyRoute=path.match(/^\/api\/(me|admin\/users\/([A-Za-z0-9_-]+))\/usage$/);
+      if(historyRoute && req.method==='GET') {
+        const staff=historyRoute[1]!=='me',target=staff?store.db.prepare('SELECT * FROM users WHERE id=?').get(historyRoute[2]):user;
+        if(!target)throw new HttpError(404,'not_found','Customer not found.');
+        if(!target.core_customer_id||target.core_pending)throw new HttpError(409,'customer_not_ready','Customer is not synchronized.');
+        const data=await core.request('GET',`/access/v1/customers/${opaqueId(target.core_customer_id)}/usage?${usageQuery(url.searchParams)}`);auth.require(req,staff);
+        const current=store.db.prepare('SELECT * FROM users WHERE id=?').get(target.id);if(!current||current.core_customer_id!==target.core_customer_id||current.core_pending)throw new HttpError(409,'customer_changed','Customer changed during read.');
+        const usage=project(data.usage,schemas.usage);if(!usage||!Number.isSafeInteger(data.total))throw new HttpError(503,'invalid_core_response','Invalid usage metadata.');
+        respond(res,200,{usage,requests:collection(data.requests,schemas.request),sessions:project(data.sessions||[],[schemas.session]),total:data.total,timeline:project(data.timeline,schemas.timeline)||null});return;
+      }
       switch(route) {
         case 'GET /api/me/overview': {
           const state=await connection(), pending=[];
@@ -187,11 +237,6 @@ export function createMerchant(config, options={}) {
           const data=await core.request('GET',`${memberPrefix}/accounts`);
           respond(res,200,{accounts:collection(data.accounts,schemas.account)}); return;
         }
-        case 'GET /api/me/devices': {
-          if(!memberPrefix) {respond(res,200,{devices:[]});return;}
-          customerReady(); const data=await core.request('GET',`${memberPrefix}/devices`);
-          respond(res,200,{devices:collection(data.devices,schemas.device)}); return;
-        }
         case 'POST /api/me/devices/preview':
         case 'POST /api/me/devices/approve': {
           customerReady(); fields(body,['code'],['code']);
@@ -199,12 +244,6 @@ export function createMerchant(config, options={}) {
           const data=await core.request('POST',`${memberPrefix}/devices/${preview?'preview':'approve'}`,{code});
           if(preview) { const device=project(data.device,schemas.preview); if(!device) throw new HttpError(503,'invalid_core_response','Invalid device preview.'); respond(res,200,{device}); }
           else { if(data.ok!==true) throw new HttpError(503,'core_outcome_unknown','Device approval has not been confirmed.'); store.audit(user.id,'device.approve',user.id); respond(res,200,{ok:true}); } return;
-        }
-        case 'GET /api/me/usage': {
-          customerReady(); const data=await core.request('GET',`${memberPrefix}/usage?${usageQuery(url.searchParams)}`);
-          const usage=project(data.usage,schemas.usage);
-          if(!usage || !Number.isSafeInteger(data.total)) throw new HttpError(503,'invalid_core_response','Invalid usage metadata.');
-          respond(res,200,{usage,requests:collection(data.requests,schemas.request),total:data.total}); return;
         }
         case 'GET /api/me/wallet': {
           const ledger=store.db.prepare('SELECT id,order_id,rental_id,amount_minor,currency,kind,created_at FROM ledger WHERE user_id=? ORDER BY created_at DESC LIMIT 200').all(user.id);
@@ -455,12 +494,7 @@ export function createMerchant(config, options={}) {
         if(!order) throw new HttpError(404,'order_not_found','Order not found.');
         respond(res,200,payments.checkout(order)); return;
       }
-      if(req.method==='DELETE' && (match=path.match(/^\/api\/me\/devices\/([^/]+)$/))) {
-        customerReady(); fields(body,[]);
-        const data=await core.request('DELETE',`${memberPrefix}/devices/${opaqueId(match[1])}`);
-        if(data.ok!==true) throw new HttpError(503,'core_outcome_unknown','Device revocation has not been confirmed. Refresh before another change.');
-        store.audit(user.id,'device.revoke',match[1]); respond(res,200,{ok:true}); return;
-      }
+
       if(req.method==='PATCH' && (match=path.match(/^\/api\/admin\/grants\/([^/]+)$/))) {
         fields(body,['expected_revision','status','expires_at'],['expected_revision']);
         if(!Number.isSafeInteger(body.expected_revision) || body.expected_revision<1 || (body.status!==undefined && !['active','revoked'].includes(body.status))) throw new HttpError(400,'invalid_input','Invalid grant revision/status.');

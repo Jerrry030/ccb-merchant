@@ -74,7 +74,7 @@ export async function startFixture(options = {}) {
       if (path.startsWith('/api/admin/') && user.role !== 'admin') return reply(403,'admin_required','Admin required.');
       if (path === '/api/me/overview') return reply(200,{grants:state.grants,devices:state.devices,usage:null,wallet:{balance_minor:0,currency:'CNY'},connection:state.connection,pending:state.pending});
       if (path === '/api/me/grants') return reply(200,{grants:state.grants});
-      if (path === '/api/me/devices') return reply(200,{devices:state.devices});
+      if (path === '/api/me/devices') return reply(200,{devices:state.devices,accounts:[]});
       if (path === '/api/me/devices/preview') {
         if (body.code !== 'TEST-CONNECT') return reply(400,'invalid_code','连接码无效或已过期。');
         return reply(200,{device:{name:'我的测试笔记本',platform:'Windows',code:body.code,expires_at:new Date(Date.now()+600000).toISOString(),renewal:false}});

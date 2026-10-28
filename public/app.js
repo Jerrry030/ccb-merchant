@@ -16,13 +16,15 @@ const navigation = [
   { path: '/', title: '首页', icon: 'overview', description: '查看账单与用量。参考费用只供核对，不会从钱包扣费。' },
   { path: '/connect', title: '开始使用', icon: 'terminal', description: connectGuides.idle },
   { path: '/accounts', title: '我的账号', icon: 'layers', description: '查看已分配或订阅交付的账号、额度和正在使用的设备。' },
-  { path: '/devices',hidden:true, title: '我的设备', icon: 'monitor', description: '每个账号最多绑定 1 台设备。换机请先撤销旧设备，再连接新设备。' },
+  { path: '/devices', title: '我的设备', icon: 'monitor', description: '每个账号最多绑定 1 台设备。换机请先撤销旧设备，再连接新设备。' },
   { path: '/usage', title: '使用记录', icon: 'chart', description: '查看请求与 Token。参考成本只供核对，不会从钱包扣费。' },
   { path: '/wallet',hidden:true, title: '充值/订阅', icon: 'wallet', description: '充值人民币余额，或购买固定期限订阅。购买时选择一个登录平台，并查看是否有货。' },
   { path: '/profile', title: '个人设置', icon: 'user', description: '查看账户信息，维护您的登录安全。' },
   { path: '/orders', title:'我的订单', icon:'receipt', description:'核对套餐支付、开通、续期及退回余额。' },
   { path:'/admin/upstream',title:'上游接入',icon:'link',admin:true,hidden:true,description:'连接直接上级，核对账户与可用资源。' },
   { path:'/admin/access',hidden:true,title:'API 接入',icon:'key',admin:true,description:'管理直接接入的客户、密钥和资源范围。' },
+  { path:'/admin/customer-usage',hidden:true,title:'客户使用记录',icon:'chart',admin:true,description:'在本站客户范围内查看用量和设备活动。'},
+  { path: '/admin/devices',hidden:true,title:'客户设备',icon:'monitor',admin:true,description:'管理客户设备、账号选择和连接状态。'},
   { path: '/admin/customers', title: '客户管理', icon: 'users', admin: true, description: '管理客户资料，在账号库存中为客户分配账号。' },
   { path:'/admin/inventory',title:'账号库存',icon:'layers',admin:true,description:'查看平台管理员分配的账号、有效期和客户分配状态。每个账号最多绑定 1 台设备。' },
   { path:'/admin/plans',hidden:true,title:'套餐管理',icon:'layers',admin:true,description:'只为订阅分组设置有效期和金额。普通分组不在这里出售。' },
@@ -152,6 +154,7 @@ async function api(path, {method = 'GET', body} = {}) {
       if (expectsOk && data.ok !== true) throw Object.assign(new Error('服务器未明确确认操作成功。'),{uncertain:true});
       const required = [];
       if (['/api/setup','/api/auth/login'].includes(url.pathname)) required.push('user','csrf_token');
+      else if (/\/devices\/[^/]+(?:\/selection)?$/.test(url.pathname)&&['PATCH','PUT','DELETE'].includes(method)) {if(method!=='DELETE')required.push('device');}
       else if (url.pathname.startsWith('/api/admin/users')) { required.push('user'); if (url.pathname.endsWith('/provision')) required.push('customer'); }
       else if (url.pathname.startsWith('/api/admin/grants')) required.push('grant');
       else if(/\/keys\/[^/]+\/copy$/.test(url.pathname)) required.push('token');
@@ -331,7 +334,7 @@ function shell(route) {
   root.append(el('div',{class:'workspace'},el('header',{class:'topbar'},menu,
     el('div',{class:'breadcrumb'},el('span',{text:state.public.site.name}),el('span',{'aria-hidden':'true',text:'/'}),el('strong',{text:route.title})),
     el('div',{class:'top-actions'},themeButton(),badge(state.user.role))),
-    el('main',{id:'main',class:'main',tabindex:'-1'},el('div',{class:'page-heading'},el('div',{},el('span',{class:'eyebrow',text:route.admin ? '商户管理' : '工作空间'}),el('h1',{text:route.title}),route.path==='/connect'?el('p',{id:'connect-lead',text:state.code?connectGuides.pairing:route.description}):null),el('button',{class:'btn',type:'button',onclick:() => render()},icon('refresh'),'刷新')),
+    el('main',{id:'main',class:'main',tabindex:'-1'},el('div',{class:'page-heading'},el('div',{},el('span',{class:'eyebrow',text:route.admin ? '商户管理' : '工作空间'}),el('h1',{text:route.title}),route.path==='/connect'?el('p',{id:'connect-lead',text:state.code?connectGuides.pairing:route.description}):null),el('button',{class:'btn',type:'button',text:'搜索 · Ctrl K',onclick:()=>globalSearch()}),el('button',{class:'btn',type:'button',onclick:() => render()},icon('refresh'),'刷新')),
       el('div',{id:'page-feedback'}),content,el('footer',{class:'page-footer'},el('span',{text:`${state.public.site.name}`}),el('span',{text:'用量可核对 · 密钥留在服务端'})))));
   app.replaceChildren(root); return content;
 }
@@ -798,14 +801,49 @@ function resetLabel(item, recover) {
   const d = new Date(at), hh = String(d.getHours()).padStart(2,'0'), mm = String(d.getMinutes()).padStart(2,'0');
   return `\u5468${'\u65e5\u4e00\u4e8c\u4e09\u56db\u4e94\u516d'[d.getDay()]} ${hh}:${mm} \u91cd\u7f6e`;
 }
+function globalSearch(){
+ if(!state.user||document.querySelector('dialog[aria-label="全局搜索"]'))return;
+ const owner=state.user.id,staff=state.user.role==='admin',input=el('input',{type:'search','aria-label':'搜索内容',placeholder:'页面、客户或账号'}),results=el('div'),feedback=el('div',{role:'status'}),submit=el('button',{type:'submit',class:'btn primary',text:'搜索'}),form=el('form',{},el('div',{class:'button-row'},input,submit),feedback,results);
+ const dialog=editorDialog('全局搜索',form);let generation=0;
+ form.addEventListener('submit',async event=>{
+  event.preventDefault();const current=++generation,q=input.value.trim().toLowerCase();submit.disabled=true;results.replaceChildren();feedback.textContent='读取当前权限范围内的结果…';
+  const pages=navigation.filter(n=>!n.hidden&&(!n.admin||staff)).map(n=>({title:n.title,url:n.path}));
+  const tasks=staff?[api('/api/admin/users?limit=100&q='+encodeURIComponent(q)).then(d=>collection(d,'users').map(u=>({title:(u.display_name||'')+' '+u.email,url:'/admin/customers?q='+encodeURIComponent(u.email)}))),api('/api/admin/inventory').then(d=>collection(d,'accounts').map(a=>({title:a.details?.name||a.id,url:'/admin/inventory'})))]:[api('/api/me/accounts').then(d=>collection(d,'accounts').map(a=>({title:a.name||a.id,url:'/accounts'})))];
+  const values=await Promise.allSettled(tasks);if(current!==generation||!dialog.isConnected||state.user?.id!==owner)return;
+  const matches=[...pages,...values.flatMap(v=>v.status==='fulfilled'?v.value:[])].filter(v=>v.title.toLowerCase().includes(q)).slice(0,60);
+  results.replaceChildren(...matches.map(v=>el('p',{},el('a',{class:'btn',href:v.url,text:v.title,onclick:()=>dialog.close()}))));feedback.textContent=values.some(v=>v.status==='rejected')?'部分资源读取失败，未显示失败部分。':matches.length?`显示 ${matches.length} 条匹配；客户最多查询 100 条。`:'没有匹配结果。';submit.disabled=false;
+ });input.focus();
+}
+addEventListener('keydown',event=>{if(state.user&&(event.ctrlKey||event.metaKey)&&event.key.toLowerCase()==='k'){event.preventDefault();globalSearch();}});
 async function devicesView() {
-  const accountId=new URLSearchParams(location.search).get('account_id');
-  const devices = collection(await api('/api/me/devices'),'devices').filter(d=>!accountId||d.current_grant_id===accountId);
-  return el('div',{class:'page-content'},panel(accountId?'更换设备':'连接的设备',accountId?'先撤销旧设备连接，确认成功后再连接新设备。不会自动抢占或踢掉旧设备。':'从 CCB 客户端获取连接码后，在这里确认设备',table([
-    {label:'设备',render:d => el('div',{},el('strong',{text:d.name || '未命名设备'}),el('span',{class:'table-sub',text:d.platform || '未知平台'}))},
-    {label:'状态',render:d => badge(d.state)}, {label:'最近活动',render:d => date(d.last_seen)}, {label:'到期时间',render:d => date(d.expires_at)},
-    {label:'操作',render:d => actionButton('撤销连接',async () => await confirmAction('撤销设备连接',`确认撤销「${d.name || '此设备'}」？此操作会阻止新的执行请求。`,'撤销连接',true) ? api(`/api/me/devices/${encodeURIComponent(d.id)}`,{method:'DELETE'}) : CANCEL,{danger:true})},
-  ],devices,'还没有连接设备','在 CCB 客户端发起连接，并使用连接码确认。不会自动授权任何设备。'),el('a',{class:'btn primary',href:'/connect'},icon('terminal'),'开始使用')));
+  const query=new URLSearchParams(location.search),accountId=query.get('account_id'),staff=location.pathname==='/admin/devices',userId=query.get('user_id');
+  if(staff&&!userId)throw new Error('请从客户管理选择一位客户。');
+  const base=staff?`/api/admin/users/${encodeURIComponent(userId)}/devices`:'/api/me/devices';
+  const data=await api(base),devices=collection(data,'devices').filter(d=>!accountId||d.current_grant_id===accountId),accounts=collection(data,'accounts');
+  return el('div',{class:'page-content'},staff?el('a',{href:'/admin/customers',class:'btn small',text:'返回客户管理'}):null,panel(accountId?'更换设备':staff?'客户设备':'连接的设备','可以改名、选择账号或清空选择；清空不退出登录。单账号单设备，不会自动抢占。',table([
+    {label:'设备',render:d=>el('div',{},el('strong',{text:d.name||'未命名设备'}),el('span',{class:'table-sub',text:d.platform||'未知平台'}))},
+    {label:'状态',render:d=>badge(d.state)},{label:'所选账号',render:d=>d.account_name||accounts.find(a=>a.id===d.current_grant_id)?.name||'未指定'},
+    {label:'最近活动',render:d=>date(d.last_seen)},{label:'到期时间',render:d=>date(d.expires_at)},
+    {label:'操作',render:d=>el('div',{class:'table-actions'},
+      el('button',{class:'btn small',text:'管理绑定',disabled:d.state!=='approved',onclick:()=>deviceEditor(d,accounts,base)}),
+      el('a',{class:'btn small',href:(staff?'/admin/customer-usage?user_id='+encodeURIComponent(userId)+'&':'/usage?')+'device_id='+encodeURIComponent(d.id),text:'使用记录'}),
+      actionButton('撤销连接',async()=>await confirmAction('撤销设备连接',`确认撤销「${d.name||'此设备'}」？此操作会阻止新的执行请求。`,'撤销连接',true)?api(base+'/'+encodeURIComponent(d.id),{method:'DELETE'}):CANCEL,{danger:true,disabled:d.state==='revoked'}))},
+  ],devices,'还没有连接设备','请在客户端发起连接并确认。不会自动授权设备。'),staff?null:el('a',{class:'btn primary',href:'/connect'},icon('terminal'),'开始使用')));
+}
+function deviceEditor(device,accounts,base) {
+ const name=field('设备名称','name',{required:true,maxlength:80,value:device.name}),pick=field('Code 账号','grant_id',{type:'select',choices:[{value:'',label:'不指定（保留设备登录）'},...accounts.filter(a=>a.state==='available'||a.state==='limited'||a.id===device.current_grant_id).map(a=>({value:a.id,label:a.name||a.id}))],value:device.current_grant_id||''});
+ const feedback=el('div',{role:'alert'}),saveName=el('button',{type:'button',class:'btn',text:'保存名称'}),saveSelection=el('button',{type:'button',class:'btn primary',text:'保存账号选择'}),form=el('form',{},notice('不会抢占其他设备','变更携带所见版本。若结果未知，请先刷新核对，不会自动重放。'),feedback,name,saveName,pick,saveSelection);
+ const dialog=editorDialog('设备绑定管理',form);
+ const change=async(kind)=>{
+  saveName.disabled=saveSelection.disabled=true;
+  try {
+   const values=new FormData(form),selection=kind==='selection';
+   const result=await api(base+'/'+encodeURIComponent(device.id)+(selection?'/selection':''),{method:selection?'PUT':'PATCH',body:selection?{surface:'code',grant_id:values.get('grant_id')||null,expected_selection_version:device.selection_version}:{name:values.get('name'),expected_name:device.name}});
+   device=result.device;feedback.replaceChildren(notice('已保存','设备状态已更新。'));await render();
+   saveName.disabled=saveSelection.disabled=false;
+  } catch(error) {feedback.replaceChildren(notice('修改未完成',error.message+' 请关闭窗口并刷新设备列表后再操作。','error'));}
+ };
+ saveName.addEventListener('click',()=>change('name'));saveSelection.addEventListener('click',()=>change('selection'));form.addEventListener('submit',event=>event.preventDefault());
 }
 async function connectView() {
   const query = new URLSearchParams(location.search);
@@ -1104,7 +1142,10 @@ async function usageView() {
   const query = new URLSearchParams({limit:'20',offset:String(offset)});
   if (from) query.set('from',from);
   if (to) query.set('to',to);
-  const data = await api(`/api/me/usage?${query}`);
+  const staff=location.pathname==='/admin/customer-usage',userId=params.get('user_id'),view=params.get('view')==='sessions'?'sessions':'requests';
+  if(staff&&!userId)throw new Error('请先选择客户。');
+  for(const key of ['device_id','grant_id','model','result','session_id'])if(params.get(key))query.set(key,params.get(key));query.set('view',view);
+  const data=await api((staff?`/api/admin/users/${encodeURIComponent(userId)}/usage`:'/api/me/usage')+'?'+query);
   const requests = collection(data,'requests'), usage = data.usage;
   const label = range === 'today' ? '今日' : range === 'custom' ? '自定义范围' : usageRanges.find(item => item.id === range)?.label;
   const form = el('form',{class:'filter-bar'},field('开始日期','from',{type:'date',value:localDay(from)}),field('结束日期','to',{type:'date',value:localDay(to)}),el('button',{class:'btn',type:'submit',text:'查询'}));
@@ -1112,29 +1153,32 @@ async function usageView() {
     event.preventDefault();
     const values = new FormData(form), start = values.get('from'), end = values.get('to');
     if (start && end && start > end) { document.getElementById('page-feedback').replaceChildren(notice('日期范围有误','开始日期不能晚于结束日期。','error')); return; }
-    const next = new URLSearchParams();
+    const next = new URLSearchParams(params);next.delete('offset');
     if (!start && !end) next.set('range','all');
     else {
       next.set('range','custom');
       if (start) next.set('from',new Date(`${start}T00:00:00`).toISOString());
       if (end) next.set('to',new Date(`${end}T23:59:59.999`).toISOString());
     }
-    navigate(`/usage?${next}`);
+    for(const key of ['device_id','model','result','view']){const v=values.get(key);if(v)next.set(key,v);else next.delete(key);}navigate(location.pathname+'?'+next);
   });
+  form.append(field('设备 ID','device_id',{value:params.get('device_id')||''}),field('模型','model',{value:params.get('model')||''}),field('结果','result',{type:'select',choices:[{value:'',label:'全部'},{value:'success',label:'成功'},{value:'error',label:'失败'}],value:params.get('result')||''}),field('查看方式','view',{type:'select',choices:[{value:'requests',label:'请求'},{value:'sessions',label:'会话'}],value:view}));
+  const timeline=data.timeline,points=timeline?.points||[];
+  const graph=timeline?panel('用量趋势',`${date(timeline.from)} — ${date(timeline.to)} · ${timeline.interval==='hour'?'按小时':'按天'} UTC · 完整筛选结果，不是本页采样。未知 Token 单独计数。`,el('div',{class:'usage-trend',role:'img','aria-label':'请求量时间趋势'},points.map(p=>el('div',{class:'usage-trend-bar',title:`${date(p.time)}：${p.requests} 请求，${p.errors} 失败，${p.unknown_usage} 未知用量`,style:`height:${Math.max(2,100*p.requests/Math.max(1,...points.map(v=>v.requests)))}%`})) )):notice('趋势尚不可用','提供方尚未返回聚合时间序列，不能用当前页拼出完整趋势。');
   const total = Number.isSafeInteger(data.total) ? data.total : null;
   const pageOf = nextOffset => {
-    const next = new URLSearchParams({range});
+    const next = new URLSearchParams(params);next.set('range',range);
     if (from) next.set('from',from);
     if (to) next.set('to',to);
     if (nextOffset > 0) next.set('offset',String(nextOffset));
-    navigate(`/usage?${next}`);
+    navigate(location.pathname+'?'+next);
   };
   const pager = el('div',{class:'pager'},el('span',{text:total === null ? '总数未提供' : `共 ${number(total)} 条 · 第 ${Math.floor(offset/20)+1} 页`}),el('button',{class:'btn small',disabled:offset === 0,type:'button',text:'上一页',onclick:() => pageOf(Math.max(0,offset-20))}),el('button',{class:'btn small',disabled:total === null || offset + 20 >= total,type:'button',text:'下一页',onclick:() => pageOf(offset+20)}));
-  const seg = el('div',{class:'seg',role:'group','aria-label':'时间范围'},usageRanges.map(item => el('button',{type:'button',class:range === item.id ? 'on' : '','aria-pressed':range === item.id ? 'true' : 'false',text:item.label,onclick:() => { const next = new URLSearchParams({range:item.id}); if (item.ms) { const end = new Date(); next.set('to',end.toISOString()); next.set('from',new Date(end.getTime() - item.ms).toISOString()); } navigate(`/usage?${next}`); }})));
+  const seg = el('div',{class:'seg',role:'group','aria-label':'时间范围'},usageRanges.map(item => el('button',{type:'button',class:range === item.id ? 'on' : '','aria-pressed':range === item.id ? 'true' : 'false',text:item.label,onclick:() => { const next = new URLSearchParams(params);next.set('range',item.id);next.delete('offset'); if (item.ms) { const end = new Date(); next.set('to',end.toISOString()); next.set('from',new Date(end.getTime() - item.ms).toISOString()); } navigate(location.pathname+'?'+next); }})));
   return el('div',{class:'page-content usage-page'},
-    recordStats(usage,label),
+    recordStats(usage,label),graph,
     !usage ? notice('统计尚不可用','服务器尚未返回用量汇总。下方仅展示实际返回的请求记录。','warn') : null,
-    panel('请求记录','模型调用和 Token 用量。参考费用不会从钱包扣费。',el('div',{},el('div',{class:'record-toolbar'},seg,form),table([
+    panel('请求记录','模型调用和 Token 用量。参考费用不会从钱包扣费。',el('div',{},el('div',{class:'record-toolbar'},seg,form),view==='sessions'?table([{label:'会话',render:r=>r.session_id},{label:'模型',render:r=>r.model},{label:'请求 / 失败',render:r=>`${r.requests} / ${r.errors}`},{label:'最近活动',render:r=>date(r.last_time)}],data.sessions||[],'暂无会话','请选择其他范围。'):table([
       {label:'时间',render:row => date(row.time)},
       {label:'模型 / 状态',render:row => el('div',{class:'record-stack'},el('span',{class:'record-primary',text:row.model || '—'}),el('span',{class:'record-secondary'},statusBadge(row.status),row.stream ? ' 流式' : '',row.count_only ? ' 计数' : ''))},
       {label:'Token',render:requestTokens},
@@ -1253,7 +1297,7 @@ async function customersView() {
     {label:'客户',render:u => el('div',{},el('strong',{text:u.display_name || '未命名客户'}),el('span',{class:'table-sub',text:u.email}))},
     {label:'角色 / 状态',render:u => el('div',{class:'button-row'},badge(u.role),badge(u.status))},
     {label:'创建时间',render:u => date(u.created_at)},
-    {label:'操作',render:u => el('div',{class:'table-actions'},el('button',{class:'btn small',type:'button',text:'编辑',onclick:()=>customerEditor(u)}),el('a',{class:'btn small',href:`/admin/inventory?user_id=${encodeURIComponent(u.id)}`,text:'查看与分配账号'}))},
+    {label:'操作',render:u => el('div',{class:'table-actions'},el('button',{class:'btn small',type:'button',text:'编辑',onclick:()=>customerEditor(u)}),el('a',{class:'btn small',href:`/admin/inventory?user_id=${encodeURIComponent(u.id)}`,text:'查看与分配账号'}),el('a',{class:'btn small',href:`/admin/devices?user_id=${encodeURIComponent(u.id)}`,text:'管理设备'}))},
   ],users,'暂无客户账户','创建客户后，在账号库存选择账号并分配给客户。'),el('button',{class:'btn primary',type:'button',onclick:() => customerEditor()},icon('plus'),'创建客户')));
 }
 function showSecret(data) {
@@ -1563,5 +1607,5 @@ async function accessView() {
  }
  return root;
 }
-const views = {'/admin/inventory':inventoryView,'/admin/access':accessView,'/orders':rentalsView,'/admin/plans':planAdminView,'/admin/rentals':rentalsView,'/admin/operations':operationsView,'/':overviewView,'/accounts':accountsView,'/devices':devicesView,'/connect':connectView,'/usage':usageView,'/wallet':walletView,'/profile':profileView,'/admin/customers':customersView,'/admin/orders':ordersView,'/admin/audit':auditView,'/admin/settings':settingsView};
+const views = {'/admin/inventory':inventoryView,'/admin/access':accessView,'/orders':rentalsView,'/admin/plans':planAdminView,'/admin/rentals':rentalsView,'/admin/operations':operationsView,'/':overviewView,'/accounts':accountsView,'/devices':devicesView,'/admin/devices':devicesView,'/connect':connectView,'/usage':usageView,'/admin/customer-usage':usageView,'/wallet':walletView,'/profile':profileView,'/admin/customers':customersView,'/admin/orders':ordersView,'/admin/audit':auditView,'/admin/settings':settingsView};
 bootstrap();
