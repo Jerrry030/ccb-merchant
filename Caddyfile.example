@@ -1,7 +1,9 @@
 # Replace the hostname with this merchant site's domain.
+# API responses bypass compression so progress is not buffered by gzip.
 # SSE is flushed automatically. A negative flush_interval prevents prompt
 # cancellation of the provider request when the client disconnects.
 merchant.example.com {
-    encode gzip
+    @compressible not path /bridge/v1/*
+    encode @compressible gzip
     reverse_proxy 127.0.0.1:8787
 }
