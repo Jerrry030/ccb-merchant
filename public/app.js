@@ -1573,7 +1573,7 @@ async function settingsView() {
     },data => {
       revision = data.revision;
       const current = data.connection;
-      output.replaceChildren(notice(data.saved ? '上游连接已保存' : '连接验证通过，尚未保存',`${current.user.name} · 直接接入账户 · 协议 v${current.protocol_version}`,'success'),el('p',{class:'inline-info',text:`已授权权限：${current.scopes.join(' · ')}`}),el('a',{href:'/admin/inventory',class:'btn',text:'查看账号库存 →'}));
+      output.replaceChildren(notice(data.saved ? '上游连接已保存' : '连接验证通过，尚未保存',`${current.user.name} · 直接接入账户`,'success'),el('p',{class:'inline-info',text:`已授权权限：${current.scopes.join(' · ')}`}),el('a',{href:'/admin/inventory',class:'btn',text:'查看账号库存 →'}));
       if (data.saved) {
         state.public.features.term_rentals = true;
         upstreamForm.querySelector('[name=api_key]').value = '';

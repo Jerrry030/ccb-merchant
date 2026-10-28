@@ -20,7 +20,7 @@ async function provider(t,options={}){
 test('local keys isolate clients and rotate independently without upstream merchant registration or key propagation',async t=>{
  const {f,admin,c,d}=await provider(t);
  assert.equal(f.state.requests.some(r=>r.path.includes('/children')||r.path.includes('/keys')),false);
- assert.equal((await f.request('GET','/access/v1/me',undefined,c.actor)).data.protocol_version,5);
+ assert.equal((await f.request('GET','/access/v1/me',undefined,c.actor)).data.user.status,'active');
  const cResource=(await f.request('GET','/access/v1/resources',undefined,c.actor)).data.resources;
  assert.deepEqual(cResource.map(r=>r.id),[c.resource.id]);assert.equal(JSON.stringify(cResource).includes('resource-1'),false);
  const made=await f.request('POST','/access/v1/customers',{external_id:'customer-same',display_name:'C secret customer'},c.actor);assert.equal(made.status,201,made.raw);
@@ -203,7 +203,10 @@ test('API customer pagination works beyond one thousand local customers without 
  const {f,c}=await provider(t);
  f.store.transaction(()=>{for(let i=0;i<1001;i++)f.store.db.prepare("INSERT INTO access_customers(id,account_id,external_id,display_name,status,upstream_external,upstream_id,pending,created_at) VALUES(?,?,?,?,'active',?,?,0,?)").run('seed-'+i,c.account.id,'ext-'+i,'Seed '+i,'mapped-'+i,'remote-'+i,'2020-01-01T00:00:00Z');});
  const created=await f.request('POST','/access/v1/customers',{external_id:'after-1000',display_name:'New'},c.actor);assert.equal(created.status,201,created.raw);
- const page=await f.request('GET','/access/v1/customers?limit=2&offset=1000',undefined,c.actor);assert.equal(page.status,200);assert.equal(page.data.total,1002);assert.equal(page.data.customers.length,2);
+ let cursor='',count=0;const seen=new Set();
+ do {const page=await f.request('GET','/access/v1/customers?limit=500'+(cursor?'&cursor='+encodeURIComponent(cursor):''),undefined,c.actor);assert.equal(page.status,200,page.raw);assert.equal(page.data.total,1002);for(const customer of page.data.customers){assert.equal(seen.has(customer.id),false);seen.add(customer.id);count++;}cursor=page.data.next_cursor;}while(cursor);
+ assert.equal(count,1002);
+ assert.equal((await f.request('GET','/access/v1/customers?offset=1000',undefined,c.actor)).status,400);
  const exact=await f.request('GET','/access/v1/customers?external_id=after-1000',undefined,c.actor);assert.equal(exact.data.total,1);assert.equal(exact.data.customers[0].id,created.data.customer.id);
  assert.equal('public_origin' in c.account,false);assert.equal('capacity' in c.resource,false);
 });

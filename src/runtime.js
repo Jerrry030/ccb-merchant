@@ -70,7 +70,10 @@ export async function proxyRuntime(req, res, integration, store, url, access) {
     const upstream = await upstreamFetch(config,`${config.upstreamUrl}${boundary.path}${url.search}`, { method:req.method,headers,body:body?.length?body:undefined,signal:controller.signal,redirect:'error' });
     if (!upstream.ok) {
       let failure;try{failure=await readUpstreamJSON(upstream);}catch{}
-      if(upstream.status===409&&(failure?.code==='account_device_limit'||failure?.error?.code==='account_device_limit'))throw new HttpError(409,'account_device_limit','每个账号最多绑定 1 台设备，请先在我的设备中撤销旧设备，再连接新设备。');
+      const code=failure?.code??failure?.error?.code??failure?.error?.type;
+      if(upstream.headers.has('retry-after'))res.setHeader('Retry-After',upstream.headers.get('retry-after'));
+      const safe={account_device_limit:[409,'每个账号最多绑定 1 台设备，请先撤销旧设备。'],account_selection_changed:[409,'账号已变化，请重新启动客户端。'],rate_limited:[429,'请求过于频繁，请稍后重试。'],concurrency_limited:[429,'当前并发请求过多，请稍后重试。']};
+      if(Object.hasOwn(safe,code)&&safe[code][0]===upstream.status)throw new HttpError(upstream.status,code,safe[code][1]);
       const status = [400,401,403,404,409,413,415,429].includes(upstream.status) ? upstream.status : 503;
       throw new HttpError(status,'runtime_rejected','Core rejected the runtime request. It was not retried.');
     }

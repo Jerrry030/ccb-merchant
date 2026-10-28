@@ -65,9 +65,9 @@ export class Access {
  async customers(account,method,id,body,query,check){
   if(method==='GET'){
    const limit=Number(query.get('limit')||100),offset=Number(query.get('offset')||0),external=query.get('external_id')||'';
-   if(!Number.isSafeInteger(limit)||limit<1||limit>500||!Number.isSafeInteger(offset)||offset<0)throw new HttpError(400,'invalid_page','Invalid pagination.');
+   if(!Number.isSafeInteger(limit)||limit<1||limit>501||!Number.isSafeInteger(offset)||offset<0)throw new HttpError(400,'invalid_page','Invalid pagination.');
    const total=this.db.prepare("SELECT count(*) AS n FROM access_customers WHERE account_id=? AND(?='' OR external_id=?)").get(account.id,external,external).n;
-   return {customers:this.db.prepare("SELECT * FROM access_customers WHERE account_id=? AND(?='' OR external_id=?) ORDER BY created_at,id LIMIT ? OFFSET ?").all(account.id,external,external,limit,offset).map(customerView),total,limit,offset};
+   return {customers:this.db.prepare("SELECT * FROM access_customers WHERE account_id=? AND(?='' OR external_id=?) AND id>? ORDER BY id LIMIT ? OFFSET ?").all(account.id,external,external,query.get('after')||'',limit,offset).map(customerView),total,limit,offset};
   }
   return await this.mutate(async()=>{
    let row;
@@ -91,11 +91,11 @@ export class Access {
   if(method==='GET'){
    const customer=query.get('customer_id'),resource=query.get('resource_id');if(customer)this.object('access_customers',customer,account.id);if(resource)this.object('access_resources',resource,account.id);
    const limit=Number(query.get('limit')||100),offset=Number(query.get('offset')||0);
-   if(!Number.isSafeInteger(limit)||limit<1||limit>500||!Number.isSafeInteger(offset)||offset<0)throw new HttpError(400,'invalid_page','Invalid pagination.');
+   if(!Number.isSafeInteger(limit)||limit<1||limit>501||!Number.isSafeInteger(offset)||offset<0)throw new HttpError(400,'invalid_page','Invalid pagination.');
    const where=' WHERE account_id=? AND(? IS NULL OR customer_id=?) AND(? IS NULL OR resource_id=?)';
    const args=[account.id,customer,customer,resource,resource];
    const total=this.db.prepare('SELECT count(*) AS n FROM access_grants'+where).get(...args).n;
-   const rows=this.db.prepare('SELECT * FROM access_grants'+where+' ORDER BY id LIMIT ? OFFSET ?').all(...args,limit,offset);
+   const rows=this.db.prepare('SELECT * FROM access_grants'+where+' AND id>? ORDER BY id LIMIT ? OFFSET ?').all(...args,query.get('after')||'',limit,offset);
    for(const g of rows){
     if(!g.upstream_id||g.pending)continue;
     const c=this.object('access_customers',g.customer_id,account.id),r=this.object('access_resources',g.resource_id,account.id);
@@ -239,13 +239,13 @@ export class Access {
  }
  async usage(account,customerId,query,check){
   const c=this.object('access_customers',customerId,account.id);if(!c.upstream_id)throw new HttpError(409,'customer_pending','Customer not ready.');
-  for(const [key,value] of query)if(!['from','to','limit','offset','device_id','grant_id','model','result','session_id','view'].includes(key)||query.getAll(key).length!==1||value.length>150)throw new HttpError(400,'invalid_query','Unsupported usage filter.');
+  for(const [key,value] of query)if(!['from','to','limit','cursor','device_id','grant_id','model','result','session_id','view'].includes(key)||query.getAll(key).length!==1||value.length>1024)throw new HttpError(400,'invalid_query','Unsupported usage filter.');
   const forwarded=new URLSearchParams(query);
   for(const [key,table] of [['device_id','access_devices'],['grant_id','access_grants']]) if(query.has(key)) {
    const object=this.object(table,query.get(key),account.id);if(object.customer_id!==c.id||!object.upstream_id)throw new HttpError(404,'not_found','Filter is outside the customer.');forwarded.set(key,object.upstream_id);
   }
   const data=await this.upstream.request('GET',`/access/v1/customers/${opaqueId(c.upstream_id)}/usage?${forwarded}`);check();
-  return {usage:project(data.usage,schemas.usage),total:data.total,timeline:project(data.timeline,schemas.timeline)||null,sessions:project(data.sessions||[],[schemas.session]),requests:(data.requests||[]).map(row=>{
+  return {limit:data.limit,next_cursor:data.next_cursor,usage:project(data.usage,schemas.usage),total:data.total,timeline:project(data.timeline,schemas.timeline)||null,sessions:project(data.sessions||[],[schemas.session]),requests:(data.requests||[]).map(row=>{
    const v=project(row,schemas.request);
    v.grant_id=this.db.prepare('SELECT id FROM access_grants WHERE upstream_id=? AND account_id=? AND customer_id=?').get(row.grant_id||'',account.id,c.id)?.id||null;
    v.device_id=this.db.prepare('SELECT id FROM access_devices WHERE upstream_id=? AND account_id=? AND customer_id=?').get(row.device_id||'',account.id,c.id)?.id||null;return v;
@@ -261,14 +261,24 @@ export class Access {
   else if(path.endsWith('/usage'))scope='delegation.usage.read';
   else if(path.includes('/devices'))scope=method==='GET'?'delegation.devices.read':'delegation.devices.write';
   else throw new HttpError(404,'not_found','No local API operation at this path.');
-  const allowedQuery=path==='/access/v1/grants'?['customer_id','resource_id','limit','offset']:path==='/access/v1/customers'?['external_id','limit','offset']:path.endsWith('/usage')?['from','to','limit','offset','device_id','grant_id','model','result','session_id','view']:[];
-  for(const [name,value] of url.searchParams)if(!allowedQuery.includes(name)||url.searchParams.getAll(name).length!==1||value.length>150)throw new HttpError(400,'invalid_query','Unsupported query.');
+  const allowedQuery=path==='/access/v1/grants'?['customer_id','resource_id','limit','cursor']:path==='/access/v1/customers'?['external_id','limit','cursor']:path.endsWith('/usage')?['from','to','limit','cursor','device_id','grant_id','model','result','session_id','view']:path.endsWith('/resources')||path.endsWith('/accounts')||path.endsWith('/devices')?['limit','cursor']:[];
+  for(const [name,value] of url.searchParams)if(!allowedQuery.includes(name)||url.searchParams.getAll(name).length!==1||value.length>1024)throw new HttpError(400,'invalid_query','Unsupported query.');
   const p=this.authenticate(req,scope),check=()=>this.authenticate(req,scope);
   this.store.throttle(`access:${p.account.id}`,300,60000);
+  const paged=method==='GET'&&['resources','accounts','customers','grants','devices'].includes(path.split('/').at(-1));
+  const pageLimit=Number(url.searchParams.get('limit')||100);
+  let after='',pageScope='';
+  if(paged){
+   if(!Number.isSafeInteger(pageLimit)||pageLimit<1||pageLimit>500)throw new HttpError(400,'invalid_page','Invalid page size.');
+   const filters=new URLSearchParams(url.searchParams);filters.delete('cursor');filters.delete('limit');filters.sort();pageScope=p.account.id+'|'+path+'|'+filters.toString();
+   if(url.searchParams.has('cursor')){let cursor;try{cursor=JSON.parse(Buffer.from(url.searchParams.get('cursor'),'base64url').toString())}catch{throw new HttpError(400,'invalid_page','Invalid continuation.');}if(cursor.scope!==pageScope||typeof cursor.after!=='string'||cursor.after.length>150)throw new HttpError(400,'invalid_page','Cursor belongs to a different query.');after=cursor.after;}
+   url.searchParams.delete('cursor');url.searchParams.set('after',after);url.searchParams.set('limit',String(pageLimit+1));
+  }
+
   let body={};if(method!=='GET'&&(Number(req.headers['content-length']||0)>0||req.headers['transfer-encoding']))body=await readBody(req,16384);
   check();
   let result;
-  if(path==='/access/v1/me'&&method==='GET')result={protocol_version:5,authority_id:this.upstream.instanceId,user:{...accountView(p.account),can_delegate:true},scopes:JSON.parse(p.key.scopes)};
+  if(path==='/access/v1/me'&&method==='GET')result={authority_id:this.upstream.instanceId,user:{...accountView(p.account),can_delegate:true},scopes:JSON.parse(p.key.scopes)};
   else if(path==='/access/v1/resources'&&method==='GET')result={resources:await this.resources(p.account.id)};
   else if((match=path.match(/^\/access\/v1\/customers(?:\/([A-Za-z0-9_-]+))?$/))&&((!match[1]&&['GET','POST'].includes(method))||(match[1]&&method==='PATCH')))result=await this.customers(p.account,method,match[1],body,url.searchParams,check);
   else if((match=path.match(/^\/access\/v1\/grants(?:\/([A-Za-z0-9_-]+))?$/))&&((!match[1]&&['GET','POST'].includes(method))||(match[1]&&method==='PATCH')))result=await this.grants(p.account,method,match[1],body,url.searchParams,check);
@@ -282,6 +292,12 @@ export class Access {
   else if((match=path.match(/^\/access\/v1\/customers\/([A-Za-z0-9_-]+)\/usage$/))&&method==='GET')result=await this.usage(p.account,match[1],url.searchParams,check);
   else throw new HttpError(404,'not_found','No local API operation.');
   try{check();}catch(error){if(method==='GET')throw error;throw new HttpError(503,'core_outcome_unknown','Permission changed; another valid key must reconcile the outcome.');}
+  if(paged){
+   const field=path.split('/').at(-1),rows=result[field];if(!Array.isArray(rows))throw new HttpError(503,'invalid_core_response','Invalid collection.');
+   const selected=rows.filter(row=>row.id>after).sort((a,b)=>a.id<b.id?-1:a.id>b.id?1:0);
+   const more=selected.length>pageLimit,visible=selected.slice(0,pageLimit);
+   result={...result,[field]:visible,limit:pageLimit,next_cursor:more?Buffer.from(JSON.stringify({scope:pageScope,after:visible.at(-1).id})).toString('base64url'):''};delete result.offset;
+  }
   respond(res,method==='POST'&&['/access/v1/customers','/access/v1/grants'].includes(path)?201:200,result);
  }
  async admin(req,res,url,authorize){

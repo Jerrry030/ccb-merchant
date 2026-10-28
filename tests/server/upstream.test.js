@@ -22,7 +22,7 @@ test('upstream wizard verifies before saving, encrypts credentials and pins iden
 
 test('upstream target policy blocks private, metadata, self, redirects and wrong identity without replacing config',async t=>{
  let wrong=false,redirect=false;
- const f=await fixture(t,{withoutCore:true,onCore:({url,res,json})=>{if(url.pathname==='/access/v1/me'&&redirect){res.writeHead(302,{Location:'http://169.254.169.254/latest/meta-data/'});res.end();return true;}if(url.pathname==='/access/v1/me'&&wrong){json({protocol_version:5,authority_id:'other-authority',user:{id:'other-merchant',name:'Wrong',public_origin:f.config.publicOrigin,status:'active'},scopes:[]});return true;}}});
+ const f=await fixture(t,{withoutCore:true,onCore:({url,res,json})=>{if(url.pathname==='/access/v1/me'&&redirect){res.writeHead(302,{Location:'http://169.254.169.254/latest/meta-data/'});res.end();return true;}if(url.pathname==='/access/v1/me'&&wrong){json({authority_id:'other-authority',user:{id:'other-merchant',name:'Wrong',public_origin:f.config.publicOrigin,status:'active'},scopes:[]});return true;}}});
  const admin=await f.request('POST','/api/setup',{...input,setup_token:f.setupToken}),target=`http://127.0.0.1:${f.fakeCore.address().port}`;
  const body={action:'save',url:target,api_key:upstreamKey,expected_revision:0};
  for(const url of ['http://127.0.0.1:1','http://169.254.169.254','https://169.254.169.254','http://[::1]:1',f.config.publicOrigin,'file:///private','http://user:pass@host.test','https://example.test/path']){
@@ -57,3 +57,34 @@ test('revoked administrator cannot save upstream after a delayed verification',a
 });
 
 
+
+
+test('collection continuation is complete or fails without returning a partial result',async t=>{
+ let fail=false;
+ const f=await fixture(t,{onCore:({url,json})=>{
+  if(url.pathname!=='/access/v1/resources')return false;
+  if(!url.searchParams.get('cursor')){json({resources:[{id:'page-one',name:'One',status:'active'}],limit:500,next_cursor:'next-page'});return true;}
+  if(fail){json({code:'unavailable'},503);return true;}
+  json({resources:[{id:'page-two',name:'Two',status:'active'}],limit:500,next_cursor:''});return true;
+ }});
+ const admin=await f.request('POST','/api/setup',{...input,setup_token:f.setupToken});
+ const complete=await f.request('GET','/api/admin/resources',undefined,admin);
+ assert.equal(complete.status,200,complete.raw);assert.deepEqual(complete.data.resources.map(v=>v.id),['page-one','page-two']);
+ fail=true;const unavailable=await f.request('GET','/api/admin/resources',undefined,admin);
+ assert.equal(unavailable.status,503);assert.equal(unavailable.data.resources,undefined);
+});
+
+
+test('usage continuation does not skip records when the visible limit is smaller than the upstream maximum',async t=>{
+ const f=await fixture(t,{onCore:({url,json})=>{
+  if(!url.pathname.endsWith('/usage'))return false;
+  const limit=Number(url.searchParams.get('limit'));
+  assert.equal(limit,50);
+  const first=url.searchParams.get('cursor')?'next':'first';
+  json({usage:{requests:100},requests:Array.from({length:50},(_,i)=>({id:String((first==='first'?1:51)+i)})),sessions:[],total:100,limit:50,next_cursor:first==='first'?'continue-from-50':''});return true;
+ }});
+ const admin=await f.request('POST','/api/setup',{...input,setup_token:f.setupToken});
+ await f.request('POST',`/api/admin/users/${admin.data.user.id}/provision`,undefined,admin);
+ const page=await f.request('GET','/api/me/usage?limit=50&offset=50',undefined,admin);
+ assert.equal(page.status,200,page.raw);assert.equal(page.data.requests.length,50);assert.equal(page.data.requests[0].id,'51');
+});

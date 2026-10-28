@@ -9,9 +9,9 @@ test('staff and self-service device mutations preserve customer scope, versions,
   if(['preview','approve'].includes(m[2]))return false;
   let d=devices.get(m[1]);if(!d){d={id:'device-'+m[1],name:'Laptop',platform:'Windows/x64',state:'approved',selection_version:0,current_grant_id:null,expires_at:new Date(Date.now()+86400000).toISOString()};devices.set(m[1],d);}
   if(req.method==='GET'&&!m[2]){json({devices:[{...d,token:'LEAK'}]});return true;}
-  if(m[2]!==d.id){json({error:{code:'not_found'}},404);return true;}
-  if(req.method==='PATCH'){if(body.expected_name!==d.name){json({error:{code:'device_stale'}},409);return true;}d.name=body.name;}
-  else if(req.method==='PUT'){if(body.expected_selection_version!==d.selection_version){json({error:{code:'device_stale'}},409);return true;}d.current_grant_id=body.grant_id;d.selection_version++;}
+  if(m[2]!==d.id){json({code:'not_found'},404);return true;}
+  if(req.method==='PATCH'){if(body.expected_name!==d.name){json({code:'device_stale'},409);return true;}d.name=body.name;}
+  else if(req.method==='PUT'){if(body.expected_selection_version!==d.selection_version){json({code:'device_stale'},409);return true;}d.current_grant_id=body.grant_id;d.selection_version++;}
   else if(req.method==='DELETE'){d.state='revoked';json({ok:true});return true;}
   if(lose){lose=false;res.destroy();return true;}json({device:{...d,token:'LEAK'}});return true;
  }});

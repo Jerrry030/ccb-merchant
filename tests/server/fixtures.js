@@ -19,19 +19,21 @@ export async function fixture(t,options={}) {
   const fakeCore=createServer(async(req,res)=>{
     const chunks=[]; for await(const chunk of req) chunks.push(chunk);
     const raw=Buffer.concat(chunks), url=new URL(req.url,'http://localhost');
+    const path=url.pathname;
     let body={}; try {body=JSON.parse(raw.toString());} catch {}
     state.requests.push({method:req.method,path:req.url,headers:req.headers,body,raw});
-    const json=(value,status=200)=>{res.writeHead(status,{'Content-Type':'application/json'});res.end(JSON.stringify(value));};
+    const json=(value,status=200)=>{
+     if(req.method==='GET'&&status<300&&(/^\/access\/v1\/(resources|accounts|customers|grants|keys)$/.test(path)||/^\/access\/v1\/customers\/[^/]+\/(accounts|devices|usage)$/.test(path))){value={limit:500,next_cursor:'',...value};}
+     res.writeHead(status,{'Content-Type':'application/json'});res.end(JSON.stringify(value));};
     if(await options.onCore?.({req,res,url,body,state,json})) return;
     if(url.pathname.startsWith('/access/') && req.headers.authorization!==`Bearer ${upstreamKey}`) {json({error:{message:'bad secret'}},401);return;}
-    const path=url.pathname;
-    if(path==='/access/v1/me') {json({protocol_version:5,authority_id:'fixture-authority',user:{id:'merchant-1',name:'Test merchant',slug:'test',status:'active',api_key:'LEAK'},scopes:['resources.read','customers.read','customers.write','delegation.devices.read','delegation.devices.write','delegation.usage.read','runtime','delegation.keys.manage','delegation.grants.read','delegation.grants.write'],credentials:'LEAK'});return;}
+    if(path==='/access/v1/me') {json({authority_id:'fixture-authority',user:{id:'merchant-1',name:'Test merchant',slug:'test',status:'active',api_key:'LEAK'},scopes:['resources.read','customers.read','customers.write','delegation.devices.read','delegation.devices.write','delegation.usage.read','runtime','delegation.keys.manage','delegation.grants.read','delegation.grants.write'],credentials:'LEAK'});return;}
     if(path==='/access/v1/resources') {json({resources:[{id:'resource-1',name:'Code resource',status:'active',kind:'subscription',surfaces:['code'],expires_at:null,revision:1,available:true,plans:[],stock:[{platform:'MacOS/arm64',label:'macOS',available:5}],delegated:0,account_id:'LEAK',email:'LEAK',proxy_password:'LEAK'}]});return;}
     if(path==='/access/v1/accounts'){json({accounts:state.inventory});return;}
     if(path==='/access/v1/customers') {
       if(req.method==='GET') {json({customers:state.customers.filter(c=>!url.searchParams.has('external_id')||c.external_id===url.searchParams.get('external_id'))});return;}
       let customer=state.customers.find(c=>c.external_id===body.external_id);
-      if(customer && customer.display_name!==body.display_name) {json({error:{code:'conflict'}},409);return;}
+      if(customer && customer.display_name!==body.display_name) {json({code:'conflict'},409);return;}
       if(!customer) {customer={id:`customer-${randomUUID()}`,external_id:body.external_id,display_name:body.display_name,status:'active',revision:1,created_at:now,core_user_id:'LEAK'};state.customers.push(customer);}
       json({customer},201);return;
     }
@@ -48,7 +50,7 @@ export async function fixture(t,options={}) {
       const receipt={order_id:id,customer_id:body.customer_id,resource_id:body.resource_id,duration_days:body.duration_days,platform:body.platform||'',account_lease_id:body.account_lease_id||'',renew_grant_id:body.renew_grant_id||'',status:'cancelled',expires_at:null,created_at:new Date().toISOString()};
       if(body.action==='fulfill') {
         const owned=body.account_lease_id?state.inventory.find(a=>a.id===body.account_lease_id):null;
-        if(body.account_lease_id&&(!owned||owned.assigned&&owned.grant_id!==body.renew_grant_id)){json({error:{code:'account_out_of_stock'}},409);return;}
+        if(body.account_lease_id&&(!owned||owned.assigned&&owned.grant_id!==body.renew_grant_id)){json({code:'account_out_of_stock'},409);return;}
         let grant=body.account_lease_id?(body.renew_grant_id?state.grants.find(g=>g.id===body.renew_grant_id):undefined):state.grants.find(g=>g.customer_id===body.customer_id&&g.resource_id===body.resource_id);
         const start=grant?.status==='active'&&grant.expires_at?Math.max(Date.now(),Date.parse(grant.expires_at)):Date.now();
         if(!grant){grant={id:`grant-${randomUUID()}`,customer_id:body.customer_id,resource_id:body.resource_id,name:'Code entitlement',surfaces:['code'],revision:0};state.grants.push(grant);}
@@ -66,13 +68,13 @@ export async function fixture(t,options={}) {
       if(req.method==='GET') {json({grants:state.grants.filter(g=>!url.searchParams.has('customer_id')||g.customer_id===url.searchParams.get('customer_id'))});return;}
       const owned=body.account_lease_id?state.inventory.find(a=>a.id===body.account_lease_id):null;
       if(body.account_lease_id) {
-        if(!owned){json({error:{code:'account_out_of_stock'}},409);return;}
+        if(!owned){json({code:'account_out_of_stock'},409);return;}
         if(owned.revision!==body.expected_account_revision){
           const prior=state.grants.find(g=>g.id===owned.grant_id);
           if(owned.revision===body.expected_account_revision+1&&owned.assigned&&prior?.status==='active'&&prior.customer_id===body.customer_id&&Date.parse(prior.expires_at)===Date.parse(body.expires_at)){json({grant:prior});return;}
-          json({error:{code:'conflict'}},409);return;
+          json({code:'conflict'},409);return;
         }
-        if(owned.assigned){json({error:{code:'account_out_of_stock'}},409);return;}
+        if(owned.assigned){json({code:'account_out_of_stock'},409);return;}
       }
       let grant=owned?null:state.grants.find(g=>g.customer_id===body.customer_id&&g.resource_id===body.resource_id);
       if(!grant) {grant={id:`grant-${randomUUID()}`,customer_id:body.customer_id,resource_id:body.resource_id,account_lease_id:body.account_lease_id||'',name:'Code entitlement',status:'active',surfaces:['code'],expires_at:body.expires_at??null,revision:1,updated_at:now,token:'LEAK'};state.grants.push(grant);}
@@ -85,7 +87,7 @@ export async function fixture(t,options={}) {
       if(!grant) {json({error:{}},404);return;}
       if(grant.revision!==body.expected_revision) {json({error:{message:'SQL TOKEN LEAK'}},409);return;}
       const owned=state.inventory.find(a=>a.grant_id===grant.id);
-      if(owned&&body.expires_at&&Date.parse(body.expires_at)>Date.parse(owned.expires_at)){json({error:{code:'invalid_input'}},400);return;}
+      if(owned&&body.expires_at&&Date.parse(body.expires_at)>Date.parse(owned.expires_at)){json({code:'invalid_input'},400);return;}
       Object.assign(grant,{...body,revision:grant.revision+1});
       if(owned)Object.assign(owned,{assigned:grant.status==='active',grant_revision:grant.revision,customer_expires_at:grant.expires_at});
       const card=state.accounts.find(a=>a.id===grant.id);if(card){card.expires_at=grant.expires_at;if(grant.status==='revoked')card.state='expired';}
@@ -107,7 +109,7 @@ export async function fixture(t,options={}) {
     if(path==='/bridge/v1/device/start') {json({code:'ABC123',verification_path:'/connect',expires_at:now,interval:3},201);return;}
     if(path==='/bridge/v1/accounts') {json({accounts:[{id:'grant-1',name:'Code',state:'available',plan:'max',shared:true,quota:{status:'available',windows:[{key:'five_hour',label:'5 hours',used_percent:20,secret:'LEAK'}]},email:'LEAK'}],current_grant_id:'grant-1',selection_version:1});return;}
     if(path.startsWith('/bridge/v1/')) {json({ok:true});return;}
-    json({error:{code:'not_found'}},404);
+    json({code:'not_found'},404);
   });
   fakeCore.listen(0,'127.0.0.1'); await once(fakeCore,'listening');
   const config=loadConfig({UPSTREAM_URL:`http://127.0.0.1:${fakeCore.address().port}`,UPSTREAM_API_KEY:upstreamKey,UPSTREAM_TIMEOUT_MS:'500',...options.env},root);

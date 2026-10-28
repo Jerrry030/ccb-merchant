@@ -77,7 +77,7 @@ export function createMerchant(config, options={}) {
       const data=await core.request('GET','/access/v1/me');
       const user=project(data.user,schemas.user);
       if(!user?.id || !Array.isArray(data.scopes)) throw new Error('Invalid core metadata');
-      return {configured:true,available:user.status==='active',protocol_version:data.protocol_version,user,scopes:data.scopes.filter(scope=>scopes.includes(scope))};
+      return {configured:true,available:user.status==='active',user,scopes:data.scopes.filter(scope=>scopes.includes(scope))};
     } catch(error) { return {configured:true,available:false,error:error instanceof HttpError?error.code:'invalid_core_response'}; }
   }
   async function staticFile(req,res,path) {

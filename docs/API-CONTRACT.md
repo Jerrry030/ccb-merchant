@@ -1,11 +1,11 @@
 # 商户公开接口契约
 
-本文仅描述商户对接所需的公开行为，不描述提供方内部实现或运维。当前对接版本为 **v5**。未知字段不得直接传播到浏览器或下游调用方。
+本文仅描述商户对接所需的公开行为，不描述提供方内部实现或运维。只维护当前接口，不通过历史协议代号保留兼容分支。未知字段不得直接传播到浏览器或下游调用方。
 
 ## 身份与认证
 
 - 商户以本站专用的服务端密钥调用 `/access/v1`，使用 `Authorization: Bearer <key>`。
-- `GET /access/v1/me` 返回 `protocol_version`、`authority_id`、`user` 和 `scopes`；客户端核对版本、身份、状态及实际需要的权限。
+- `GET /access/v1/me` 返回 `authority_id`、`user` 和 `scopes`；客户端核对直接提供方身份、状态及实际需要的权限。
 - 资源读取使用 `resources.read`，客户管理使用 `customers.read` / `customers.write`。
 - 授权、设备、用量权限分别使用 `delegation.grants.*`、`delegation.devices.*`、`delegation.usage.read`；运行请求需要 `runtime`。
 - 密钥管理需要单独授权，不应默认赋予普通接入账号。访问令牌不得放入 URL、日志或浏览器持久化存储。
@@ -27,7 +27,7 @@
 | 撤销设备 | `DELETE /access/v1/customers/:id/devices/:device_id` |
 | 查询参考用量 | `GET /access/v1/customers/:id/usage` |
 
-客户创建使用稳定的 `external_id` 和 `display_name`。授权更新携带所读取的 `expected_revision`。人工账号交付携带所选 `account_lease_id` 与 `expected_account_revision`，有效期不得超过资源允许的期限。
+上游创建客户/手工交付时发送稳定的 `Idempotency-Key`，请求重放不能重新执行业务；本站服务保留并核对自己的原始意图。客户创建使用稳定的 `external_id` 和 `display_name`。授权更新携带所读取的 `expected_revision`。人工账号交付携带所选 `account_lease_id` 与 `expected_account_revision`，有效期不得超过资源允许的期限。
 
 分页、筛选和可选能力以具体接口返回及当前实现为准。参考用量和费用不是商户钱包扣款。客户端只使用已声明字段，不依赖响应中的调试字段、额外身份信息或提供方内部标识。
 
@@ -66,7 +66,7 @@
 
 ## 变更边界
 
-对外契约变更必须同时更新调用方和回归测试，不保留重复入口或只为旧调用方式存在的转发兼容层。仅移除内部文档，不代表本次修改了上述运行行为。
+对外契约变更必须同时更新调用方和回归测试，不保留重复入口或只为旧调用方式存在的转发兼容层。本站上游客户端已同步当前身份、错误详情、创建幂等头和游标分页。上游集合中途失败或超过读取预算会显式报错，不返回伪完整结果。
 
 
 ## 设备管理与用量筛选
@@ -78,3 +78,9 @@
 对直接提供方和 API 客户，设备修改使用公开的 `/access/v1/customers/:id/devices/:device_id` 与 `/selection`；设备、客户、授权 ID 逐跳映射。设备选择的嵌套响应同样建立映射，不再依赖额外的首次状态轮询。本站 API 客户的设备名称留在本站，不将经营资料传播给更上游。Desktop 仍未开放。
 
 本站 `/api/me/usage` 与管理员 `/api/admin/users/:id/usage` 支持时间、分页、`device_id/grant_id/model/result/session_id/view`。`result` 为 `success/error`，`view` 为 `requests/sessions`。提供方返回的 `timeline` 必须是完整筛选范围的聚合，不能使用本页数据替代；缺少聚合时页面明确显示不可用。图表展示返回的实际范围和 UTC 分桶，未知 Token 与已知用量区分。调用下级接口时筛选 ID 同样先校验归属再映射，不泄露更上游 ID。
+
+## 当前分页与错误
+
+核心提供方集合使用 limit/cursor，响应带 next_cursor，不接受 offset。本站上游客户端跟随游标，保持用量的实际页大小，并在自己的界面接口需要时转换本地分页；上游业务错误按顶层 code 解析，不保留嵌套错误的历史解析分支。本站 `/access` 拒绝响应同样使用 problem+json 和请求编号，本站浏览器控制台是独立接口。
+
+本站对外 `/access` 公开的是本地能力子集：资源、客户、共享组授权、履约、客户账号、设备和用量；不能把 Core 的库存或子密钥管理能力视为本地也存在。服务密钥永远留在服务端，身份和资源 ID 每跳校验并映射。

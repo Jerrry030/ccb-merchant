@@ -199,7 +199,7 @@ test('usage IDs preserve int64 decimal identity and cache duration facts, reject
   const f=await fixture(t,{onCore:async({url,res})=>{
     if(url.pathname.endsWith('/usage')) {
       res.writeHead(200,{'Content-Type':'application/json'});
-      res.end(`{"usage":{"requests":1,"cost_usd":null},"requests":[{"id":${rawId},"time":"${now}","usage":{"input_tokens":1,"cache_creation_5m":13,"cache_creation_1h":17,"raw":"LEAK"},"cost_usd":null}],"total":1}`);
+      res.end(`{"usage":{"requests":1,"cost_usd":null},"requests":[{"id":${rawId},"time":"${now}","usage":{"input_tokens":1,"cache_creation_5m":13,"cache_creation_1h":17,"raw":"LEAK"},"cost_usd":null}],"total":1,"limit":200,"next_cursor":""}`);
       return true;
     }
   }});

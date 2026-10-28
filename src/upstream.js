@@ -1,4 +1,4 @@
-import { randomUUID, randomBytes, createCipheriv, createDecipheriv } from 'node:crypto';
+import { createHash, randomUUID, randomBytes, createCipheriv, createDecipheriv } from 'node:crypto';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { upstreamFetch, readUpstreamJSON } from './upstream-network.js';
@@ -8,11 +8,11 @@ import { HttpError, fields } from './security.js';
 const S = 'string', N = 'number', B = 'boolean';
 const tokenUsage = { input_tokens:N, output_tokens:N, cache_read_input_tokens:N, cache_creation_input_tokens:N, cache_creation_5m:N, cache_creation_1h:N };
 export const schemas = {
-  heldAccount: {grant_revision:N,customer_expires_at:S,id:S,resource_id:S,platform:S,grant_id:S,customer_id:S,assigned:B,status:S,expires_at:S,revision:N,created_at:S,device_limit:N,details:{id:S,name:S,plan:S,state:S,device_name:S,platform:S,expires_at:S,device_limit:N,surfaces:[S],quota:{status:S,updated_at:S,windows:[{key:S,label:S,used_percent:N,resets_at:S,reset:B}]}}},
+  heldAccount: {allow_delegation:B,grant_revision:N,customer_expires_at:S,id:S,resource_id:S,platform:S,grant_id:S,customer_id:S,assigned:B,status:S,expires_at:S,revision:N,created_at:S,device_limit:N,details:{id:S,name:S,plan:S,state:S,device_name:S,platform:S,expires_at:S,device_limit:N,surfaces:[S],quota:{status:S,updated_at:S,windows:[{key:S,label:S,used_percent:N,resets_at:S,reset:B}]}}},
 
   user: { id:S, username:S, name:S, status:S, can_delegate:B, revision:N, created_at:S },
   resource: { allocatable:B,id:S, name:S, status:S, kind:S, surfaces:[S], expires_at:S, revision:N, available:B, plans:[{id:S,duration_days:N,amount_minor:N,currency:S,status:S,revision:N}], stock:[{platform:S,label:S,available:N}] },
-  account: { device_limit:N,platform:S,expires_at:S,id:S, name:S, plan:S, state:S, device_name:S, surfaces:[S], quota:{status:S,updated_at:S,windows:[{key:S,label:S,used_percent:N,resets_at:S,reset:B}]} },
+  account: { grant_id:S,account_lease_id:S,device_limit:N,platform:S,expires_at:S,id:S, name:S, plan:S, state:S, device_name:S, surfaces:[S], quota:{status:S,updated_at:S,windows:[{key:S,label:S,used_percent:N,resets_at:S,reset:B}]} },
   customer: { id:S, external_id:S, display_name:S, status:S, revision:N, created_at:S },
   grant: { account_lease_id:S,id:S, customer_id:S, resource_id:S, name:S, status:S, surfaces:[S], expires_at:S, revision:N, updated_at:S, pending:B },
   device: { id:S, name:S, platform:S, state:S, created_at:S, expires_at:S, last_seen:S, selection_version:N, current_grant_id:S, account_name:S },
@@ -72,8 +72,8 @@ export class Upstream {
   const response=await upstreamFetch(candidate,`${candidate.upstreamUrl}/access/v1/me`,{headers:{Authorization:`Bearer ${candidate.upstreamKey}`,Accept:'application/json'},signal:signal||AbortSignal.timeout(candidate.upstreamTimeoutMs)});
   if(!response.ok){await response.body?.cancel();throw new HttpError(503,'upstream_verification_failed','Upstream could not verify this merchant identity.');}
   const raw=await readUpstreamJSON(response);
-  const data={protocol_version:raw.protocol_version,authority_id:raw.authority_id,user:project(raw.user,schemas.user),scopes:Array.isArray(raw.scopes)?raw.scopes.filter(v=>scopes.includes(v)):[]};
-  if(data.protocol_version!==5||typeof data.authority_id!=='string'||!data.authority_id||data.authority_id.length>150||!Array.isArray(raw.scopes)||!data.user?.id||data.user.status!=='active')throw new HttpError(409,'upstream_protocol_mismatch','A compatible active direct account connection is required.');
+  const data={authority_id:raw.authority_id,user:project(raw.user,schemas.user),scopes:Array.isArray(raw.scopes)?raw.scopes.filter(v=>scopes.includes(v)):[]};
+  if(typeof data.authority_id!=='string'||!data.authority_id||data.authority_id.length>150||!Array.isArray(raw.scopes)||!data.user?.id||data.user.status!=='active')throw new HttpError(409,'upstream_protocol_mismatch','A compatible active direct account connection is required.');
   const pinned=this.store.db.prepare("SELECT value FROM settings WHERE key='upstream_binding'").get();
   if(pinned){const binding=JSON.parse(pinned.value);if(binding.authority_id!==data.authority_id||binding.user_id!==data.user.id)throw new HttpError(409,'upstream_identity_mismatch','Existing data is bound to another merchant or core authority.');}
   if(bind){
@@ -125,16 +125,42 @@ export class Upstream {
     if(!local||local.status!=='active'||local.expires_at&&Date.parse(local.expires_at)<=Date.now())throw new HttpError(409,'supply_unavailable','Local resource authorization is unavailable.');
    }
    const headers={Authorization:`Bearer ${config.upstreamKey}`,Accept:'application/json',...(body?{'Content-Type':'application/json'}:{})};
+   if(method==='POST'&&['/access/v1/customers','/access/v1/grants','/access/v1/keys'].includes(path)) {
+    const canonical=JSON.stringify(body,Object.keys(body).sort());
+    headers['Idempotency-Key']=createHash('sha256').update(method+' '+path+' '+canonical).digest('hex');
+   }
+   const requested=new URL(path,'http://internal.invalid');
+   const usageRoute=method==='GET'&&/^\/access\/v1\/customers\/[^/]+\/usage$/.test(requested.pathname);
+   const collectionRoute=method==='GET'&&(usageRoute||/^\/access\/v1\/(resources|accounts|customers|grants|keys)$/.test(requested.pathname)||/^\/access\/v1\/customers\/[^/]+\/(accounts|devices)$/.test(requested.pathname));
+   const offset=Number(requested.searchParams.get('offset')||0),limit=requested.searchParams.has('limit')?Number(requested.searchParams.get('limit')):null;
+   if(collectionRoute){requested.searchParams.delete('offset');requested.searchParams.set('limit',usageRoute?String(limit??50):'500');path=requested.pathname+requested.search;}
    const response=await upstreamFetch(config,`${config.upstreamUrl}${path}`,{method,headers,body:body?JSON.stringify(body):undefined,signal:combined});
    if(!response.ok){
     const safeErrors={device_stale:'设备已变更，请刷新核对后重新操作。',grant_unavailable:'该账号授权不能用于此设备。',account_device_limit:'每个账号最多绑定 1 台设备，请先在我的设备中撤销旧设备。',account_out_of_stock:'没有符合平台和期限的账号，请联系平台管理员分配或延长有效期。'};
-    let code;try{const failure=await readUpstreamJSON(response);code=failure?.error?.code||failure?.code;}catch{}
+    let code;try{const failure=await readUpstreamJSON(response);code=failure?.code;}catch{}
     if(response.status===409&&Object.hasOwn(safeErrors,code))throw new HttpError(409,code,safeErrors[code]);
     if(![400,401,403,404,409,429].includes(response.status))throw new HttpError(503,method==='GET'?'core_unavailable':'core_outcome_unknown',method==='GET'?'Upstream unavailable.':'Write result is unknown. Read/reconcile before another change.');
     const status=response.status;
     throw new HttpError(status===401?503:status,status===409?'core_conflict':'core_rejected','Upstream rejected the operation. No automatic retry was made.');
    }
    const data=await readUpstreamJSON(response);
+   if(collectionRoute){
+    const field=usageRoute?(requested.searchParams.get('view')==='sessions'?'sessions':'requests'):requested.pathname.split('/').at(-1), rows=data[field];
+    if(!Array.isArray(rows)||typeof data.next_cursor!=='string')throw new HttpError(503,'invalid_core_response','Missing collection pagination.');
+    const seen=new Set();let cursor=data.next_cursor;
+    while(cursor&&(!usageRoute||rows.length<offset+(limit??50))){
+     if(seen.has(cursor)||rows.length>=50000)throw new HttpError(503,'collection_budget_exceeded','Collection continuation exceeds this operation budget. No partial result was returned.');seen.add(cursor);
+     requested.searchParams.set('cursor',cursor);
+     const next=await upstreamFetch(config,`${config.upstreamUrl}${requested.pathname}${requested.search}`,{method:'GET',headers,signal:combined});
+     if(!next.ok){await next.body?.cancel();throw new HttpError(503,'core_unavailable','Could not complete collection retrieval.');}
+     const page=await readUpstreamJSON(next);
+     if(!Array.isArray(page[field])||typeof page.next_cursor!=='string')throw new HttpError(503,'invalid_core_response','Invalid collection continuation.');
+     rows.push(...page[field]);cursor=page.next_cursor;
+    }
+    data[field]=usageRoute?rows.slice(offset,offset+(limit??50)):limit===null?rows:rows.slice(offset,offset+limit);data.next_cursor=cursor;
+    data.total??=rows.length;
+    if(limit!==null){data.limit=limit;data.offset=offset;}
+   }
    return data;
   }catch(error){
    if(error instanceof HttpError)throw error;throw new HttpError(503,method==='GET'?'core_unavailable':'core_outcome_unknown',method==='GET'?'Upstream unavailable.':'Write result is unknown; request was not retried.');
