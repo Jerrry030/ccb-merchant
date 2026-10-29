@@ -15,7 +15,7 @@ export async function fixture(t,options={}) {
   const root=await mkdtemp(join(tmpdir(),'ccb-merchant-test-'));
   await mkdir(join(root,'public'));
   const state={fulfillments:new Map(),customers:[],grants:[],accounts:[],requests:[],keys:[],runtimeCancelled:0};
-  state.inventory=options.inventory??Array.from({length:5},(_,i)=>({id:`owned-${i+1}`,resource_id:'resource-1',platform:'MacOS/arm64',assigned:false,status:'active',expires_at:new Date(Date.now()+365*86400000).toISOString(),revision:1,device_limit:1,details:{name:`Account ${i+1}`,device_name:'',state:'available',device_limit:1},token:'LEAK'}));
+  state.inventory=options.inventory??Array.from({length:5},(_,i)=>({id:`owned-${i+1}`,resource_id:'resource-1',platform:'MacOS/arm64',assigned:false,allow_delegation:true,status:'active',expires_at:new Date(Date.now()+365*86400000).toISOString(),revision:1,device_limit:1,details:{name:`Account ${i+1}`,device_name:'',state:'available',device_limit:1},token:'LEAK'}));
   const fakeCore=createServer(async(req,res)=>{
     const chunks=[]; for await(const chunk of req) chunks.push(chunk);
     const raw=Buffer.concat(chunks), url=new URL(req.url,'http://localhost');
@@ -56,7 +56,7 @@ export async function fixture(t,options={}) {
         if(!grant){grant={id:`grant-${randomUUID()}`,customer_id:body.customer_id,resource_id:body.resource_id,name:'Code entitlement',surfaces:['code'],revision:0};state.grants.push(grant);}
         Object.assign(grant,{status:'active',expires_at:new Date(start+body.duration_days*86400000).toISOString(),revision:grant.revision+1,updated_at:new Date().toISOString()});
         if(owned){owned.assigned=true;owned.grant_id=grant.id;owned.customer_id=body.customer_id;}
-        if(body.platform && !state.accounts.some(a=>a.id===grant.id)) state.accounts.push({id:grant.id,customer_id:body.customer_id,platform:body.platform,expires_at:grant.expires_at,device_limit:1,name:'buyer@example.test',plan:'Claude Pro',state:'available',device_name:'',surfaces:['code'],quota:{status:'known',updated_at:now,windows:[{key:'five_hour',label:'5 hours',used_percent:0,resets_at:new Date(Date.now()+3600000).toISOString()},{key:'seven_day',label:'7 days',used_percent:35,resets_at:new Date(Date.now()+6*86400000).toISOString()}]}});
+        if(body.platform && !state.accounts.some(a=>a.id===grant.id)) state.accounts.push({id:grant.id,grant_id:grant.id,account_lease_id:body.account_lease_id,customer_id:body.customer_id,platform:body.platform,expires_at:grant.expires_at,device_limit:1,name:'buyer@example.test',plan:'Claude Pro',state:'available',device_name:'',surfaces:['code'],quota:{status:'known',updated_at:now,windows:[{key:'five_hour',label:'5 hours',used_percent:0,resets_at:new Date(Date.now()+3600000).toISOString()},{key:'seven_day',label:'7 days',used_percent:35,resets_at:new Date(Date.now()+6*86400000).toISOString()}]}});
         Object.assign(receipt,{status:'fulfilled',grant_id:grant.id,expires_at:grant.expires_at});
       }
       state.fulfillments.set(id,receipt);
@@ -78,7 +78,7 @@ export async function fixture(t,options={}) {
       }
       let grant=owned?null:state.grants.find(g=>g.customer_id===body.customer_id&&g.resource_id===body.resource_id);
       if(!grant) {grant={id:`grant-${randomUUID()}`,customer_id:body.customer_id,resource_id:body.resource_id,account_lease_id:body.account_lease_id||'',name:'Code entitlement',status:'active',surfaces:['code'],expires_at:body.expires_at??null,revision:1,updated_at:now,token:'LEAK'};state.grants.push(grant);}
-      if(owned){Object.assign(owned,{assigned:true,grant_id:grant.id,customer_id:body.customer_id,revision:owned.revision+1,grant_revision:grant.revision,customer_expires_at:grant.expires_at});state.accounts.push({...owned.details,id:grant.id,customer_id:body.customer_id,platform:owned.platform,expires_at:grant.expires_at,surfaces:['code'],device_limit:1,quota:{status:'unknown',windows:[]}});}
+      if(owned){Object.assign(owned,{assigned:true,grant_id:grant.id,customer_id:body.customer_id,revision:owned.revision+1,grant_revision:grant.revision,customer_expires_at:grant.expires_at});state.accounts.push({...owned.details,id:grant.id,grant_id:grant.id,account_lease_id:owned.id,customer_id:body.customer_id,platform:owned.platform,expires_at:grant.expires_at,surfaces:['code'],device_limit:1,quota:{status:'unknown',windows:[]}});}
       if(await options.afterGrant?.({req,res,body,state,grant,json}))return;
       json({grant},201);return;
     }

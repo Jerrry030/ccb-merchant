@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { inventoryStatus } from '../../public/inventory-status.js';
 
 const now = Date.parse('2026-10-28T12:00:00Z');
-const account = { id:'current', status:'active', assigned:false, expires_at:'2026-11-28T12:00:00Z', details:{name:'same@example.test',state:'available'} };
+const account = { id:'current', status:'active', assigned:false,allow_delegation:true, expires_at:'2026-11-28T12:00:00Z', details:{name:'same@example.test',state:'available'} };
 
 for (const {name, values, history, active, assignable, label} of [
   {name:'available lease', values:{}, history:false, active:true, assignable:true, label:'可分配'},

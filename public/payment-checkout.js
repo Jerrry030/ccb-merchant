@@ -1,5 +1,8 @@
-export function paymentCheckout(payment,ui) {
-  const {el,notice,errorNotice,api}=ui;
+import { el } from './dom.js';
+import { api } from './api.js';
+import { notice, errorNotice } from './ui.js';
+
+export function paymentCheckout(payment,{onSettled}={}) {
   const order=payment.order;
   if(!order?.id||!/^[A-Za-z0-9_-]{1,100}$/.test(order.id))throw new Error('支付订单信息不完整。');
   const status=el('div',{'aria-live':'polite'},notice('支付订单已创建，尚不代表已付款','订单 '+order.id+'。付款后由服务器确认结果。'));
@@ -29,7 +32,7 @@ export function paymentCheckout(payment,ui) {
   function update(value) {
     if(['paid','expired','failed'].includes(value?.status)) {
       clearTimeout(timer);details.replaceChildren();
-      if(lastStatus!==value.status){lastStatus=value.status;Promise.resolve(ui.onSettled?.()).catch(()=>{});}
+      if(lastStatus!==value.status){lastStatus=value.status;Promise.resolve(onSettled?.()).catch(()=>{});}
       for(const link of actions.querySelectorAll('a'))link.remove();
       status.replaceChildren(notice(value.status==='paid'?'支付已确认':value.status==='expired'?'订单已关闭':'支付未成功',value.status==='paid'?'服务器已核对支付并处理入账。套餐交付状态请在「我的订单」查看。':'状态来自支付平台查单；如已扣款，请先联系管理员核对。',value.status==='paid'?'success':'warn'));
       return true;

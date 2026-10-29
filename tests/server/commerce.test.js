@@ -111,7 +111,7 @@ test('background customer synchronization restores a suspended site after restar
  let offline=false;
  const {f,admin,member,user,plan}=await shop(t,{onCore:({req,url,json})=>{if(offline&&req.method==='PATCH'&&url.pathname.startsWith('/access/v1/customers/')){json({error:{}},503);return true;}}});
  const purchase=await f.request('POST','/api/me/rentals',{plan_id:plan.id,expected_revision:1,payment_method:'wallet',platform:'MacOS/arm64',request_id:randomUUID()},member);assert.equal(purchase.data.rental.status,'fulfilled');
- offline=true;const disabled=await f.request('PATCH',`/api/admin/users/${user.id}`,{status:'disabled'},admin);assert.equal(disabled.status,503);
+ offline=true;const disabled=await f.request('PATCH',`/api/admin/users/${user.id}`,{...({status:'disabled'}),expected_revision:f.store.db.prepare('SELECT revision FROM users WHERE id=?').get((`/api/admin/users/${user.id}`).split('/').at(-1))?.revision},admin);assert.equal(disabled.status,503);
  assert.ok(f.store.db.prepare('SELECT core_pending FROM users WHERE id=?').get(user.id).core_pending);
  assert.equal((await f.request('GET','/bridge/v1/models',undefined,{native:true})).status,503);
  await f.restart();offline=false;f.store.db.prepare('UPDATE users SET next_sync_at=0 WHERE id=?').run(user.id);await f.reconciler.run();

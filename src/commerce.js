@@ -54,7 +54,7 @@ export class Commerce {
   if(!Array.isArray(data.accounts))throw new HttpError(503,'invalid_core_response','Allocated-account inventory is unavailable.');
   let renewal;
   if(renewGrantID){if(!customerID)throw new HttpError(409,'customer_not_ready','No customer account to renew.');const list=await this.core.request('GET',`/access/v1/grants?customer_id=${opaqueId(customerID)}`);renewal=list.grants?.find(g=>g.id===renewGrantID&&g.customer_id===customerID&&g.status==='active'&&Number.isFinite(Date.parse(g.expires_at)));if(!renewal)throw new HttpError(404,'grant_not_found','Renewal account not found.');}
-  const held=new Set(this.store.db.prepare("SELECT account_lease_id FROM rentals WHERE status IN ('awaiting_payment','queued','review','refund_pending')").all().map(v=>v.account_lease_id));
+  const held=new Set(this.store.accountHolds().keys());
   let plans=this.store.db.prepare(admin?'SELECT * FROM plans ORDER BY created_at DESC':"SELECT * FROM plans WHERE status='active' ORDER BY created_at DESC").all();
   if(renewal)plans=plans.filter(p=>p.resource_id===renewal.resource_id);
   return plans.map(plan=>{
@@ -90,7 +90,7 @@ export class Commerce {
    const grant=renewGrant?existing.grants.find(g=>g.id===renewGrant&&g.customer_id===user.core_customer_id&&g.resource_id===plan.resource_id):null;
    if(renewGrant&&(!grant||grant.status!=='active'||!Number.isFinite(Date.parse(grant.expires_at))))throw new HttpError(409,'renewal_unavailable','Select one of your active purchased accounts to renew.');
    const now=Date.now(),start=grant?Math.max(now,Date.parse(grant.expires_at)):now,end=start+plan.duration_days*86400000;
-   const holds=new Set(this.store.db.prepare("SELECT account_lease_id FROM rentals WHERE status IN ('awaiting_payment','queued','review','refund_pending')").all().map(v=>v.account_lease_id));
+   const holds=new Set(this.store.accountHolds().keys());
    const account=owned.accounts.find(a=>a.resource_id===plan.resource_id&&a.platform===platform&&a.status==='active'&&Number.isFinite(Date.parse(a.expires_at))&&Date.parse(a.expires_at)>=end&&!holds.has(a.id)&&(renewGrant?a.grant_id===renewGrant:a.assigned===false));
    if(!r||r.kind!=='subscription'||r.status!=='active'||!r.surfaces?.includes('code')||!account)throw new HttpError(409,'supply_unavailable','No allocated account can cover this platform and term. No payment was started.');
    return this.store.transaction(()=>{

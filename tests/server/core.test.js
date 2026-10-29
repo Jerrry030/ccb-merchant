@@ -51,7 +51,7 @@ test('provisioning rechecks administrator identity after awaited core operations
     const pending=f.request('POST',`/api/admin/users/${id}/provision`,undefined,admin);
     await waiting;
     try {
-      assert.equal((await f.request('PATCH',`/api/admin/users/${admin.data.user.id}`,{role:'member'},second)).status,200);
+      assert.equal((await f.request('PATCH',`/api/admin/users/${admin.data.user.id}`,{...({role:'member'}),expected_revision:f.store.db.prepare('SELECT revision FROM users WHERE id=?').get((`/api/admin/users/${admin.data.user.id}`).split('/').at(-1))?.revision},second)).status,200);
     } finally {release();}
     const result=await pending;
     assert.equal(result.status,401);
@@ -66,7 +66,7 @@ test('provisioning rechecks administrator identity after awaited core operations
 test('provisioning is immutable/idempotent; core resources, usage, grants are filtered',async t=>{
   const f=await fixture(t), admin=await f.request('POST','/api/setup',{...adminInput,setup_token:f.setupToken});
   const member=await f.request('POST','/api/admin/users',memberInput,admin), id=member.data.user.id;
-  assert.equal((await f.request('PATCH',`/api/admin/users/${id}`,{core_customer_id:'foreign'},admin)).status,400);
+  assert.equal((await f.request('PATCH',`/api/admin/users/${id}`,{...({core_customer_id:'foreign'}),expected_revision:f.store.db.prepare('SELECT revision FROM users WHERE id=?').get((`/api/admin/users/${id}`).split('/').at(-1))?.revision},admin)).status,400);
   const provision=await f.request('POST',`/api/admin/users/${id}/provision`,undefined,admin);
   assert.equal(provision.status,200);assert.equal(provision.data.customer.external_id,id);assert.equal(provision.raw.includes('LEAK'),false);
   const again=await f.request('POST',`/api/admin/users/${id}/provision`,undefined,admin);
@@ -125,7 +125,7 @@ test('suspension immediately revokes local sessions and gates new runtime until 
   await f.request('POST',`/api/admin/users/${id}/provision`,undefined,admin);
   const session=await f.request('POST','/api/auth/login',{email:memberInput.email,password});
   failPatch=true;
-  const disabled=await f.request('PATCH',`/api/admin/users/${id}`,{status:'disabled'},admin);
+  const disabled=await f.request('PATCH',`/api/admin/users/${id}`,{...({status:'disabled'}),expected_revision:f.store.db.prepare('SELECT revision FROM users WHERE id=?').get((`/api/admin/users/${id}`).split('/').at(-1))?.revision},admin);
   assert.equal(disabled.status,503);assert.equal(f.store.db.prepare('SELECT status FROM users WHERE id=?').get(id).status,'disabled');
   assert.equal((await f.request('GET','/api/auth/session',undefined,session)).status,401);
   const before=f.state.requests.length;
@@ -134,14 +134,14 @@ test('suspension immediately revokes local sessions and gates new runtime until 
   await f.restart();
   assert.equal((await f.request('GET','/bridge/v1/device/status',undefined,{headers:{Authorization:'Bearer original-device-token-fixture'}})).status,503);
   failPatch=false;
-  const confirmed=await f.request('PATCH',`/api/admin/users/${id}`,{status:'disabled'},admin);
+  const confirmed=await f.request('PATCH',`/api/admin/users/${id}`,{...({status:'disabled'}),expected_revision:f.store.db.prepare('SELECT revision FROM users WHERE id=?').get((`/api/admin/users/${id}`).split('/').at(-1))?.revision},admin);
   assert.equal(confirmed.status,200);assert.equal(f.state.customers[0].status,'disabled');
   assert.equal(f.store.db.prepare('SELECT core_pending FROM users WHERE id=?').get(id).core_pending,null);
   failPatch=true;
-  assert.equal((await f.request('PATCH',`/api/admin/users/${id}`,{status:'active'},admin)).status,503);
+  assert.equal((await f.request('PATCH',`/api/admin/users/${id}`,{...({status:'active'}),expected_revision:f.store.db.prepare('SELECT revision FROM users WHERE id=?').get((`/api/admin/users/${id}`).split('/').at(-1))?.revision},admin)).status,503);
   assert.equal((await f.request('POST','/api/auth/login',{email:memberInput.email,password})).status,401);
   failPatch=false;
-  assert.equal((await f.request('PATCH',`/api/admin/users/${id}`,{status:'active'},admin)).status,200);
+  assert.equal((await f.request('PATCH',`/api/admin/users/${id}`,{...({status:'active'}),expected_revision:f.store.db.prepare('SELECT revision FROM users WHERE id=?').get((`/api/admin/users/${id}`).split('/').at(-1))?.revision},admin)).status,200);
   assert.equal((await f.request('POST','/api/auth/login',{email:memberInput.email,password})).status,200);
 });
 
@@ -155,8 +155,8 @@ test('committed suspension with lost response reconciles by GET without a second
   const admin=await f.request('POST','/api/setup',{...adminInput,setup_token:f.setupToken});
   const member=await f.request('POST','/api/admin/users',memberInput,admin), id=member.data.user.id;
   await f.request('POST',`/api/admin/users/${id}/provision`,undefined,admin);lose=true;
-  assert.equal((await f.request('PATCH',`/api/admin/users/${id}`,{status:'disabled'},admin)).status,503);
-  assert.equal((await f.request('PATCH',`/api/admin/users/${id}`,{status:'disabled'},admin)).status,200);
+  assert.equal((await f.request('PATCH',`/api/admin/users/${id}`,{...({status:'disabled'}),expected_revision:f.store.db.prepare('SELECT revision FROM users WHERE id=?').get((`/api/admin/users/${id}`).split('/').at(-1))?.revision},admin)).status,503);
+  assert.equal((await f.request('PATCH',`/api/admin/users/${id}`,{...({status:'disabled'}),expected_revision:f.store.db.prepare('SELECT revision FROM users WHERE id=?').get((`/api/admin/users/${id}`).split('/').at(-1))?.revision},admin)).status,200);
   assert.equal(f.state.requests.filter(r=>r.method==='PATCH').length,1);
 });
 

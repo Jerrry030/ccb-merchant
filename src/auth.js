@@ -1,3 +1,4 @@
+import { managementAllows } from '../public/management-policy.js';
 import { unlinkSync } from 'node:fs';
 import { digest, randomToken, passwordHash, equalSecret, fields, text, email, HttpError, respond } from './security.js';
 import { publicUser } from './store.js';
@@ -32,7 +33,9 @@ export class Auth {
     const session=token ? this.store.db.prepare('SELECT * FROM sessions WHERE token_hash=? AND expires_at>?').get(digest(token),Date.now()) : null;
     const user=session && this.store.db.prepare('SELECT * FROM users WHERE id=?').get(session.user_id);
     if(!user || user.status!=='active') throw new HttpError(401,'authentication_required','Sign in with an active account.');
-    if(admin && user.role!=='admin') throw new HttpError(403,'admin_required','Administrator access required.');
+    const path=(req.url || '').split('?')[0];
+    if(user.must_change_password && !['/api/auth/session','/api/auth/password','/api/auth/logout'].includes(path))throw new HttpError(403,'password_change_required','Change the temporary password before continuing.');
+    if(admin && !managementAllows(user,req.method,path)) throw new HttpError(403,'admin_required','Administrator access required.');
     if(!['GET','HEAD'].includes(req.method) && !equalSecret(req.headers['x-csrf-token'],session.csrf)) throw new HttpError(403,'invalid_csrf','Refresh the session and send its CSRF token.');
     return {user,session};
   }
@@ -51,6 +54,38 @@ export class Auth {
   }
   async handle(req,res,path,body,features) {
     const route=`${req.method} ${path}`;
+    const credentials=path.match(/^\/api\/admin\/users\/([A-Za-z0-9_-]+)\/credentials$/);
+    if(req.method==='POST'&&credentials){
+      fields(body,['action','admin_password','new_password','expected_revision','reason'],['action','admin_password','expected_revision','reason']);
+      if(!['reset_password','email_reset','revoke_sessions'].includes(body.action))throw new HttpError(400,'invalid_input','Unknown credential operation.');
+      const actor=this.require(req,true).user, target=this.store.db.prepare('SELECT * FROM users WHERE id=?').get(credentials[1]);
+      if(!target)throw new HttpError(404,'user_not_found','Customer not found.');
+      if(target.id===actor.id)throw new HttpError(409,'self_credentials','Use your own login-security page.');
+      if(target.role==='admin'&&actor.management_profile!=='owner')throw new HttpError(403,'admin_required','Only the site administrator can manage staff credentials.');
+      const reason=text(body.reason,'reason',500);
+      this.store.throttle('admin-credentials:'+actor.id,10,600000);
+      if(!await passwordHash(body.admin_password,actor.password_hash)){this.store.audit(actor.id,'user.credentials_rejected',target.id,'denied',{customer_id:target.id,details:{action:body.action,reason:'administrator_reauthentication_failed'}});throw new HttpError(403,'invalid_password','Administrator password is incorrect.');}
+      const hashed=body.action==='reset_password'?await passwordHash(body.new_password):null;
+      const check=()=>{const current=this.require(req,true).user;if(current.id!==actor.id||current.password_hash!==actor.password_hash||current.management_profile!==actor.management_profile)throw new HttpError(409,'account_changed','Administrator credentials changed.');const fresh=this.store.db.prepare('SELECT * FROM users WHERE id=?').get(target.id);if(!fresh||!Number.isSafeInteger(body.expected_revision)||fresh.revision!==body.expected_revision)throw new HttpError(409,'customer_changed','Refresh the customer before changing credentials.');return fresh;};
+      check();
+      if(body.action==='email_reset'){
+        if(!this.mailer)throw new HttpError(409,'mail_disabled','Email is not configured. Use a temporary password instead.');
+        if(target.status!=='active')throw new HttpError(409,'user_inactive','Reset mail requires an active customer.');
+        const sent=await this.sendMail(target,'reset');check();
+        this.store.audit(actor.id,'user.reset_email',target.id,sent?'ok':'delivery_unknown',{customer_id:target.id,details:{reason}});
+        respond(res,200,{user:publicUser(check(),true),delivery:sent?'sent':'unconfirmed'});return true;
+      }
+      this.store.transaction(()=>{
+        check();
+        if(hashed)this.store.db.prepare('UPDATE users SET password_hash=?,must_change_password=1,revision=revision+1 WHERE id=?').run(hashed,target.id);
+        else this.store.db.prepare('UPDATE users SET revision=revision+1 WHERE id=?').run(target.id);
+        this.store.db.prepare('DELETE FROM sessions WHERE user_id=?').run(target.id);
+        this.store.db.prepare('DELETE FROM auth_tokens WHERE user_id=?').run(target.id);
+        this.store.audit(actor.id,hashed?'user.password_reset':'user.sessions_revoke',target.id,'ok',{customer_id:target.id,details:{reason,temporary_password:Boolean(hashed),devices_revoked:false}});
+      });
+      respond(res,200,{user:publicUser(this.store.db.prepare('SELECT * FROM users WHERE id=?').get(target.id),true)});return true;
+    }
+
     if(!['POST /api/setup','POST /api/auth/login','POST /api/auth/register','POST /api/auth/resend-verification','POST /api/auth/forgot-password','POST /api/auth/reset-password','POST /api/auth/verify','GET /api/auth/session','POST /api/auth/logout','PATCH /api/auth/password'].includes(route)) return false;
     if(!['GET','HEAD'].includes(req.method)) this.store.throttle(`auth:${req.socket.remoteAddress}`,30,60000);
     switch(route) {
@@ -79,6 +114,7 @@ export class Auth {
         const valid=await passwordHash(body.password,user?.password_hash || dummyHash);
         const current=user && this.store.db.prepare('SELECT * FROM users WHERE id=?').get(user.id);
         if(!valid || !current || current.status!=='active' || current.password_hash!==user.password_hash) throw new HttpError(401,'invalid_credentials','Invalid credentials or account unavailable.');
+        this.store.db.prepare('UPDATE users SET last_login_at=? WHERE id=?').run(new Date().toISOString(),current.id);
         this.store.audit(current.id,'auth.login',current.id);
         respond(res,200,this.issue(req,res,current)); break;
       }
@@ -157,8 +193,12 @@ export class Auth {
         this.store.transaction(()=>{
           const consumed=this.store.db.prepare('DELETE FROM auth_tokens WHERE token_hash=? AND expires_at>?').run(tokenHash,Date.now());
           if(consumed.changes!==1) throw new HttpError(400,'invalid_token','Link is invalid, expired, or already used.');
-          if(reset) this.store.db.prepare('UPDATE users SET password_hash=? WHERE id=?').run(hashed,token.user_id);
-          else this.store.db.prepare("UPDATE users SET status='active' WHERE id=? AND status='pending_verification'").run(token.user_id);
+          if(reset) this.store.db.prepare('UPDATE users SET password_hash=?,must_change_password=0,revision=revision+1 WHERE id=?').run(hashed,token.user_id);
+          else {
+            const user=this.store.db.prepare('SELECT * FROM users WHERE id=?').get(token.user_id);
+            if(user.pending_email)this.store.db.prepare('UPDATE users SET email=pending_email,pending_email=NULL,revision=revision+1 WHERE id=?').run(user.id);
+            else this.store.db.prepare("UPDATE users SET status='active',revision=revision+1 WHERE id=? AND status='pending_verification'").run(token.user_id);
+          }
           this.store.db.prepare('DELETE FROM sessions WHERE user_id=?').run(token.user_id);
           this.store.db.prepare('DELETE FROM auth_tokens WHERE user_id=? AND kind=?').run(token.user_id,reset?'reset':'verify');
           this.store.audit(token.user_id,reset?'auth.reset':'auth.verify',token.user_id);
@@ -169,9 +209,10 @@ export class Auth {
         fields(body,['current_password','new_password'],['current_password','new_password']);
         const {user}=this.require(req);
         if(!await passwordHash(body.current_password,user.password_hash)) throw new HttpError(403,'invalid_password','Current password is incorrect.');
+        if(body.current_password===body.new_password)throw new HttpError(400,'invalid_password','Choose a different new password.');
         const hashed=await passwordHash(body.new_password);
         this.store.transaction(()=>{
-          const updated=this.store.db.prepare("UPDATE users SET password_hash=? WHERE id=? AND password_hash=? AND status='active'").run(hashed,user.id,user.password_hash);
+          const updated=this.store.db.prepare("UPDATE users SET password_hash=?,must_change_password=0,revision=revision+1 WHERE id=? AND password_hash=? AND status='active'").run(hashed,user.id,user.password_hash);
           if(updated.changes!==1) throw new HttpError(409,'account_changed','Account changed; sign in again.');
           this.store.db.prepare('DELETE FROM sessions WHERE user_id=?').run(user.id);
           this.store.db.prepare('DELETE FROM auth_tokens WHERE user_id=?').run(user.id);

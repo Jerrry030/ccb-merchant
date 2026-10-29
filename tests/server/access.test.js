@@ -227,3 +227,31 @@ test('nested selection replies persist the owned device mapping before a status 
  const selected=await f.request('POST','/bridge/v1/device/account',{grant_id:grant.id},native);assert.equal(selected.status,200,selected.raw);
  const list=await f.request('GET',`/access/v1/customers/${customer.id}/devices`,undefined,c.actor);assert.equal(list.status,200,list.raw);assert.equal(list.data.devices.length,1);assert.equal(list.data.devices[0].id,selected.data.device.id);assert.equal(list.data.devices[0].name,'Owned laptop');assert.equal(list.raw.includes('remote-nested-device'),false);
 });
+
+
+test('an ambiguous create cannot reactivate a grant revoked before reconciliation',async t=>{
+ const {f,c}=await provider(t,{onCore:({req,url,body,state,res})=>{
+  if(req.method==='POST'&&url.pathname==='/access/v1/grants'){
+   state.grants.push({id:'accepted-then-revoked',customer_id:body.customer_id,resource_id:body.resource_id,expires_at:body.expires_at,status:'revoked',revision:2});res.destroy();return true;
+  }
+ }});
+ const customer=(await f.request('POST','/access/v1/customers',{external_id:'recovery-owner',display_name:'Owner'},c.actor)).data.customer;
+ const body={customer_id:customer.id,resource_id:c.resource.id,expires_at:new Date(Date.now()+86400000).toISOString()};
+ assert.equal((await f.request('POST','/access/v1/grants',body,c.actor)).status,503);
+ const recovered=await f.request('POST','/access/v1/grants',body,c.actor);assert.equal(recovered.status,409,recovered.raw);
+ const list=await f.request('GET','/access/v1/grants',undefined,c.actor);assert.equal(list.data.grants[0].status,'revoked');
+ assert.equal(f.state.requests.filter(r=>r.method==='PATCH'&&r.path.includes('/grants/')).length,0);
+ assert.equal(f.state.requests.filter(r=>r.method==='POST'&&r.path==='/access/v1/grants').length,1);
+});
+
+
+test('account cards remap the explicit grant identity and omit unmapped upstream leases',async t=>{
+ const {f,c}=await provider(t,{onCore:({url,state,json})=>{
+  if(!url.pathname.match(/^\/access\/v1\/customers\/[^/]+\/accounts$/))return false;
+  const g=state.grants[0];json({accounts:[{id:g.id,grant_id:g.id,account_lease_id:'PRIVATE-UPSTREAM-LEASE',name:'Public card',state:'available'}]});return true;
+ }});
+ const customer=(await f.request('POST','/access/v1/customers',{external_id:'card-owner',display_name:'Owner'},c.actor)).data.customer;
+ const grant=(await f.request('POST','/access/v1/grants',{customer_id:customer.id,resource_id:c.resource.id},c.actor)).data.grant;
+ const result=await f.request('GET',`/access/v1/customers/${customer.id}/accounts`,undefined,c.actor);
+ assert.equal(result.status,200,result.raw);assert.equal(result.data.accounts[0].grant_id,grant.id);assert.equal('account_lease_id' in result.data.accounts[0],false);assert.equal(result.raw.includes('PRIVATE-UPSTREAM-LEASE'),false);
+});

@@ -18,7 +18,7 @@ test('actual multi-channel storefront renders local QR codes, confirms payment a
  page.setDefaultTimeout(10000);page.on('pageerror',error=>errors.push(error.message));
  await context.route('**/*',route=>{if(new URL(route.request().url()).origin!==f.config.publicOrigin){external.push(route.request().url());return route.abort();}return route.continue();});
  t.after(()=>{assert.deepEqual(errors,[]);assert.deepEqual(external,[]);});
- await page.goto(f.config.publicOrigin+'/login');await page.getByLabel('电子邮箱',{exact:true}).fill('admin@example.test');await page.getByLabel('密码',{exact:true}).fill(password);await page.locator('.auth-form button[type=submit]').click();await page.getByRole('link',{name:'站点设置',exact:true}).waitFor();
+ await page.goto(f.config.publicOrigin+'/login');await page.getByLabel('电子邮箱',{exact:true}).fill('admin@example.test');await page.getByLabel('密码',{exact:true}).fill(password);await page.locator('.auth-form button[type=submit]').click();await page.getByRole('link',{name:'设置',exact:true}).waitFor();
  await page.goto(f.config.publicOrigin+'/admin/settings#payment');await page.getByRole('tab',{name:'支付配置',exact:true}).waitFor();
  assert.equal(await page.getByText('此渠道尚未接入收款',{exact:true}).count(),0);assert.equal(await page.getByText('未接入收款',{exact:true}).count(),0);
  await page.locator('summary').filter({hasText:'支付宝官方'}).click();await page.getByLabel('支付宝官方 App ID',{exact:true}).waitFor();

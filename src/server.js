@@ -1,3 +1,5 @@
+import { managementProfiles } from '../public/management-policy.js';
+import { Inventory } from './inventory.js';
 import { readOrderPage, readAuditPage } from './admin-queries.js';
 import { deliveryReviewStatuses, paymentReviewStatuses } from '../public/admin-workflow.js';
 import { Access } from './access.js';
@@ -21,10 +23,10 @@ import { proxyRuntime } from './runtime.js';
 import { HttpError, fields, text, email, opaqueId, expiry, passwordHash, readBody, respond, requestBoundary } from './security.js';
 
 function listQuery(params) {
-  for(const key of params.keys()) if(!['limit','offset','q','status'].includes(key)||params.getAll(key).length!==1) throw new HttpError(400,'invalid_query','Invalid list filter.');
+  for(const key of params.keys()) if(!['limit','offset','q','status','role','tag','assignment','due'].includes(key)||params.getAll(key).length!==1) throw new HttpError(400,'invalid_query','Invalid list filter.');
   const limit=Number(params.get('limit')||50),offset=Number(params.get('offset')||0),q=params.get('q')||'',status=params.get('status')||'';
   if(!Number.isSafeInteger(limit)||limit<1||limit>200||!Number.isSafeInteger(offset)||offset<0||offset>1000000||q.length>100||status.length>30)throw new HttpError(400,'invalid_query','Invalid pagination.');
-  return {limit,offset,q,status};
+  return {limit,offset,q,status,role:params.get('role')||'',tag:params.get('tag')||'',assignment:params.get('assignment')||'',due:params.get('due')||''};
 }
 function usageQuery(params) {
   const out=new URLSearchParams();
@@ -61,6 +63,7 @@ export function createMerchant(config, options={}) {
   const customers=new Customers(store,core), commerce=new Commerce(store,core,customers);
   const reconciler=new Reconciler(store,customers,payments,commerce,options.reconcileIntervalMs??config.reconcileIntervalMs);
   const lockedUsers=customers.locks;
+  const inventory=new Inventory(store,core,customers);
   let runtimeInFlight=0;
   const settings=()=>{
     const payment=describePayment(config,store);
@@ -163,6 +166,15 @@ export function createMerchant(config, options={}) {
         if(!memberPrefix) throw new HttpError(409,'not_provisioned','Contact the administrator to assign an account first.');
         if(user.core_pending) throw new HttpError(409,'core_sync_pending','Customer synchronization must be reconciled first.');
       };
+      if(path==='/api/admin/allocation-batches'){
+        if(req.method==='POST'){const batch=await inventory.batch(body,()=>auth.require(req,true));respond(res,200,{batch});return;}
+        if(req.method==='GET'){
+          const limit=Number(url.searchParams.get('limit')||20),offset=Number(url.searchParams.get('offset')||0);if(!Number.isInteger(limit)||limit<1||limit>100||!Number.isInteger(offset)||offset<0)throw new HttpError(400,'invalid_query','Invalid batch page.');
+          const id=url.searchParams.get('id');const where=id?' WHERE id=?':'',args=id?[id]:[];
+          const batches=store.db.prepare('SELECT * FROM allocation_batches'+where+' ORDER BY created_at DESC,id LIMIT ? OFFSET ?').all(...args,limit,offset).map(row=>({id:row.id,status:row.status,items:JSON.parse(row.items),created_at:row.created_at,updated_at:row.updated_at}));
+          respond(res,200,{batches,total:store.db.prepare('SELECT COUNT(*) n FROM allocation_batches'+where).get(...args).n,limit,offset});return;
+        }
+      }
       // Both personal and staff device operations resolve the customer from a local user,
       // never from a browser-supplied provider identifier.
       const deviceRoute=path.match(/^\/api\/(me|admin\/users\/([A-Za-z0-9_-]+))\/devices(?:\/([A-Za-z0-9_-]+)(\/selection)?)?$/);
@@ -178,7 +190,7 @@ export function createMerchant(config, options={}) {
         const base=`/access/v1/customers/${opaqueId(target.core_customer_id)}`;
         if(req.method==='GET'&&!id) {
           const [data,accounts]=await Promise.all([core.request('GET',base+'/devices'),core.request('GET',base+'/accounts')]);check();
-          respond(res,200,{devices:collection(data.devices,schemas.device),accounts:collection(accounts.accounts,schemas.account)});return;
+          const cards=store.labelAccounts(collection(accounts.accounts,schemas.account));const names=new Map(cards.map(a=>[a.grant_id||a.id,a.name]));respond(res,200,{devices:collection(data.devices,schemas.device).map(d=>({...d,account_name:d.current_grant_id?(names.get(d.current_grant_id)||'账号（编号待核对）'):null})),accounts:cards});return;
         }
         if(!id||!(req.method==='DELETE'&&!selection||req.method==='PATCH'&&!selection||req.method==='PUT'&&selection))throw new HttpError(404,'not_found','Unsupported device operation.');
         let payload={};
@@ -221,7 +233,7 @@ export function createMerchant(config, options={}) {
               core.request('GET',`/access/v1/grants?customer_id=${opaqueId(user.core_customer_id)}`),
               core.request('GET',`${memberPrefix}/devices`),core.request('GET',`${memberPrefix}/usage?limit=1`),
             ]);
-            if(results[0].status==='fulfilled') grants=collection(results[0].value.grants,schemas.grant).filter(g=>g.customer_id===user.core_customer_id); else pending.push('grants_unavailable');
+            if(results[0].status==='fulfilled') grants=store.labelAccounts(collection(results[0].value.grants,schemas.grant).filter(g=>g.customer_id===user.core_customer_id)); else pending.push('grants_unavailable');
             if(results[1].status==='fulfilled') devices=collection(results[1].value.devices,schemas.device); else pending.push('devices_unavailable');
             if(results[2].status==='fulfilled') usage=project(results[2].value.usage,schemas.usage) ?? null; else pending.push('usage_unavailable');
           }
@@ -231,13 +243,13 @@ export function createMerchant(config, options={}) {
         case 'GET /api/me/grants': {
           customerReady();
           const data=await core.request('GET',`/access/v1/grants?customer_id=${opaqueId(user.core_customer_id)}`);
-          respond(res,200,{grants:collection(data.grants,schemas.grant).filter(g=>g.customer_id===user.core_customer_id)}); return;
+          respond(res,200,{grants:store.labelAccounts(collection(data.grants,schemas.grant).filter(g=>g.customer_id===user.core_customer_id))}); return;
         }
         case 'GET /api/me/accounts': {
           if(!memberPrefix) {respond(res,200,{accounts:[]});return;}
           customerReady();
           const data=await core.request('GET',`${memberPrefix}/accounts`);
-          respond(res,200,{accounts:collection(data.accounts,schemas.account)}); return;
+          respond(res,200,{accounts:store.labelAccounts(collection(data.accounts,schemas.account))}); return;
         }
         case 'POST /api/me/devices/preview':
         case 'POST /api/me/devices/approve': {
@@ -258,16 +270,7 @@ export function createMerchant(config, options={}) {
         }
         case 'GET /api/plans':
         case 'GET /api/admin/plans': {respond(res,200,{plans:await commerce.catalog(path.startsWith('/api/admin/'),user.core_customer_id,url.searchParams.get('renew_grant_id'))});return;}
-        case 'GET /api/admin/inventory': {
-          const owned=await core.request('GET','/access/v1/accounts');
-          if(!Array.isArray(owned.accounts))throw new HttpError(503,'invalid_core_response','Upstream allocated accounts are unavailable.');
-          const users=new Map(store.db.prepare('SELECT id,display_name,email,core_customer_id FROM users WHERE core_customer_id IS NOT NULL').all().map(u=>[u.core_customer_id,u]));
-          const accounts=collection(owned.accounts,schemas.heldAccount).map(account=>{
-            const customer=account.assigned?users.get(account.customer_id):null;
-            return {...account,user_id:customer?.id??null,customer_name:customer?.display_name??null,customer_email:customer?.email??null};
-          });
-          respond(res,200,{accounts,device_limit:1});return;
-        }
+        case 'GET /api/admin/inventory': {const accounts=await inventory.read();auth.require(req,true);respond(res,200,{accounts,device_limit:1});return;}
         case 'POST /api/admin/plans': respond(res,201,{plan:await commerce.savePlan(null,body,()=>auth.require(req,true))});return;
         case 'POST /api/me/rentals': {
           store.throttle(`rental:${user.id}`,10,60000);
@@ -295,12 +298,14 @@ export function createMerchant(config, options={}) {
           respond(res,200,readOrderPage(store,url.searchParams,{rentals:true,ownerId:path.startsWith('/api/admin/')?null:user.id}));return;
         }
         case 'GET /api/admin/operations': {
-          const pending=store.db.prepare("SELECT * FROM users WHERE core_pending IS NOT NULL OR (provision_name IS NOT NULL AND core_customer_id IS NULL) ORDER BY created_at LIMIT 100").all().map(publicUser);
-          const unassigned=store.db.prepare("SELECT * FROM users WHERE role='member' AND status='active' AND core_customer_id IS NULL AND provision_name IS NULL ORDER BY created_at LIMIT 100").all().map(publicUser);
+          const pending=store.db.prepare("SELECT * FROM users WHERE core_pending IS NOT NULL OR (provision_name IS NOT NULL AND core_customer_id IS NULL) ORDER BY created_at LIMIT 100").all().map(u=>publicUser(u,true));
+          let unassigned=[],inventoryAvailable=true,unassignedTotal=null;
+          try{const rows=await inventory.read();const assigned=new Set(rows.filter(a=>a.assigned&&a.status==='active'&&Date.parse(a.expires_at)>Date.now()&&Date.parse(a.customer_expires_at)>Date.now()).map(a=>a.user_id));const exclusions=JSON.stringify([...assigned].filter(Boolean)),where="role='member' AND status='active' AND core_pending IS NULL AND id NOT IN (SELECT value FROM json_each(?))";unassignedTotal=store.db.prepare('SELECT COUNT(*) n FROM users WHERE '+where).get(exclusions).n;unassigned=store.db.prepare('SELECT * FROM users WHERE '+where+' ORDER BY created_at,id LIMIT 100').all(exclusions).map(u=>publicUser(u,true));}catch{inventoryAvailable=false;unassigned=store.db.prepare("SELECT * FROM users WHERE role='member' AND status='active' AND core_customer_id IS NULL AND core_pending IS NULL ORDER BY created_at,id LIMIT 100").all().map(u=>publicUser(u,true));}
+          auth.require(req,true);
           const totals=store.db.prepare('SELECT status,count(*) AS count FROM rentals GROUP BY status').all();
           const paymentsPending=store.db.prepare('SELECT count(*) AS n FROM orders WHERE status IN ('+paymentReviewStatuses.map(()=>'?').join(',')+')').get(...paymentReviewStatuses).n;
           const deliveriesPending=totals.filter(row=>deliveryReviewStatuses.includes(row.status)).reduce((sum,row)=>sum+row.count,0);
-          respond(res,200,{pending_customers:pending,unassigned_customers:unassigned,rentals:totals,payments_pending:paymentsPending,deliveries_pending:deliveriesPending,worker:{interval_ms:config.reconcileIntervalMs,max_attempts:8},readiness:{core_configured:Boolean(config.upstreamUrl),mail_configured:Boolean(effectiveMail(config,store)),payment_configured:describePayment(config,store).configured,https:config.secureCookies,schema_version:store.db.prepare('PRAGMA user_version').get().user_version,runtime_limit:config.runtimeMaxInFlight}});return;
+          respond(res,200,{pending_customers:pending,unassigned_customers:unassigned,unassigned_total:unassignedTotal,inventory_available:inventoryAvailable,rentals:totals,payments_pending:paymentsPending,deliveries_pending:deliveriesPending,worker:{interval_ms:config.reconcileIntervalMs,max_attempts:8},readiness:{core_configured:Boolean(config.upstreamUrl),mail_configured:Boolean(effectiveMail(config,store)),payment_configured:describePayment(config,store).configured,https:config.secureCookies,schema_version:store.db.prepare('PRAGMA user_version').get().user_version,runtime_limit:config.runtimeMaxInFlight}});return;
         }
         case 'GET /api/admin/connection': respond(res,200,{...await connection(),upstream_url:config.upstreamUrl,public_origin:config.publicOrigin,environment_managed:config.upstreamEnvironment,revision:core.revision}); return;
         case 'POST /api/admin/upstream': {
@@ -386,17 +391,31 @@ export function createMerchant(config, options={}) {
           respond(res,200,adminSettings()); return;
         }
         case 'GET /api/admin/users': {
- const page=listQuery(url.searchParams),needle='%'+page.q+'%';
- const total=store.db.prepare('SELECT count(*) AS n FROM users WHERE(email LIKE ? OR display_name LIKE ?)').get(needle,needle).n;
- respond(res,200,{users:store.db.prepare('SELECT * FROM users WHERE(email LIKE ? OR display_name LIKE ?) ORDER BY created_at,id LIMIT ? OFFSET ?').all(needle,needle,page.limit,page.offset).map(publicUser),total,limit:page.limit,offset:page.offset});return;
- }
+          const page=listQuery(url.searchParams),conditions=['(email LIKE ? OR display_name LIKE ?)'],args=['%'+page.q+'%','%'+page.q+'%'];
+          for(const [key,allowed] of [['status',['active','disabled','pending_verification']],['role',['admin','member']]]){if(page[key]){if(!allowed.includes(page[key]))throw new HttpError(400,'invalid_query','Unknown customer filter.');conditions.push(key+'=?');args.push(page[key]);}}
+          if(page.tag){conditions.push('EXISTS(SELECT 1 FROM json_each(users.tags) WHERE value=?)');args.push(page.tag);}
+          if(page.assignment&&!['unassigned','assigned','sync_pending'].includes(page.assignment)||page.due&&!['7','30'].includes(page.due))throw new HttpError(400,'invalid_query','Unknown assignment filter.');
+          if(page.assignment==='sync_pending')conditions.push("(core_pending IS NOT NULL OR (provision_name IS NOT NULL AND core_customer_id IS NULL))");
+          if(!['unassigned','assigned'].includes(page.assignment)&&!page.due){
+            const where=conditions.join(' AND '),total=store.db.prepare('SELECT COUNT(*) n FROM users WHERE '+where).get(...args).n;
+            const users=store.db.prepare('SELECT * FROM users WHERE '+where+' ORDER BY created_at,id LIMIT ? OFFSET ?').all(...args,page.limit,page.offset).map(u=>publicUser(u,true));respond(res,200,{users,total,limit:page.limit,offset:page.offset});return;
+          }
+          let rows=store.db.prepare('SELECT * FROM users WHERE '+conditions.join(' AND ')+' ORDER BY created_at,id').all(...args);
+          if(['unassigned','assigned'].includes(page.assignment)||page.due){
+            const accounts=await inventory.read();auth.require(req,true);
+            rows=rows.filter(u=>{const owned=accounts.filter(a=>a.user_id===u.id&&a.assigned&&a.status==='active'&&Date.parse(a.expires_at)>Date.now()&&Date.parse(a.customer_expires_at)>Date.now());return (!page.assignment||page.assignment==='sync_pending'||(page.assignment==='assigned'?owned.length>0:owned.length===0))&&(!page.due||owned.some(a=>Date.parse(a.customer_expires_at)<=Date.now()+Number(page.due)*86400000));});
+          }
+          respond(res,200,{users:rows.slice(page.offset,page.offset+page.limit).map(u=>publicUser(u,true)),total:rows.length,limit:page.limit,offset:page.offset});return;
+        }
         case 'POST /api/admin/users': {
-          fields(body,['email','password','display_name','role'],['email','password','display_name','role']);
+          fields(body,['email','password','display_name','role','management_profile'],['email','password','display_name','role']);
+          if(user.management_profile!=='owner'&&(body.role==='admin'||body.management_profile))throw new HttpError(403,'admin_required','Only the site administrator can create staff.');
+          if(body.management_profile&&!Object.hasOwn(managementProfiles,body.management_profile))throw new HttpError(400,'invalid_role','Unknown management profile.');
           if(!['admin','member'].includes(body.role)) throw new HttpError(400,'invalid_role','Invalid role.');
           const address=email(body.email), name=text(body.display_name,'display_name',100), hash=await passwordHash(body.password);
           auth.require(req,true); // Recheck privileges after asynchronous password hashing.
-          const created=store.transaction(()=>{ const added=store.createUser({email:address,display_name:name,password_hash:hash,role:body.role,status:'active'}); store.audit(user.id,'user.create',added.id); return added; });
-          respond(res,201,{user:publicUser(created)}); return;
+          const created=store.transaction(()=>{ const added=store.createUser({email:address,display_name:name,password_hash:hash,role:body.role,status:'active'}); if(body.role==='admin'&&body.management_profile)store.db.prepare('UPDATE users SET management_profile=? WHERE id=?').run(body.management_profile,added.id);store.audit(user.id,'user.create',added.id);return store.db.prepare('SELECT * FROM users WHERE id=?').get(added.id); });
+          respond(res,201,{user:publicUser(created,true)}); return;
         }
         case 'GET /api/admin/resources': { const data=await core.request('GET','/access/v1/resources'); respond(res,200,{resources:collection(data.resources,schemas.resource)}); return; }
         case 'GET /api/admin/grants': {
@@ -410,48 +429,9 @@ export function createMerchant(config, options={}) {
             query+=`&customer_id=${opaqueId(target.core_customer_id)}`;
           }
           const data=await core.request('GET',`/access/v1/grants${query}`);
-          respond(res,200,{grants:collection(data.grants,schemas.grant),total:data.total,limit,offset}); return;
+          respond(res,200,{grants:store.labelAccounts(collection(data.grants,schemas.grant)),total:data.total,limit,offset}); return;
         }
-        case 'POST /api/admin/grants': {
-          fields(body,['user_id','resource_id','expires_at','account_lease_id','expected_account_revision'],['user_id','resource_id']);
-          const targetId=text(body.user_id,'user_id',150);
-          const payload={resource_id:decodeURIComponent(opaqueId(body.resource_id))};
-          let accountLabel=null;
-          if(body.expires_at!==undefined) payload.expires_at=expiry(body.expires_at);
-          if(body.account_lease_id) {
-            payload.account_lease_id=decodeURIComponent(opaqueId(body.account_lease_id));
-            if(!Number.isSafeInteger(body.expected_account_revision)||body.expected_account_revision<1)throw new HttpError(400,'invalid_input','Refresh the account before delivery.');
-            payload.expected_account_revision=body.expected_account_revision;
-          }
-          if(lockedUsers.has(targetId))throw new HttpError(409,'user_busy','A customer change is in progress. Retry this delivery after it completes.');
-          lockedUsers.add(targetId);
-          try {
-            let target=store.db.prepare('SELECT * FROM users WHERE id=?').get(targetId);
-            if(!target||target.status!=='active'||target.core_pending)throw new HttpError(409,'customer_not_ready','Select an active customer with no pending changes.');
-            if(payload.account_lease_id) {
-              const owned=await core.request('GET','/access/v1/accounts');auth.require(req,true);
-              if(!Array.isArray(owned.accounts))throw new HttpError(503,'invalid_core_response','Account inventory is unavailable.');
-              const account=owned.accounts.find(a=>a.id===payload.account_lease_id);
-              if(!account||account.resource_id!==payload.resource_id||account.status!=='active'||!Number.isFinite(Date.parse(account.expires_at))||Date.parse(account.expires_at)<=Date.now())throw new HttpError(409,'account_unavailable','This account is no longer available. Refresh the inventory.');
-              accountLabel=typeof account.details?.name==='string'?account.details.name.slice(0,200):account.id;
-              payload.expires_at??=account.expires_at;
-              if(Date.parse(payload.expires_at)>Date.parse(account.expires_at)||Date.parse(payload.expires_at)<=Date.now())throw new HttpError(400,'invalid_expiry','Customer expiry must be in the future and within the account expiry.');
-              if(account.revision!==payload.expected_account_revision && !(account.revision===payload.expected_account_revision+1&&account.assigned&&account.customer_id===target.core_customer_id))throw new HttpError(409,'account_changed','The account changed. Refresh before assigning it.');
-              if(account.assigned&&account.customer_id!==target.core_customer_id)throw new HttpError(409,'account_assigned','Reclaim the current assignment before choosing another customer.');
-              if(!['available','limited'].includes(account.details?.state))throw new HttpError(409,'account_unavailable','This account is currently unavailable.');
-              if(store.db.prepare("SELECT 1 FROM rentals WHERE account_lease_id=? AND status IN ('awaiting_payment','queued','review','refund_pending')").get(account.id))throw new HttpError(409,'purchase_pending','Account is reserved by a customer checkout.');
-            }
-            if(!target.core_customer_id)await customers.synchronize(targetId,()=>auth.require(req,true));
-            auth.require(req,true);
-            target=store.db.prepare('SELECT * FROM users WHERE id=?').get(targetId);
-            if(!target?.core_customer_id||target.status!=='active'||target.core_pending)throw new HttpError(409,'customer_not_ready','Customer state changed. Refresh before delivery.');
-            payload.customer_id=target.core_customer_id;
-            const data=await core.request('POST','/access/v1/grants',payload), grant=project(data.grant,schemas.grant);
-            auth.require(req,true);
-            if(!grant?.id||grant.status!=='active'||grant.customer_id!==target.core_customer_id||grant.resource_id!==payload.resource_id||(payload.account_lease_id&&(grant.account_lease_id!==payload.account_lease_id||Date.parse(grant.expires_at)!==Date.parse(payload.expires_at))))throw new HttpError(503,'core_outcome_unknown','Delivery is unconfirmed. Check the account before retrying the same assignment.');
-            store.audit(user.id,'grant.create',grant.id,'ok',{customer_id:targetId,subject_label:accountLabel});respond(res,201,{grant});return;
-          } finally {lockedUsers.delete(targetId);}
-        }
+        case 'POST /api/admin/grants': {const grant=await inventory.assign(body,()=>auth.require(req,true));respond(res,201,{grant});return;}
         case 'GET /api/admin/orders': respond(res,200,readOrderPage(store,url.searchParams)); return;
         case 'GET /api/admin/audit': respond(res,200,readAuditPage(store,url.searchParams)); return;
       }
@@ -501,9 +481,10 @@ export function createMerchant(config, options={}) {
         if(body.expires_at!==undefined) expiry(body.expires_at);
         const data=await core.request('PATCH',`/access/v1/grants/${opaqueId(match[1])}`,body), grant=project(data.grant,schemas.grant);
         if(grant?.id!==match[1]) throw new HttpError(503,'core_outcome_unknown','Grant update is unconfirmed. Refresh before another change.');
+        if(grant.account_lease_id)grant.name=store.labelAccounts([grant])[0].name;
         const auditCustomer=store.db.prepare('SELECT id FROM users WHERE core_customer_id=?').get(grant.customer_id || '');
         const priorLabel=store.db.prepare("SELECT subject_label FROM audit WHERE subject_id=? AND action='grant.create' ORDER BY id DESC LIMIT 1").get(grant.id);
-        store.audit(user.id,body.status==='revoked'?'grant.revoke':body.expires_at?'grant.extend':'grant.update',grant.id,'ok',{customer_id:auditCustomer?.id || null,subject_label:priorLabel?.subject_label || null}); respond(res,200,{grant}); return;
+        store.audit(user.id,body.status==='revoked'?'grant.revoke':body.expires_at?'grant.extend':'grant.update',grant.id,'ok',{customer_id:auditCustomer?.id || null,subject_label:priorLabel?.subject_label || (grant.account_lease_id?grant.name:null)}); respond(res,200,{grant}); return;
       }
       if((req.method==='PATCH' && (match=path.match(/^\/api\/admin\/users\/([^/]+)$/))) || (req.method==='POST' && (match=path.match(/^\/api\/admin\/users\/([^/]+)\/provision$/)))) {
         const targetId=decodeURIComponent(opaqueId(match[1]));
@@ -518,28 +499,50 @@ export function createMerchant(config, options={}) {
             if(target.core_pending) throw new HttpError(409,'core_sync_pending','Reconcile the pending user change before provisioning.');
             const customer=await customers.synchronize(target.id,()=>auth.require(req,true));
             target=store.db.prepare('SELECT * FROM users WHERE id=?').get(target.id);
-            respond(res,200,{user:publicUser(target),customer}); return;
+            respond(res,200,{user:publicUser(target,true),customer}); return;
           }
-          fields(body,['display_name','status','role']);
+          fields(body,['display_name','status','role','expected_revision','email','notes','tags','admin_password','reason','management_profile']);
+          const editing=Object.keys(body).some(key=>key!=='expected_revision');
+          if(editing&&(!Number.isSafeInteger(body.expected_revision)||body.expected_revision!==target.revision))throw new HttpError(409,'customer_changed','Customer information changed. Refresh before saving.');
+          if(user.management_profile!=='owner'&&(target.role==='admin'||body.role&&body.role!=='member'||body.management_profile))throw new HttpError(403,'admin_required','Only the site administrator can change staff roles.');
+          if(body.management_profile&&!Object.hasOwn(managementProfiles,body.management_profile))throw new HttpError(400,'invalid_role','Unknown management profile.');
+          if(target.id===user.id && body.status==='disabled') throw new HttpError(409,'self_disable','Administrators cannot disable themselves.');
+          if(target.role==='admin'&&target.management_profile==='owner'&&target.status==='active'&&(body.role==='member'||body.status==='disabled'||body.management_profile&&body.management_profile!=='owner')&&store.db.prepare("SELECT COUNT(*) n FROM users WHERE role='admin' AND status='active' AND management_profile='owner'").get().n<=1)throw new HttpError(409,'last_admin','At least one site administrator must remain.');
+          const newEmail=body.email===undefined?target.email:email(body.email),emailChanged=newEmail!==target.email;
+          const notes=body.notes===undefined?target.notes:text(body.notes,'notes',4000,0);
+          let tags=JSON.parse(target.tags||'[]');if(body.tags!==undefined){if(!Array.isArray(body.tags)||body.tags.length>20)throw new HttpError(400,'invalid_input','At most 20 tags are allowed.');tags=[...new Set(body.tags.map(tag=>text(tag,'tag',40)))];}
+          let pendingEmail=target.pending_email;
+          if(emailChanged){
+            text(body.reason,'reason',500);store.throttle('email-change:'+user.id,10,600000);
+            if(!await passwordHash(body.admin_password,user.password_hash))throw new HttpError(403,'invalid_password','Administrator password is incorrect.');
+            const freshActor=auth.require(req,true).user;
+            if(freshActor.password_hash!==user.password_hash||freshActor.management_profile!==user.management_profile)throw new HttpError(409,'account_changed','Administrator credentials changed.');
+            if(store.db.prepare('SELECT id FROM users WHERE (email=? OR pending_email=?) AND id<>?').get(newEmail,newEmail,target.id))throw new HttpError(409,'email_exists','This address is already used or awaiting verification.');
+            if(settings().features.email_verification){if(!auth.mailer)throw new HttpError(409,'mail_disabled','Email verification must be available before changing this address.');pendingEmail=newEmail;}
+          }
+          if(store.db.prepare('SELECT revision FROM users WHERE id=?').get(target.id)?.revision!==target.revision)throw new HttpError(409,'customer_changed','Customer changed while validating.');
+
           if(!Object.keys(body).length && !target.core_pending) throw new HttpError(400,'invalid_input','Provide a user change.');
           if(body.status!==undefined && !['active','disabled'].includes(body.status)) throw new HttpError(400,'invalid_status','Invalid user status.');
           if(body.role!==undefined && !['admin','member'].includes(body.role)) throw new HttpError(400,'invalid_role','Invalid role.');
-          if(target.id===user.id && body.status==='disabled') throw new HttpError(409,'self_disable','Administrators cannot disable themselves.');
+
           if(target.status==='pending_verification' && body.status==='active') throw new HttpError(409,'verification_required','Email verification must be completed.');
           const desired={display_name:body.display_name===undefined?target.display_name:text(body.display_name,'display_name',100),status:body.status || target.status};
           const needsSync=Boolean(target.core_customer_id && (body.status!==undefined || body.display_name!==undefined || target.core_pending));
           store.transaction(()=>{
             const localStatus=needsSync && desired.status==='active' && target.status==='disabled'?'disabled':desired.status;
-            store.db.prepare('UPDATE users SET display_name=?,role=?,status=?,core_pending=?,next_sync_at=0,sync_error=NULL WHERE id=?').run(desired.display_name,body.role || target.role,localStatus,needsSync?JSON.stringify(desired):target.core_pending,target.id);
-            if(localStatus!=='active' || (body.role && body.role!==target.role)) store.db.prepare('DELETE FROM sessions WHERE user_id=?').run(target.id);
-            store.audit(user.id,'user.update',target.id,needsSync?'core_pending':'ok');
+            store.db.prepare('UPDATE users SET display_name=?,role=?,status=?,core_pending=?,next_sync_at=0,sync_error=NULL,revision=revision+1,email=?,pending_email=?,notes=?,tags=?,management_profile=? WHERE id=? AND revision=?').run(desired.display_name,body.role || target.role,localStatus,needsSync?JSON.stringify(desired):target.core_pending,emailChanged&&!settings().features.email_verification?newEmail:target.email,pendingEmail,notes,JSON.stringify(tags),body.management_profile||target.management_profile,target.id,target.revision);
+            if(emailChanged&&!settings().features.email_verification){store.db.prepare('DELETE FROM sessions WHERE user_id=?').run(target.id);store.db.prepare('DELETE FROM auth_tokens WHERE user_id=?').run(target.id);}
+            if(localStatus!=='active' || (body.role && body.role!==target.role) || body.management_profile&&body.management_profile!==target.management_profile) store.db.prepare('DELETE FROM sessions WHERE user_id=?').run(target.id);
+            store.audit(user.id,'user.update',target.id,needsSync?'core_pending':'ok',{customer_id:target.id,details:{reason:body.reason||null,before:{display_name:target.display_name,role:target.role,status:target.status,email:target.email,notes:target.notes,tags:JSON.parse(target.tags||'[]'),management_profile:target.management_profile},after:{...desired,role:body.role||target.role,email:emailChanged?newEmail:target.email,notes,tags,management_profile:body.management_profile||target.management_profile},email_verification_pending:Boolean(pendingEmail)}});
           });
+          if(emailChanged&&pendingEmail)await auth.sendMail({...target,email:pendingEmail},'verify');
           if(needsSync) await customers.synchronize(target.id,()=>auth.require(req,true));
           target=store.db.prepare('SELECT * FROM users WHERE id=?').get(target.id);
-          respond(res,200,{user:publicUser(target)}); return;
+          respond(res,200,{user:publicUser(target,true)}); return;
         } finally { lockedUsers.delete(targetId); }
       }
-      if(req.method==='GET'&&/^\/api\/admin\/users\/[A-Za-z0-9_-]+$/.test(path)){auth.require(req,true);const row=store.db.prepare('SELECT * FROM users WHERE id=?').get(path.split('/').at(-1));if(!row)throw new HttpError(404,'user_not_found','User not found.');respond(res,200,{user:publicUser(row)});return;}
+      if(req.method==='GET'&&/^\/api\/admin\/users\/[A-Za-z0-9_-]+$/.test(path)){auth.require(req,true);const row=store.db.prepare('SELECT * FROM users WHERE id=?').get(path.split('/').at(-1));if(!row)throw new HttpError(404,'user_not_found','User not found.');respond(res,200,{user:publicUser(row,true)});return;}
       throw new HttpError(404,'not_found','API route not found.');
     } catch(error) {
       if(res.headersSent) {res.destroy(); return;}

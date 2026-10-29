@@ -141,6 +141,11 @@ export class Access {
   if(!remote){if(g.status==='revoked'){this.db.prepare('UPDATE access_grants SET pending=0 WHERE id=?').run(g.id);return this.object('access_grants',g.id,g.account_id);}
    const data=await this.upstream.request('POST','/access/v1/grants',{customer_id:c.upstream_id,resource_id:r.upstream_id,expires_at:g.expires_at},undefined,allocation);check();remote=data.grant;
   }else if(remote.status!==g.status||Date.parse(remote.expires_at||'')!==Date.parse(g.expires_at||'')&&remote.expires_at!==g.expires_at){
+   if(!g.upstream_id){
+    if(!remote.id||!['active','revoked'].includes(remote.status))throw new HttpError(503,'core_outcome_unknown','Grant outcome remains unknown.');
+    this.db.prepare('UPDATE access_grants SET upstream_id=?,status=?,expires_at=?,pending=0,revision=revision+1,updated_at=? WHERE id=? AND pending=1').run(remote.id,remote.status,remote.expires_at,new Date().toISOString(),g.id);
+    throw new HttpError(409,'grant_reconciled','The original create was found with changed state. Refresh and submit an explicit versioned edit.');
+   }
    const data=await this.upstream.request('PATCH',`/access/v1/grants/${opaqueId(remote.id)}`,{expected_revision:remote.revision,status:g.status,expires_at:g.expires_at},undefined,allocation);check();remote=data.grant;
   }
   if(!remote?.id||remote.customer_id!==c.upstream_id||remote.resource_id!==r.upstream_id||remote.status!==g.status)throw new HttpError(503,'core_outcome_unknown','Grant result is unconfirmed.');
@@ -287,7 +292,7 @@ export class Access {
   else if((match=path.match(/^\/access\/v1\/customers\/([A-Za-z0-9_-]+)\/accounts$/))&&method==='GET') {
    const customer=this.object('access_customers',match[1],p.account.id);if(!customer.upstream_id||customer.pending)throw new HttpError(409,'customer_pending','Customer not ready.');
    const data=await this.upstream.request('GET',`/access/v1/customers/${opaqueId(customer.upstream_id)}/accounts`);check();
-   result={accounts:(data.accounts||[]).flatMap(item=>{const g=this.db.prepare('SELECT * FROM access_grants WHERE upstream_id=? AND account_id=? AND customer_id=?').get(item.id,p.account.id,customer.id);if(!g||!this.runtimeGrant(g))return [];const v=project(item,schemas.account);v.id=g.id;return [v];})};
+   result={accounts:(data.accounts||[]).flatMap(item=>{const g=this.db.prepare('SELECT * FROM access_grants WHERE upstream_id=? AND account_id=? AND customer_id=?').get(item.id,p.account.id,customer.id);if(!g||!this.runtimeGrant(g))return [];const v=project(item,schemas.account);v.id=g.id;v.grant_id=g.id;delete v.account_lease_id;return [v];})};
   }
   else if((match=path.match(/^\/access\/v1\/customers\/([A-Za-z0-9_-]+)\/usage$/))&&method==='GET')result=await this.usage(p.account,match[1],url.searchParams,check);
   else throw new HttpError(404,'not_found','No local API operation.');

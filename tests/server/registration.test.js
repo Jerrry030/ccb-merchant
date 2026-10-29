@@ -146,7 +146,7 @@ test('repeat registration does not reveal whether an email exists', async t => {
   const made = await f.request('POST', '/api/admin/users', { email: 'stopped@example.test', password, display_name: 'Stopped', role: 'member' }, admin);
   assert.equal(made.status, 201);
   const hash = f.store.db.prepare('SELECT password_hash FROM users WHERE email=?').get('stopped@example.test').password_hash;
-  assert.equal((await f.request('PATCH', `/api/admin/users/${made.data.user.id}`, { status: 'disabled' }, admin)).status, 200);
+  assert.equal((await f.request('PATCH', `/api/admin/users/${made.data.user.id}`,{...({ status: 'disabled' }),expected_revision:f.store.db.prepare('SELECT revision FROM users WHERE id=?').get((`/api/admin/users/${made.data.user.id}`).split('/').at(-1))?.revision}, admin)).status, 200);
   const disabled = await f.request('POST', '/api/auth/register', { email: 'stopped@example.test', password: 'disabled password 123', display_name: 'Disabled' });
   assert.deepEqual(disabled.data, first.data);
   assert.equal(deliveries.at(-1).kind, 'unavailable');

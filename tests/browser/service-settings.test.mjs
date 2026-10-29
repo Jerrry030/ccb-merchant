@@ -72,7 +72,7 @@ test('environment-managed SMTP controls are all read-only while testing remains 
   const browser=await chromium.launch({headless:true,...(process.env.PLAYWRIGHT_EXECUTABLE_PATH?{executablePath:process.env.PLAYWRIGHT_EXECUTABLE_PATH}:{})});t.after(()=>browser.close());
   const page=await browser.newPage({viewport:{width:1280,height:900}});page.setDefaultTimeout(10000);
   await page.goto(f.config.publicOrigin+'/login');await page.getByLabel('电子邮箱',{exact:true}).fill('admin@example.test');await page.getByLabel('密码',{exact:true}).fill(password);await page.locator('.auth-form button[type=submit]').click();
-  await page.getByRole('link',{name:'站点设置',exact:true}).click();await page.getByRole('tab',{name:'邮件配置',exact:true}).click();
+  await page.getByRole('link',{name:'设置',exact:true}).click();await page.getByRole('tab',{name:'邮件配置',exact:true}).click();
   for(const label of ['SMTP 主机','端口','用户名','密码','发件邮箱','发件人名称','使用 TLS','启用邮件服务']) assert.equal(await page.getByLabel(label,{exact:true}).isDisabled(),true);
   assert.equal(await page.getByRole('button',{name:'保存邮件配置',exact:true}).count(),0);
   await page.getByRole('button',{name:'测试连接',exact:true}).click();await page.getByText('连接和认证通过',{exact:true}).waitFor();assert.equal(observed[0].auth.pass,'env-fixture-secret');

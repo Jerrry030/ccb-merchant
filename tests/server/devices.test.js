@@ -41,7 +41,7 @@ test('permission loss during provider preflight cannot send a device mutation',a
  const admin=await f.request('POST','/api/setup',{setup_token:f.setupToken,email:'admin@example.test',password,display_name:'Admin'});
  const member=await f.request('POST','/api/admin/users',{email:'owner@example.test',password,display_name:'Owner',role:'member'},admin),id=member.data.user.id;
  await f.request('POST',`/api/admin/users/${id}/provision`,undefined,admin);await f.request('POST','/api/admin/users',{email:'second-admin@example.test',password,display_name:'Second admin',role:'admin'},admin);await f.restart();pause=true;
- const pending=f.request('PATCH',`/api/admin/users/${id}/devices/device-1`,{name:'Denied',expected_name:'Laptop'},admin);await Promise.race([entered,pending.then(r=>{throw new Error('Expected blocked preflight, received '+r.status);})]);
+ const pending=f.request('PATCH',`/api/admin/users/${id}/devices/device-1`,{...({name:'Denied',expected_name:'Laptop'}),expected_revision:f.store.db.prepare('SELECT revision FROM users WHERE id=?').get((`/api/admin/users/${id}/devices/device-1`).split('/').at(-1))?.revision},admin);await Promise.race([entered,pending.then(r=>{throw new Error('Expected blocked preflight, received '+r.status);})]);
  try{f.store.db.prepare("UPDATE users SET role='member' WHERE id=?").run(admin.data.user.id);}finally{release();}const answer=await pending;
  assert.ok([401,403].includes(answer.status),answer.raw);assert.equal(f.state.requests.some(r=>r.method==='PATCH'&&r.path.includes('/devices/')),false);
 });

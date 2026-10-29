@@ -25,7 +25,7 @@ test('retired procurement history is preserved on reopen without being an active
 
 test('inventory preserves historical and same-name leases while delivery rejects a released lease',async t=>{
  const expires_at=new Date(Date.now()+30*86400000).toISOString();
- const inventory=[{id:'released-lease',status:'released',revision:5},{id:'current-lease',status:'active',revision:7},{id:'independent-lease',status:'active',revision:2}].map(a=>({resource_id:'resource-1',platform:'Windows/x64',assigned:false,expires_at,details:{name:'same@example.test',state:'available'},...a}));
+ const inventory=[{id:'released-lease',status:'released',revision:5},{id:'current-lease',status:'active',revision:7},{id:'independent-lease',status:'active',revision:2}].map(a=>({resource_id:'resource-1',platform:'Windows/x64',assigned:false,allow_delegation:true,expires_at,details:{name:'same@example.test',state:'available'},...a}));
  const f=await fixture(t,{inventory}),admin=await f.request('POST','/api/setup',{setup_token:f.setupToken,email:'admin@example.test',password,display_name:'Owner'});
  const member=await f.request('POST','/api/admin/users',{email:'buyer@example.test',password,display_name:'Buyer',role:'member'},admin);
  const view=await f.request('GET','/api/admin/inventory',undefined,admin);assert.equal(view.status,200,view.raw);
@@ -91,7 +91,7 @@ test('invalid inventory or inactive users never trigger automatic customer creat
  assert.equal((await f.request('POST','/api/admin/grants',{...body,account_lease_id:'foreign'},admin)).status,409);
  assert.equal((await f.request('POST','/api/admin/grants',{...body,expires_at:new Date(Date.now()+400*86400000).toISOString()},admin)).status,400);
  assert.equal((await f.request('POST','/api/admin/grants',{...body,expected_account_revision:0},admin)).status,400);
- await f.request('PATCH',`/api/admin/users/${member.data.user.id}`,{status:'disabled'},admin);
+ await f.request('PATCH',`/api/admin/users/${member.data.user.id}`,{...({status:'disabled'}),expected_revision:f.store.db.prepare('SELECT revision FROM users WHERE id=?').get((`/api/admin/users/${member.data.user.id}`).split('/').at(-1))?.revision},admin);
  assert.equal((await f.request('POST','/api/admin/grants',body,admin)).status,409);assert.equal(f.state.customers.length,0);assert.equal(f.state.grants.length,0);
 });
 

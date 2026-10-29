@@ -35,9 +35,9 @@ test('audit is readable, filtered and pageable beyond 500 without rewriting hist
   assert.equal(page.status,200);assert.equal(page.data.total,520);assert.equal(page.data.events.length,20);
   assert.ok(page.data.events.every(e=>e.customer_name==='星河设计'&&e.actor_name==='审计管理员'));
   const grants=await f.request('GET','/api/admin/audit?user_id='+alice.id+'&action=grant.create',undefined,admin);
-  assert.equal(grants.data.total,1);assert.equal(grants.data.events[0].subject_name,'Account 1');
+  assert.equal(grants.data.total,1);assert.equal(grants.data.events[0].subject_name,'账号#1');
   const owned=f.state.inventory[0];const extended=await f.request('PATCH','/api/admin/grants/'+owned.grant_id,{expected_revision:owned.grant_revision,expires_at:new Date(Date.now()+10*86400000).toISOString()},admin);assert.equal(extended.status,200);
-  const renewalAudit=await f.request('GET','/api/admin/audit?user_id='+alice.id+'&action=grant.extend',undefined,admin);assert.equal(renewalAudit.data.total,1);assert.equal(renewalAudit.data.events[0].subject_name,'Account 1');
+  const renewalAudit=await f.request('GET','/api/admin/audit?user_id='+alice.id+'&action=grant.extend',undefined,admin);assert.equal(renewalAudit.data.total,1);assert.equal(renewalAudit.data.events[0].subject_name,'账号#1');
   const q=await f.request('GET','/api/admin/audit?q='+encodeURIComponent('北辰'),undefined,admin);assert.ok(q.data.events.every(e=>e.resolved_customer_id===bob.id));
   const old=await f.request('GET','/api/admin/audit?from=2019-01-01T00:00:00Z&to=2021-01-01T00:00:00Z',undefined,admin);
   assert.equal(old.data.total,1);assert.equal(old.data.events[0].resolved_customer_id,null);
@@ -51,8 +51,8 @@ test('inventory filters use the chosen deadline, distinguish history and sort un
   const now=Date.parse('2026-10-29T00:00:00Z');
   const accounts=[
     {id:'a',status:'active',assigned:true,user_id:'alice',customer_name:'星河',platform:'Windows',expires_at:'2027-01-01T00:00:00Z',customer_expires_at:'2026-10-31T00:00:00Z',details:{name:'Alpha',state:'available'}},
-    {id:'b',status:'active',assigned:false,platform:'MacOS',expires_at:'2026-11-02T00:00:00Z',details:{name:'Beta',state:'available'}},
-    {id:'c',status:'released',assigned:false,platform:'MacOS',expires_at:'2027-01-01T00:00:00Z',details:{name:'Old',state:'available'}},
+    {id:'b',status:'active',assigned:false,allow_delegation:true,platform:'MacOS',expires_at:'2026-11-02T00:00:00Z',details:{name:'Beta',state:'available'}},
+    {id:'c',status:'released',assigned:false,allow_delegation:true,platform:'MacOS',expires_at:'2027-01-01T00:00:00Z',details:{name:'Old',state:'available'}},
   ];
   assert.deepEqual(selectInventory(accounts,new URLSearchParams('due=7'),now).map(e=>e.account.id),['a']);
   assert.deepEqual(selectInventory(accounts,new URLSearchParams('due=7&deadline=authorization'),now).map(e=>e.account.id),['b']);

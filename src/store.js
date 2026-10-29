@@ -28,11 +28,13 @@ export class Store {
     // Additive local schema changes preserve existing users, wallets and receipts.
     this.db.exec('BEGIN IMMEDIATE');
     try {
-      for (const [table, columns] of Object.entries({rentals:{platform:"TEXT NOT NULL DEFAULT ''",account_lease_id:"TEXT NOT NULL DEFAULT ''",renew_grant_id:"TEXT NOT NULL DEFAULT ''"},plans:{source_plan_id:'TEXT',source_revision:'INTEGER',cost_minor:'INTEGER'},audit:{customer_id:'TEXT',subject_label:'TEXT'}})) {
+      for (const [table, columns] of Object.entries({rentals:{platform:"TEXT NOT NULL DEFAULT ''",account_lease_id:"TEXT NOT NULL DEFAULT ''",renew_grant_id:"TEXT NOT NULL DEFAULT ''"},plans:{source_plan_id:'TEXT',source_revision:'INTEGER',cost_minor:'INTEGER'},audit:{customer_id:'TEXT',subject_label:'TEXT',details:"TEXT NOT NULL DEFAULT '{}'"},users:{revision:'INTEGER NOT NULL DEFAULT 1',notes:"TEXT NOT NULL DEFAULT ''",tags:"TEXT NOT NULL DEFAULT '[]'",must_change_password:'INTEGER NOT NULL DEFAULT 0',last_login_at:'TEXT',management_profile:"TEXT NOT NULL DEFAULT 'owner'",pending_email:'TEXT'}})) {
         const existing=new Set(this.db.prepare(`PRAGMA table_info(${table})`).all().map(c=>c.name));
         for(const [name,type] of Object.entries(columns)) if(!existing.has(name)) this.db.exec(`ALTER TABLE ${table} ADD COLUMN ${name} ${type}`);
       }
       this.db.exec(readFileSync(new URL('./inventory-schema.sql',import.meta.url),'utf8'));
+      this.db.exec(readFileSync(new URL('./admin-schema.sql',import.meta.url),'utf8'));
+      for(const batch of this.db.prepare("SELECT id,items FROM allocation_batches WHERE status='running'").all()){const items=JSON.parse(batch.items).map(item=>item.status==='running'?{...item,status:'review',error:'process_interrupted'}:item);this.db.prepare("UPDATE allocation_batches SET items=?,status='review' WHERE id=?").run(JSON.stringify(items),batch.id);}
       this.db.exec('CREATE INDEX IF NOT EXISTS audit_customer ON audit(customer_id,id); CREATE INDEX IF NOT EXISTS audit_action ON audit(action,id); CREATE INDEX IF NOT EXISTS audit_time ON audit(created_at,id);');
       if(this.db.prepare('PRAGMA user_version').get().user_version<4)this.db.exec('PRAGMA user_version=4');
       this.db.exec('COMMIT');
@@ -95,8 +97,8 @@ export class Store {
     try { const value = work(); this.db.exec('COMMIT'); return value; }
     catch (error) { this.db.exec('ROLLBACK'); throw error; }
   }
-  audit(actor, action, subject, outcome = 'ok', {customer_id = null, subject_label = null} = {}) {
-    this.db.prepare('INSERT INTO audit(actor_id,action,subject_id,outcome,created_at,customer_id,subject_label) VALUES (?,?,?,?,?,?,?)').run(actor || null, action, subject || null, outcome, new Date().toISOString(), customer_id, subject_label);
+  audit(actor, action, subject, outcome = 'ok', {customer_id = null, subject_label = null, details = {}} = {}) {
+    this.db.prepare('INSERT INTO audit(actor_id,action,subject_id,outcome,created_at,customer_id,subject_label,details) VALUES (?,?,?,?,?,?,?,?)').run(actor || null, action, subject || null, outcome, new Date().toISOString(), customer_id, subject_label, JSON.stringify(details));
   }
   throttle(key, max, windowMs) {
     const now = Date.now();
@@ -118,6 +120,27 @@ export class Store {
     this.db.prepare("UPDATE rentals SET status='queued',next_attempt_at=0,updated_at=?,revision=revision+1 WHERE id=?").run(now,rental.id);
     this.audit(rental.user_id,'rental.funded',rental.id);
   }
+  labelAccounts(rows, inventory = false) {
+    return this.transaction(() => rows.map(row => {
+      const lease = inventory ? row.id : row.account_lease_id || this.db.prepare('SELECT lease_id FROM account_grant_codes WHERE grant_id=?').get(row.grant_id || row.id)?.lease_id;
+      let code = null;
+      if (lease) {
+        if(!this.db.prepare('SELECT 1 FROM account_codes WHERE lease_id=?').get(lease))this.db.prepare('INSERT INTO account_codes(lease_id) VALUES(?)').run(lease);
+        code = '账号#' + this.db.prepare('SELECT number FROM account_codes WHERE lease_id=?').get(lease).number;
+        const grant = row.grant_id || (!inventory ? row.id : null);
+        if (grant) {const prior=this.db.prepare('SELECT lease_id FROM account_grant_codes WHERE grant_id=?').get(grant);if(prior&&prior.lease_id!==lease)throw new HttpError(503,'invalid_core_response','An authorization changed its allocation identity.');this.db.prepare('INSERT OR IGNORE INTO account_grant_codes(grant_id,lease_id) VALUES(?,?)').run(grant,lease);}
+      }
+      const name = code || '账号（编号待核对）';
+      return inventory ? {...row,account_code:code,resource_name:row.resource_name || '',details:row.details?{...row.details,name}:undefined} : {...row,account_code:code,resource_name:row.resource_name || '',name};
+    }));
+  }
+  accountHolds(exceptBatch = '') {
+    const held = new Map(this.db.prepare("SELECT account_lease_id,id FROM rentals WHERE status IN ('awaiting_payment','queued','review','refund_pending')").all().filter(r=>r.account_lease_id).map(r=>[r.account_lease_id,{reason:'purchase_pending',order_id:r.id}]));
+    for (const batch of this.db.prepare("SELECT id,items FROM allocation_batches WHERE status IN ('pending','running','review') AND id<>?").all(exceptBatch)) {
+      for (const item of JSON.parse(batch.items)) if (['pending','running','review'].includes(item.status)) held.set(item.intent.account_lease_id,{reason:'allocation_pending',batch_id:batch.id});
+    }
+    return held;
+  }
   createUser({ email, display_name, password_hash, role, status }) {
     const user = { id: randomUUID(), email, display_name, password_hash, role, status, created_at: new Date().toISOString() };
     try {
@@ -130,8 +153,8 @@ export class Store {
   }
 
 }
-export function publicUser(user) {
-  return { id: user.id, email: user.email, display_name: user.display_name, role: user.role, status: user.status, ...(user.core_customer_id ? { core_customer_id: user.core_customer_id } : {}), created_at: user.created_at, sync_pending:Boolean(user.core_pending || (!user.core_customer_id && user.provision_name)), sync_error:user.sync_error || null };
+export function publicUser(user, admin = false) {
+  return { id: user.id, email: user.email, display_name: user.display_name, role: user.role, status: user.status, ...(user.core_customer_id ? { core_customer_id: user.core_customer_id } : {}), created_at: user.created_at, revision:user.revision || 1, must_change_password:Boolean(user.must_change_password), ...(admin?{notes:user.notes || '',tags:JSON.parse(user.tags || '[]'),pending_email:user.pending_email || null}:{}), last_login_at:user.last_login_at || null, management_profile:user.management_profile || 'owner', sync_pending:Boolean(user.core_pending || (!user.core_customer_id && user.provision_name)), sync_error:user.sync_error || null };
 }
 export function publicOrder(order) {
   return { id: order.id, status: order.status, amount_minor: order.amount_minor, currency: order.currency, created_at: order.created_at, updated_at: order.updated_at, rental_id:order.rental_id || null, payment_method:order.payment_method, provider:order.provider };

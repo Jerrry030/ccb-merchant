@@ -69,13 +69,13 @@ test('Host, Origin, CSRF, role, and session checks protect all browser writes',a
 test('last active admin is protected in HTTP and SQLite, and self-disable is rejected',async t=>{
   const f=await fixture(t), admin=await f.request('POST','/api/setup',{...credentials,setup_token:f.setupToken});
   const id=admin.data.user.id;
-  assert.equal((await f.request('PATCH',`/api/admin/users/${id}`,{role:'member'},admin)).data.error.code,'last_admin');
-  assert.equal((await f.request('PATCH',`/api/admin/users/${id}`,{status:'disabled'},admin)).data.error.code,'self_disable');
+  assert.equal((await f.request('PATCH',`/api/admin/users/${id}`,{...({role:'member'}),expected_revision:f.store.db.prepare('SELECT revision FROM users WHERE id=?').get((`/api/admin/users/${id}`).split('/').at(-1))?.revision},admin)).data.error.code,'last_admin');
+  assert.equal((await f.request('PATCH',`/api/admin/users/${id}`,{...({status:'disabled'}),expected_revision:f.store.db.prepare('SELECT revision FROM users WHERE id=?').get((`/api/admin/users/${id}`).split('/').at(-1))?.revision},admin)).data.error.code,'self_disable');
   assert.throws(()=>f.store.db.prepare('DELETE FROM users WHERE id=?').run(id),/last_admin/);
   assert.throws(()=>f.store.db.prepare("UPDATE users SET status='disabled' WHERE id=?").run(id),/last_admin/);
   const second=await f.request('POST','/api/admin/users',{email:'second@example.test',password,display_name:'Second',role:'admin'},admin);
   assert.equal(second.status,201);
-  assert.equal((await f.request('PATCH',`/api/admin/users/${id}`,{role:'member'},admin)).status,200);
+  assert.equal((await f.request('PATCH',`/api/admin/users/${id}`,{...({role:'member'}),expected_revision:f.store.db.prepare('SELECT revision FROM users WHERE id=?').get((`/api/admin/users/${id}`).split('/').at(-1))?.revision},admin)).status,200);
   assert.equal((await f.request('GET','/api/admin/users',undefined,admin)).status,401);
 });
 

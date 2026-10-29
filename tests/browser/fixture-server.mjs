@@ -2,7 +2,7 @@
 import http from 'node:http';
 import { defaultPaymentSettings } from '../../src/payment-settings.js';
 import { describePaymentCatalog } from '../../public/payment-catalog.js';
-import { readFile } from 'node:fs/promises';
+import { readFile, stat } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { resolve, dirname } from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -31,7 +31,10 @@ export async function startFixture(options = {}) {
     try {
       if (!path.startsWith('/api/')) {
         if (!['GET','HEAD'].includes(req.method)) return reply(405,'method_not_allowed','Method not allowed.');
-        const asset = {'/app.js':['app.js','text/javascript; charset=utf-8'],'/payment-checkout.js':['payment-checkout.js','text/javascript; charset=utf-8'],'/mail-settings.js':['mail-settings.js','text/javascript; charset=utf-8'],'/payment-settings.js':['payment-settings.js','text/javascript; charset=utf-8'],'/payment-catalog.js':['payment-catalog.js','text/javascript; charset=utf-8'],'/usage-detail.js':['usage-detail.js','text/javascript; charset=utf-8'],'/inventory-status.js':['inventory-status.js','text/javascript; charset=utf-8'],'/admin-workflow.js':['admin-workflow.js','text/javascript; charset=utf-8'],'/registration-policy.js':['registration-policy.js','text/javascript; charset=utf-8'],'/styles.css':['styles.css','text/css; charset=utf-8'],'/mark.svg':['mark.svg','image/svg+xml']}[path] || ['index.html','text/html; charset=utf-8'];
+        // Shipped assets are flat files in public/ plus fonts in public/fonts/; other paths are client routes.
+        const file = /^\/((?:fonts\/)?[a-z0-9-]+\.(js|css|svg|webp|woff2))$/.exec(path);
+        const asset = file ? [file[1],{js:'text/javascript; charset=utf-8',css:'text/css; charset=utf-8',svg:'image/svg+xml',webp:'image/webp',woff2:'font/woff2'}[file[2]]] : ['index.html','text/html; charset=utf-8'];
+        if (file && !(await stat(resolve(publicRoot,file[1])).catch(() => null))?.isFile()) { res.writeHead(404,{'Content-Type':'text/plain; charset=utf-8'}); return res.end('Not found.'); }
         const body = await readFile(resolve(publicRoot,asset[0]));
         res.writeHead(200,{'Content-Type':asset[1],'Cache-Control':'no-store','Referrer-Policy':'no-referrer','Content-Security-Policy':"default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'"});
         return res.end(body);
@@ -95,8 +98,9 @@ export async function startFixture(options = {}) {
       }
       if (path.startsWith('/api/me/payments/') && !write) { const order = state.orders.find(o => o.id === decodeURIComponent(path.split('/').pop())); return order ? reply(200,{order}) : reply(404,'not_found','Order not found.'); }
       if(path==='/api/admin/access-accounts'&&!write)return reply(200,{accounts:[]});
+      if(path==='/api/admin/allocation-batches' && !write)return reply(200,{batches:[],total:0});
       if (path === '/api/admin/connection') return reply(200,state.connection);
-      if (path === '/api/admin/inventory') return reply(200,{accounts:state.grants.map(g=>({id:'held-'+g.id,resource_id:g.resource_id,platform:'Windows/x64',status:'active',revision:2,expires_at:new Date(Date.now()+90*86400000).toISOString(),grant_id:g.id,grant_revision:g.revision,customer_expires_at:g.expires_at,assigned:g.status==='active',user_id:'member-1',customer_name:'测试成员',details:{name:g.name,state:'available',device_name:''}}))});
+      if (path === '/api/admin/inventory') return reply(200,{accounts:state.grants.map(g=>({id:'held-'+g.id,resource_id:g.resource_id,platform:'Windows/x64',status:'active',revision:2,expires_at:new Date(Date.now()+90*86400000).toISOString(),grant_id:g.id,grant_revision:g.revision,customer_expires_at:g.expires_at,allow_delegation:true,assigned:g.status==='active',user_id:'member-1',customer_name:'测试成员',details:{name:g.name,state:'available',device_name:''}}))});
       if (path === '/api/admin/resources') return reply(200,{resources:state.resources});
       if (path === '/api/admin/users' && !write) return reply(200,{users:state.users,total:state.users.length,limit:50,offset:0});
       if (/^\/api\/admin\/users\/[^/]+$/.test(path) && !write) { const user=state.users.find(u=>u.id===decodeURIComponent(path.split('/').at(-1)));return user?reply(200,{user}):reply(404,'not_found','Customer not found.'); }

@@ -59,7 +59,7 @@ test('symlinks and submodules cannot introduce unreviewed files', () => {
 
 test('Docker context is an explicit source-only allowlist, with hidden inputs excluded last', () => {
   const rules = readFileSync(new URL('../../.dockerignore', import.meta.url), 'utf8').split(/\r?\n/).map(x => x.trim()).filter(x => x && !x.startsWith('#'));
-  assert.deepEqual(rules, ['**', '!Dockerfile', '!package.json', '!package-lock.json', '!src/', 'src/**', '!src/*.js', '!src/*.sql', '!public/', 'public/**', '!public/*.html', '!public/*.js', '!public/*.css', '!public/*.svg', 'src/*/**', 'public/*/**', '**/.*']);
+  assert.deepEqual(rules, ['**', '!Dockerfile', '!package.json', '!package-lock.json', '!src/', 'src/**', '!src/*.js', '!src/*.sql', '!public/', 'public/**', '!public/*.html', '!public/*.js', '!public/*.css', '!public/*.svg', '!public/auth-mist-lake.webp', 'src/*/**', 'public/*/**', '!public/fonts/', '!public/fonts/*.woff2', '**/.*']);
 });
 
 test('security workflow uses complete checkout and immutable actions, not privileged PR execution', () => {

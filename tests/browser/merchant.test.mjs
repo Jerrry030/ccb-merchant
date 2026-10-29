@@ -38,7 +38,7 @@ test('member identity controls navigation; direct admin routes do not fetch priv
   const h = await harness(t); await login(h);
   await h.page.getByRole('heading',{name:'首页',exact:true}).waitFor();
   await h.page.getByText('工作空间尚未连接上游服务',{exact:true}).waitFor();
-  assert.equal(await h.page.getByRole('link',{name:'客户管理',exact:true}).count(),0);
+  assert.equal(await h.page.getByRole('link',{name:'客户',exact:true}).count(),0);
   assert.equal(await h.page.getByRole('link',{name:'API 接入',exact:true}).count(),0);
   assert.equal(await h.page.getByRole('navigation',{name:'主导航'}).getByRole('link',{name:'开始使用',exact:true}).count(),1);
   assert.equal(await h.page.getByRole('combobox').count(),0,'No identity/role switch');
@@ -46,7 +46,7 @@ test('member identity controls navigation; direct admin routes do not fetch priv
   assert.equal(await h.page.getByText('0',{exact:true}).count(),0,'Unavailable upstream data must not be represented as zero');
   await h.page.getByRole('navigation',{name:'主导航'}).getByRole('link',{name:'开始使用',exact:true}).click();
   await h.page.getByRole('heading',{name:'开始使用',exact:true}).waitFor();
-  await h.page.getByRole('heading',{name:'安装 ccb',exact:true}).waitFor();
+  await h.page.getByRole('heading',{name:'等待分配账号',exact:true}).waitFor();
   await h.page.goto(h.fixture.origin + '/admin/access');
   await h.page.getByRole('heading',{name:'没有管理权限',exact:true}).waitFor();
   assert.equal(h.fixture.state.requests.filter(r => r.path.startsWith('/api/admin/')).length,0);
@@ -65,8 +65,8 @@ test('member empty and unavailable views have honest states; payment stays disab
 
 test('admin uses the same layout and sees only genuine empty data/configuration',async t => {
   const h = await harness(t); await login(h,'admin');
-  for (const title of ['开始使用','客户管理','账号库存','审计日志','站点设置']) assert.equal(await h.page.getByRole('link',{name:title,exact:true}).count(),1);
-  for (const [link,text] of [['账号库存','暂无账号'],['审计日志','暂无审计记录'],['站点设置','公开站点信息']]) {
+  for (const title of ['开始使用','客户','库存','审计','设置']) assert.equal(await h.page.getByRole('link',{name:title,exact:true}).count(),1);
+  for (const [link,text] of [['库存','暂无账号'],['审计','暂无审计记录'],['设置','公开站点信息']]) {
     await h.page.getByRole('link',{name:link,exact:true}).click(); await h.page.getByText(text,{exact:true}).waitFor();
   }
   if (process.env.CCB_BROWSER_CAPTURE === '1') { await mkdir(captureRoot,{recursive:true}); await h.page.screenshot({path:resolve(captureRoot,'admin-settings.png'),fullPage:true}); }
@@ -77,7 +77,7 @@ test('admin uses the same layout and sees only genuine empty data/configuration'
 
 test('payment settings show supported sources without configuration-only warnings', async t => {
   const h = await harness(t); await login(h,'admin');
-  await h.page.getByRole('link',{name:'站点设置',exact:true}).click();
+  await h.page.getByRole('link',{name:'设置',exact:true}).click();
   await h.page.getByRole('tab',{name:'支付配置',exact:true}).click();
   assert.equal(await h.page.getByRole('tab',{name:'邮件配置',exact:true}).count(),1);
   assert.equal(await h.page.getByRole('tab',{name:'邮件与支付',exact:true}).count(),0);
@@ -124,7 +124,7 @@ test('one-time setup requires confirmation and establishes server administrator 
   await page.getByRole('button',{name:'创建管理员',exact:true}).click(); await page.getByRole('dialog').waitFor();
   assert.equal(fixture.state.requests.filter(r => r.path === '/api/setup').length,0);
   await page.getByRole('button',{name:'确认初始化',exact:true}).click(); await page.getByRole('heading',{name:'上游接入',exact:true}).waitFor(); await page.getByRole('link',{name:'稍后配置，返回首页',exact:true}).click(); await page.getByRole('heading',{name:'首页',exact:true}).waitFor();
-  assert.equal(await page.getByRole('link',{name:'客户管理',exact:true}).count(),1);
+  assert.equal(await page.getByRole('link',{name:'客户',exact:true}).count(),1);
 });
 
 test('connect query survives login without auto-approval; writes use cookie and CSRF',async t => {
@@ -159,10 +159,10 @@ test('grant revoke carries exact revision, rejects 409, then requires fresh expl
 });
 
 test('last-admin error is actionable and never locally changes the current role',async t => {
-  const h = await harness(t); await login(h,'admin'); await h.page.getByRole('link',{name:'客户管理',exact:true}).click();
+  const h = await harness(t); await login(h,'admin'); await h.page.getByRole('link',{name:'客户',exact:true}).click();
   await h.page.getByRole('row').filter({hasText:'admin@example.test'}).getByRole('button',{name:'编辑',exact:true}).click();
   await h.page.getByLabel('账户角色',{exact:true}).selectOption('member'); await h.page.getByRole('button',{name:'保存客户信息',exact:true}).click(); await h.page.getByRole('dialog').filter({hasText:'确认权限变更'}).getByRole('button',{name:'确认变更',exact:true}).click();
-  await h.page.getByText('需要保留可用的管理员',{exact:true}).waitFor(); assert.equal(h.fixture.state.users[0].role,'admin'); assert.equal(await h.page.getByRole('link',{name:'站点设置',exact:true}).count(),1);
+  await h.page.getByText('需要保留可用的管理员',{exact:true}).waitFor(); assert.equal(h.fixture.state.users[0].role,'admin'); assert.equal(await h.page.getByRole('link',{name:'设置',exact:true}).count(),1);
 });
 
 
@@ -204,8 +204,9 @@ test('responsive light/dark layout has no page overflow and preference persists'
   await h.page.reload(); await h.page.getByRole('heading',{name:'用量',exact:true}).waitFor(); assert.equal(await h.page.locator('html').getAttribute('data-theme'),'dark');
   await h.page.setViewportSize({width:390,height:844}); assert.equal(await h.page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth),true);
   if (process.env.CCB_BROWSER_CAPTURE === '1') await h.page.screenshot({path:resolve(captureRoot,'overview-mobile.png'),fullPage:true});
-  await h.page.getByRole('button',{name:'打开导航',exact:true}).click(); await h.page.getByRole('link',{name:'我的账号',exact:true}).click(); await h.page.getByText('还没有账号',{exact:true}).waitFor();
-  assert.equal(await h.page.getByRole('button',{name:'打开导航',exact:true}).getAttribute('aria-expanded'),'false');
+  const tabBar = await h.page.getByRole('navigation',{name:'主导航'}).boundingBox(); assert.ok(tabBar && tabBar.y + tabBar.height <= 844 && tabBar.y > 844 / 2,'Phone navigation stays at the bottom of the screen');
+  await h.page.getByRole('navigation',{name:'主导航'}).getByRole('link',{name:'我的账号',exact:true}).click(); await h.page.getByText('还没有账号',{exact:true}).waitFor();
+  assert.equal(await h.page.getByRole('navigation',{name:'主导航'}).getByRole('link',{name:'我的账号',exact:true}).getAttribute('aria-current'),'page');
 });
 
 test('partial overview failures preserve unknown counters even when core itself is available',async t => {
@@ -217,14 +218,14 @@ test('partial overview failures preserve unknown counters even when core itself 
 });
 
 test('customer management creates local accounts without exposing a provisioning or resource editor',async t=>{
- const h=await harness(t,{connected:true});await login(h,'admin');await h.page.getByRole('link',{name:'客户管理',exact:true}).click();
+ const h=await harness(t,{connected:true});await login(h,'admin');await h.page.getByRole('link',{name:'客户',exact:true}).click();
  await h.page.getByRole('button',{name:'创建客户',exact:true}).click();
  const dialog=h.page.getByRole('dialog',{name:'创建客户账户'});await dialog.getByLabel('电子邮箱',{exact:true}).fill('new@example.test');await dialog.getByLabel('初始密码',{exact:true}).fill('fixture-password-123');await dialog.getByLabel('显示名称',{exact:true}).fill('新客户');await dialog.getByRole('button',{name:'创建客户账户',exact:true}).click();
  await dialog.waitFor({state:'hidden'});const row=h.page.getByRole('row').filter({hasText:'new@example.test'});await row.waitFor();assert.equal(await row.getByRole('button',{name:'开通映射',exact:true}).count(),0);await row.getByRole('link',{name:'查看与分配账号',exact:true}).click();await h.page.getByRole('heading',{name:'账号库存',exact:true}).first().waitFor();assert.ok(!h.fixture.state.requests.some(r=>r.path.endsWith('/provision')));
 });
 
 test('settings save only public fields; profile password update returns to authentication',async t => {
-  const h = await harness(t); await login(h,'admin'); await h.page.getByRole('link',{name:'站点设置',exact:true}).click();
+  const h = await harness(t); await login(h,'admin'); await h.page.getByRole('link',{name:'设置',exact:true}).click();
   await h.page.getByLabel('站点名称',{exact:true}).fill('回归验证站点'); await h.page.getByLabel('站点简介',{exact:true}).fill('只修改公开信息。');
   await h.page.getByLabel('支持邮箱',{exact:true}).fill('support@example.test'); await h.page.getByRole('checkbox',{name:'允许用户自助注册',exact:true}).check();
   await h.page.getByRole('button',{name:'保存公开设置',exact:true}).click(); await h.page.getByRole('button',{name:'确认保存',exact:true}).click(); await h.page.getByText('公开设置已保存',{exact:true}).waitFor();
@@ -232,7 +233,7 @@ test('settings save only public fields; profile password update returns to authe
   await h.page.getByRole('link',{name:'个人设置',exact:true}).click(); await h.page.getByLabel('当前密码',{exact:true}).fill(fixtureAccounts.admin.password);
   await h.page.getByLabel('新密码',{exact:true}).fill('fixture-only-changed-password'); await h.page.getByLabel('确认新密码',{exact:true}).fill('fixture-only-changed-password');
   await h.page.getByRole('button',{name:'更新密码',exact:true}).click(); await h.page.getByRole('dialog').getByRole('button',{name:'更新密码',exact:true}).click(); await h.page.getByRole('heading',{name:'欢迎回来',exact:true}).waitFor();
-  assert.equal(await h.page.getByRole('link',{name:'客户管理',exact:true}).count(),0); assert.equal(h.fixture.state.sessions.size,0);
+  assert.equal(await h.page.getByRole('link',{name:'客户',exact:true}).count(),0); assert.equal(h.fixture.state.sessions.size,0);
 });
 
 test('loading is visible and expired sessions explicitly request fresh login',async t => {

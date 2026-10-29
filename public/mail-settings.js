@@ -1,5 +1,10 @@
-export function mailSettingsView(ui, initial) {
-  const {el, field, switchRow, panel, notice, errorNotice, bindForm, confirmAction, api, state, CANCEL} = ui;
+import { el } from './dom.js';
+import { state } from './state.js';
+import { api } from './api.js';
+import { panel, notice, errorNotice } from './ui.js';
+import { CANCEL, field, switchRow, confirmAction, bindForm } from './ui-form.js';
+
+export function mailSettingsView(initial) {
   let mail = initial;
   let testing = false;
   const editable = mail.editable !== false;

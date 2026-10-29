@@ -2,7 +2,7 @@ import { createHash, randomUUID, randomBytes, createCipheriv, createDecipheriv }
 import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { upstreamFetch, readUpstreamJSON } from './upstream-network.js';
-import { HttpError, fields } from './security.js';
+import { HttpError, fields, opaqueId } from './security.js';
 
 // Explicit output schemas, including nested objects. Unknown upstream fields are never copied.
 const S = 'string', N = 'number', B = 'boolean';
@@ -144,6 +144,16 @@ export class Upstream {
     throw new HttpError(status===401?503:status,status===409?'core_conflict':'core_rejected','Upstream rejected the operation. No automatic retry was made.');
    }
    const data=await readUpstreamJSON(response);
+   if(response.headers.get('Idempotent-Replayed')==='true'&&method==='POST'&&['/access/v1/customers','/access/v1/grants'].includes(path)){
+    const field=path.endsWith('/customers')?'customer':'grant',accepted=data[field];
+    if(!accepted?.id)throw new HttpError(503,'core_outcome_unknown','Replay receipt cannot be identified.');
+    allocation?.authorize?.();
+    const currentResponse=await upstreamFetch(config,`${config.upstreamUrl}${path}/${opaqueId(accepted.id)}`,{method:'GET',headers,signal:combined});
+    if(!currentResponse.ok){await currentResponse.body?.cancel();throw new HttpError(503,'core_outcome_unknown','Could not confirm current state after replay.');}
+    const current=project((await readUpstreamJSON(currentResponse))[field],schemas[field]);allocation?.authorize?.();
+    if(!current||current.id!==accepted.id||current.revision!==accepted.revision||current.status!=='active'||current.expires_at&&Date.parse(current.expires_at)<=Date.now())throw new HttpError(409,'core_conflict','The accepted intent is historical; current state changed. Refresh before a new operation.');
+    data[field]=current;
+   }
    if(collectionRoute){
     const field=usageRoute?(requested.searchParams.get('view')==='sessions'?'sessions':'requests'):requested.pathname.split('/').at(-1), rows=data[field];
     if(!Array.isArray(rows)||typeof data.next_cursor!=='string')throw new HttpError(503,'invalid_core_response','Missing collection pagination.');

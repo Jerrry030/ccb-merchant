@@ -1,3 +1,9 @@
+import { el } from './dom.js';
+import { state } from './state.js';
+import { api } from './api.js';
+import { panel, notice, errorNotice } from './ui.js';
+import { CANCEL, field, switchRow, confirmAction, bindForm } from './ui-form.js';
+
 function minorUnits(raw) {
   if (!/^\d+(?:\.\d{1,2})?$/.test(raw)) throw new Error('金额必须是非负数，最多两位小数。');
   const [whole, fraction=''] = raw.split('.');
@@ -6,8 +12,7 @@ function minorUnits(raw) {
   return amount;
 }
 
-export function paymentSettingsView(ui, initial) {
-  const {el, field, switchRow, panel, notice, errorNotice, bindForm, confirmAction, api, state, CANCEL} = ui;
+export function paymentSettingsView(initial) {
   let payment=initial;
   const status=el('div',{'aria-live':'polite',class:'payment-summary'});
   const methodStatuses=new Map(), providerStatuses=new Map();

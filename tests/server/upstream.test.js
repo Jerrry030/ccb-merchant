@@ -88,3 +88,20 @@ test('usage continuation does not skip records when the visible limit is smaller
  const page=await f.request('GET','/api/me/usage?limit=50&offset=50',undefined,admin);
  assert.equal(page.status,200,page.raw);assert.equal(page.data.requests.length,50);assert.equal(page.data.requests[0].id,'51');
 });
+
+
+test('a historical create receipt is checked against current state before local provisioning',async t=>{
+ let accepted;
+ const f=await fixture(t,{onCore:({req,url,body,json,res})=>{
+  if(req.method==='POST'&&url.pathname==='/access/v1/customers'){
+   accepted={id:'receipt-object',external_id:body.external_id,display_name:body.display_name,status:'active',revision:1,created_at:new Date().toISOString()};
+   res.setHeader('Idempotent-Replayed','true');json({customer:accepted});return true;
+  }
+  if(url.pathname==='/access/v1/customers/receipt-object'){json({customer:{...accepted,status:'disabled',revision:2}});return true;}
+ }});
+ const admin=await f.request('POST','/api/setup',{...input,setup_token:f.setupToken});
+ const result=await f.request('POST',`/api/admin/users/${admin.data.user.id}/provision`,undefined,admin);
+ assert.equal(result.status,409,result.raw);
+ assert.equal(f.store.db.prepare('SELECT core_customer_id FROM users WHERE id=?').get(admin.data.user.id).core_customer_id,null);
+ assert.equal(f.state.requests.filter(r=>r.method==='PATCH').length,0);
+});

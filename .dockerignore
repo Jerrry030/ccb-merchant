@@ -13,8 +13,13 @@ public/**
 !public/*.js
 !public/*.css
 !public/*.svg
+# Approved sign-in artwork only; unrelated raster files remain excluded.
+!public/auth-mist-lake.webp
 # Source inputs are flat; a directory named like a source file must not reopen its children.
 src/*/**
 public/*/**
+# The one asset directory: self-hosted web fonts, woff2 only.
+!public/fonts/
+!public/fonts/*.woff2
 # Hidden local/config files are never build inputs, even inside allowed directories.
 **/.*

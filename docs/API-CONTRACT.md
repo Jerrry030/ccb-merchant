@@ -71,7 +71,7 @@
 
 ## 设备管理与用量筛选
 
-设备页现为独立导航入口。管理员从“客户管理 → 管理设备”进入，使用本站 `/api/admin/users/:id/devices`，其中 `id` 是本站用户 ID；服务端解析其提供方客户映射，浏览器不能指定其他提供方客户。
+设备页是客户内部的设备分区，不是侧栏里的独立入口。管理员从客户列表的「管理设备」进入，使用本站 `/api/admin/users/:id/devices`，其中 `id` 是本站用户 ID；服务端解析其提供方客户映射，浏览器不能指定其他提供方客户。
 
 本站个人与管理端使用同一套校验：读取设备返回 `devices/accounts`；设备子路径 `PATCH` 修改 `{name,expected_name}`，`PUT .../selection` 提交 `{surface:"code",grant_id,expected_selection_version}`，`DELETE` 撤销。`grant_id:null` 清空所选账号但保留登录，成功变更返回 `{device}`。版本冲突显示 `device_stale`，不自动取新版本覆盖；未知结果关闭编辑并刷新核对。管理员变更会写本站审计，提供方响应前后重新检查权限。
 
@@ -84,3 +84,17 @@
 核心提供方集合使用 limit/cursor，响应带 next_cursor，不接受 offset。本站上游客户端跟随游标，保持用量的实际页大小，并在自己的界面接口需要时转换本地分页；上游业务错误按顶层 code 解析，不保留嵌套错误的历史解析分支。本站 `/access` 拒绝响应同样使用 problem+json 和请求编号，本站浏览器控制台是独立接口。
 
 本站对外 `/access` 公开的是本地能力子集：资源、客户、共享组授权、履约、客户账号、设备和用量；不能把 Core 的库存或子密钥管理能力视为本地也存在。服务密钥永远留在服务端，身份和资源 ID 每跳校验并映射。
+
+
+## 本站管理员维护接口
+
+- `PATCH /api/admin/users/:id`：编辑必须带 `expected_revision`；允许名称、状态、角色、管理权限、备注、标签和受确认的邮箱纠错。未知字段拒绝。邮箱变更额外要求 `admin_password` 和 `reason`。同步核对的空 PATCH 不改变此编辑合同。
+- `POST /api/admin/users/:id/credentials`：`action` 为 `reset_password/email_reset/revoke_sessions`，必须带 `expected_revision/admin_password/reason`；临时密码设置额外带 `new_password`。返回更新后的用户状态，不返回密码或重置令牌。
+- `GET /api/admin/users`：支持 `limit/offset/q/status/role/tag/assignment/due`；`assignment` 为 `assigned/unassigned/sync_pending`，`due` 为 7 或 30。库存读取失败时不声称准确知道无账号客户集合。
+- `GET /api/admin/inventory`：新增本店 `account_code`、公开资源 `resource_name`、占用原因 `hold_reason` 及本地订单/批次关联。`details.name` 使用本店编号，不回显提供方账号名称。
+- `POST /api/admin/allocation-batches`：批次协调入口，携带 `id/action/items`。action 为 `preview/execute/reconcile/cancel`；新批次 items 为 1–100 个 `{user_id,resource_id,account_lease_id,expected_account_revision,expires_at}`。已保存批次可省略 items；提供时必须与原意图完全一致。返回 `{batch}`，每项状态必须单独读取，HTTP 成功不代表全部已分配。
+- `GET /api/admin/allocation-batches`：`id` 可选；支持 `limit/offset`，返回批次列表与总数。读取不会执行分配。
+
+单条交付入口与批次协调共同使用同一交付实现，不另写一套分配规则；批次的持久化、逐项调度和只读核对是其独立职责。
+
+公开用户会话包含临时密码强制变更标志和管理权限配置；内部备注/标签只在管理接口返回。密码变更前除会话读取、改密、退出外的浏览器 API 返回 `password_change_required`。
