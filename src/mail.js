@@ -5,14 +5,14 @@ function transportOptions(mail) {
   return { host:mail.host, port:mail.port, secure:mail.secure===true, requireTLS:mail.requireTLS===true, auth:mail.auth, pool:false, connectionTimeout:10000, greetingTimeout:10000, socketTimeout:15000, logger:false, debug:false, tls:{ rejectUnauthorized:true }, disableFileAccess:true, disableUrlAccess:true };
 }
 
-export function mailMessage(kind, link) {
+export function mailMessage(kind, secret) {
   if (kind === "verify") return {
-    subject: "验证你的账户邮箱",
-    text: `请在 24 小时内打开下面的链接，完成邮箱验证：\n${link}\n\n打开页面后还需要确认一次。如果这是尚未验证的账户，登录密码以你最近一次在注册页填写的为准。如果不是你本人操作，请不要打开链接。`,
+    subject: "你的邮箱验证码",
+    text: `验证码：${secret}\n\n请在 15 分钟内回到验证页面，输入这 6 位数字。验证码只能使用 5 次，只确认这个邮箱，不会修改已经可以登录的账户密码。如果不是你本人操作，请忽略这封邮件。`,
   };
   if (kind === "reset") return {
     subject: "重置你的登录密码",
-    text: `请在 30 分钟内打开下面的链接，设置新密码：\n${link}\n\n打开页面后还需要确认一次。如果不是你本人申请，请忽略这封邮件，原密码仍然有效。`,
+    text: `请在 30 分钟内打开下面的链接，设置新密码：\n${secret}\n\n打开页面后还需要确认一次。如果不是你本人申请，请忽略这封邮件，原密码仍然有效。`,
   };
   if (kind === "login") return {
     subject: "这个邮箱已经注册",
@@ -31,8 +31,8 @@ export function createMailer(config) {
   const transport = nodemailer.createTransport(transportOptions(config.mail));
   return {
     async send(email, kind, token) {
-      const link = token ? `${config.publicOrigin}/${kind === "verify" ? "verify" : "reset"}?token=${encodeURIComponent(token)}` : "";
-      const message = mailMessage(kind, link);
+      const link = token && kind !== "verify" ? `${config.publicOrigin}/reset?token=${encodeURIComponent(token)}` : "";
+      const message = mailMessage(kind, kind === "verify" ? token : link);
       await transport.sendMail({ from, to:email, subject:message.subject, text:message.text, disableFileAccess:true, disableUrlAccess:true });
     },
   };

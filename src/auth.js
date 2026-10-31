@@ -1,5 +1,6 @@
 import { managementAllows } from '../public/management-policy.js';
 import { unlinkSync } from 'node:fs';
+import { randomInt, timingSafeEqual } from 'node:crypto';
 import { digest, randomToken, passwordHash, equalSecret, fields, text, email, HttpError, respond } from './security.js';
 import { publicUser } from './store.js';
 import { assertCanRegister } from './integrations.js';
@@ -42,15 +43,17 @@ export class Auth {
   async sendMail(user,kind) {
     let token='';
     if(kind==='verify' || kind==='reset') {
-      token=randomToken();
+      const verify=kind==='verify';
+      token=verify?String(randomInt(0,1000000)).padStart(6,'0'):randomToken();
       const now=Date.now();
+      const tokenHash=verify?digest(`${user.id}:${token}`):digest(token);
       this.store.transaction(()=>{
         this.store.db.prepare('DELETE FROM auth_tokens WHERE (user_id=? AND kind=?) OR expires_at<=?').run(user.id,kind,now);
-        this.store.db.prepare('INSERT INTO auth_tokens VALUES (?,?,?,?)').run(digest(token),user.id,kind,now+(kind==='verify'?86400000:1800000));
+        this.store.db.prepare('INSERT INTO auth_tokens(token_hash,user_id,kind,expires_at,attempts) VALUES (?,?,?,?,0)').run(tokenHash,user.id,kind,now+(verify?900000:1800000));
       });
     }
     try { await this.mailer.send(user.email,kind,token); return true; }
-    catch { this.store.audit(null,`mail.${kind}`,user.id,'delivery_unknown'); return false; /* Do not log credentials, links, or provider errors. */ }
+    catch { this.store.audit(null,`mail.${kind}`,user.id,'delivery_unknown'); return false; /* Do not log credentials, codes, links, or provider errors. */ }
   }
   async handle(req,res,path,body,features) {
     const route=`${req.method} ${path}`;
@@ -181,27 +184,56 @@ export class Auth {
         }
         respond(res,200,{ok:true}); break;
       }
-      case 'POST /api/auth/verify':
+      case 'POST /api/auth/verify': {
+        if(!this.mailer) throw new HttpError(503,'mail_disabled','Email verification and reset are not configured.');
+        fields(body,['email','code'],['email','code']);
+        const address=email(body.email), code=text(body.code,'code',6);
+        if(!/^\d{6}$/.test(code)) throw new HttpError(400,'invalid_code','Verification code is invalid, expired, or already used.');
+        const matches=this.store.db.prepare('SELECT * FROM users WHERE email=? OR pending_email=?').all(address,address);
+        const user=matches.length===1?matches[0]:null;
+        const pending=Boolean(user && user.pending_email===address);
+        const registration=Boolean(user && !user.pending_email && user.email===address && user.status==='pending_verification');
+        const token=user && (pending || registration) ? this.store.db.prepare("SELECT * FROM auth_tokens WHERE user_id=? AND kind='verify' AND expires_at>?").get(user.id,Date.now()) : null;
+        const expected=digest(user ? `${user.id}:${code}` : `absent:${address}:${code}`);
+        const actual=token?.token_hash || digest(`absent:${address}:000000`);
+        const same=Buffer.byteLength(actual)===Buffer.byteLength(expected) && timingSafeEqual(Buffer.from(actual),Buffer.from(expected));
+        if(!token || !same) {
+          if(token) this.store.transaction(()=>{
+            const row=this.store.db.prepare('UPDATE auth_tokens SET attempts=attempts+1 WHERE token_hash=? RETURNING attempts').get(token.token_hash);
+            if(row?.attempts>=5) this.store.db.prepare('DELETE FROM auth_tokens WHERE token_hash=?').run(token.token_hash);
+          });
+          throw new HttpError(400,'invalid_code','Verification code is invalid, expired, or already used.');
+        }
+        this.store.transaction(()=>{
+          const consumed=this.store.db.prepare("DELETE FROM auth_tokens WHERE token_hash=? AND kind='verify' AND expires_at>?").run(token.token_hash,Date.now());
+          if(consumed.changes!==1) throw new HttpError(400,'invalid_code','Verification code is invalid, expired, or already used.');
+          if(pending) {
+            const updated=this.store.db.prepare('UPDATE users SET email=?,pending_email=NULL,revision=revision+1 WHERE id=? AND pending_email=?').run(address,user.id,address);
+            if(updated.changes!==1) throw new HttpError(409,'account_changed','Account changed; request a new code.');
+          } else {
+            const updated=this.store.db.prepare("UPDATE users SET status='active',revision=revision+1 WHERE id=? AND status='pending_verification' AND pending_email IS NULL").run(user.id);
+            if(updated.changes!==1) throw new HttpError(409,'account_changed','Account changed; request a new code.');
+          }
+          this.store.db.prepare('DELETE FROM sessions WHERE user_id=?').run(user.id);
+          this.store.db.prepare("DELETE FROM auth_tokens WHERE user_id=? AND kind='verify'").run(user.id);
+          this.store.audit(user.id,'auth.verify',user.id);
+        });
+        respond(res,200,{ok:true}); break;
+      }
       case 'POST /api/auth/reset-password': {
         if(!this.mailer) throw new HttpError(503,'mail_disabled','Email verification and reset are not configured.');
-        const reset=path.endsWith('reset-password');
-        fields(body,reset?['token','password']:['token'],reset?['token','password']:['token']);
+        fields(body,['token','password'],['token','password']);
         const tokenHash=digest(text(body.token,'token',128));
-        const token=this.store.db.prepare('SELECT * FROM auth_tokens WHERE token_hash=? AND kind=? AND expires_at>?').get(tokenHash,reset?'reset':'verify',Date.now());
+        const token=this.store.db.prepare("SELECT * FROM auth_tokens WHERE token_hash=? AND kind='reset' AND expires_at>?").get(tokenHash,Date.now());
         if(!token) throw new HttpError(400,'invalid_token','Link is invalid, expired, or already used.');
-        const hashed=reset?await passwordHash(body.password):null;
+        const hashed=await passwordHash(body.password);
         this.store.transaction(()=>{
           const consumed=this.store.db.prepare('DELETE FROM auth_tokens WHERE token_hash=? AND expires_at>?').run(tokenHash,Date.now());
           if(consumed.changes!==1) throw new HttpError(400,'invalid_token','Link is invalid, expired, or already used.');
-          if(reset) this.store.db.prepare('UPDATE users SET password_hash=?,must_change_password=0,revision=revision+1 WHERE id=?').run(hashed,token.user_id);
-          else {
-            const user=this.store.db.prepare('SELECT * FROM users WHERE id=?').get(token.user_id);
-            if(user.pending_email)this.store.db.prepare('UPDATE users SET email=pending_email,pending_email=NULL,revision=revision+1 WHERE id=?').run(user.id);
-            else this.store.db.prepare("UPDATE users SET status='active',revision=revision+1 WHERE id=? AND status='pending_verification'").run(token.user_id);
-          }
+          this.store.db.prepare('UPDATE users SET password_hash=?,must_change_password=0,revision=revision+1 WHERE id=?').run(hashed,token.user_id);
           this.store.db.prepare('DELETE FROM sessions WHERE user_id=?').run(token.user_id);
-          this.store.db.prepare('DELETE FROM auth_tokens WHERE user_id=? AND kind=?').run(token.user_id,reset?'reset':'verify');
-          this.store.audit(token.user_id,reset?'auth.reset':'auth.verify',token.user_id);
+          this.store.db.prepare("DELETE FROM auth_tokens WHERE user_id=? AND kind='reset'").run(token.user_id);
+          this.store.audit(token.user_id,'auth.reset',token.user_id);
         });
         respond(res,200,{ok:true}); break;
       }

@@ -17,7 +17,7 @@ CREATE TABLE access_resources(id TEXT PRIMARY KEY,account_id TEXT NOT NULL REFER
 
 CREATE TABLE audit (id INTEGER PRIMARY KEY, actor_id TEXT, action TEXT NOT NULL, subject_id TEXT, outcome TEXT NOT NULL, created_at TEXT NOT NULL) STRICT;
 
-CREATE TABLE auth_tokens (token_hash TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id), kind TEXT NOT NULL CHECK(kind IN ('verify','reset')), expires_at INTEGER NOT NULL) STRICT;
+CREATE TABLE auth_tokens (token_hash TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id), kind TEXT NOT NULL CHECK(kind IN ('verify','reset')), expires_at INTEGER NOT NULL, attempts INTEGER NOT NULL DEFAULT 0) STRICT;
 
 CREATE TABLE ledger (
   id TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id), order_id TEXT UNIQUE REFERENCES orders(id),

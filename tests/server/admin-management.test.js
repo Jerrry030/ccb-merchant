@@ -107,11 +107,11 @@ test('verified email change retains the old address until the new mailbox confir
  const created=await f.request('POST','/api/admin/users',{email:'before@example.test',display_name:'Mailbox verification',password,role:'member'},admin),id=created.data.user.id;
  const update=await f.request('PATCH',`/api/admin/users/${id}`,{expected_revision:1,email:'after@example.test',reason:'Verified request',admin_password:password},admin);
  assert.equal(update.status,200,update.raw);assert.equal(update.data.user.email,'before@example.test');assert.equal(update.data.user.pending_email,'after@example.test');
- const [destination,kind,token]=sent.at(-1);assert.equal(destination,'after@example.test');assert.equal(kind,'verify');assert.ok(token);
- const result=await f.request('POST','/api/auth/verify',{token});assert.equal(result.status,200,result.raw);
+ const [destination,kind,token]=sent.at(-1);assert.equal(destination,'after@example.test');assert.equal(kind,'verify');assert.match(token,/^\d{6}$/);
+ const result=await f.request('POST','/api/auth/verify',{email:destination,code:token});assert.equal(result.status,200,result.raw);
  assert.equal(f.store.db.prepare('SELECT email,pending_email FROM users WHERE id=?').get(id).email,'after@example.test');
  assert.equal(JSON.stringify(f.store.db.prepare('SELECT * FROM audit').all()).includes(token),false);
- assert.equal((await f.request('POST','/api/auth/verify',{token})).status,400);
+ assert.equal((await f.request('POST','/api/auth/verify',{email:destination,code:token})).status,400);
 });
 
 test('a saved running batch becomes review on restart and does not release or replay its unknown allocation',async t=>{

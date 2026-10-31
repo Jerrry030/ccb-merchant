@@ -27,7 +27,8 @@ export async function bootstrap() {
   app.replaceChildren(el('main',{id:'main',class:'boot'},el('div',{class:'spinner','aria-hidden':'true'}),el('p',{role:'status',text:'正在连接…'})));
   const query = new URLSearchParams(location.search);
   if (location.pathname === '/connect' && query.has('code')) { state.code = query.get('code').slice(0,128); history.replaceState({},'','/connect'); }
-  if (['/verify','/reset'].includes(location.pathname) && query.has('token')) { state.token = query.get('token').slice(0,4096); history.replaceState({},'',location.pathname); }
+  if (location.pathname === '/reset' && query.has('token')) { state.token = query.get('token').slice(0,4096); history.replaceState({},'',location.pathname); }
+  if (location.pathname === '/verify' && query.has('token')) history.replaceState({},'','/verify');
   if (query.has('next')) state.returnTo = safeRoute(query.get('next'));
   try {
     state.public = await api('/api/public');

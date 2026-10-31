@@ -28,7 +28,7 @@ export class Store {
     // Additive local schema changes preserve existing users, wallets and receipts.
     this.db.exec('BEGIN IMMEDIATE');
     try {
-      for (const [table, columns] of Object.entries({rentals:{platform:"TEXT NOT NULL DEFAULT ''",account_lease_id:"TEXT NOT NULL DEFAULT ''",renew_grant_id:"TEXT NOT NULL DEFAULT ''"},plans:{source_plan_id:'TEXT',source_revision:'INTEGER',cost_minor:'INTEGER'},audit:{customer_id:'TEXT',subject_label:'TEXT',details:"TEXT NOT NULL DEFAULT '{}'"},users:{revision:'INTEGER NOT NULL DEFAULT 1',notes:"TEXT NOT NULL DEFAULT ''",tags:"TEXT NOT NULL DEFAULT '[]'",must_change_password:'INTEGER NOT NULL DEFAULT 0',last_login_at:'TEXT',management_profile:"TEXT NOT NULL DEFAULT 'owner'",pending_email:'TEXT'}})) {
+      for (const [table, columns] of Object.entries({rentals:{platform:"TEXT NOT NULL DEFAULT ''",account_lease_id:"TEXT NOT NULL DEFAULT ''",renew_grant_id:"TEXT NOT NULL DEFAULT ''"},plans:{source_plan_id:'TEXT',source_revision:'INTEGER',cost_minor:'INTEGER'},audit:{customer_id:'TEXT',subject_label:'TEXT',details:"TEXT NOT NULL DEFAULT '{}'"},auth_tokens:{attempts:"INTEGER NOT NULL DEFAULT 0"},users:{revision:'INTEGER NOT NULL DEFAULT 1',notes:"TEXT NOT NULL DEFAULT ''",tags:"TEXT NOT NULL DEFAULT '[]'",must_change_password:'INTEGER NOT NULL DEFAULT 0',last_login_at:'TEXT',management_profile:"TEXT NOT NULL DEFAULT 'owner'",pending_email:'TEXT'}})) {
         const existing=new Set(this.db.prepare(`PRAGMA table_info(${table})`).all().map(c=>c.name));
         for(const [name,type] of Object.entries(columns)) if(!existing.has(name)) this.db.exec(`ALTER TABLE ${table} ADD COLUMN ${name} ${type}`);
       }

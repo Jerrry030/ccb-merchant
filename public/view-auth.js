@@ -3,7 +3,7 @@ import { app, state, adoptSession } from './state.js';
 import { api } from './api.js';
 import { navigate } from './router.js';
 import { brand, themeButton } from './layout.js';
-import { notice, supportContact } from './ui.js';
+import { notice, supportContact, toast } from './ui.js';
 import { CANCEL, field, confirmAction, bindForm } from './ui-form.js';
 // Static illustration of the connection flow; never reads account, device or verification data.
 function artwork() {
@@ -38,7 +38,7 @@ function resendVerificationForm() {
   const form = el('form',{class:'form-narrow'},field('电子邮箱','email',{type:'email',required:true,maxlength:254,autocomplete:'email',placeholder:'you@example.com'}),el('button',{class:'btn',type:'submit',text:'重新发送验证邮件'}));
   bindForm(form, values => api('/api/auth/resend-verification',{method:'POST',body:{email:values.get('email').trim()}}), (data, message) => {
     if (data.ok !== true) throw new Error('服务器尚未确认是否发送。');
-    message.replaceChildren(notice('已提交','如果这个邮箱仍需验证，我们已重新发送 24 小时内有效的验证邮件。已经可以登录的账户不会修改密码，也不会收到新的验证链接。请检查垃圾邮件。','success'));
+    message.replaceChildren(notice('已提交','如果这个邮箱仍需验证，我们已重新发送 15 分钟内有效的 6 位验证码。已经可以登录的账户不会修改密码，也不会收到验证码。请检查垃圾邮件。','success'));
   });
   return el('div',{class:'resend-verification'},el('p',{class:'inline-info',text:'没收到邮件？填写邮箱即可重发，不需要密码。'}),form);
 }
@@ -50,7 +50,7 @@ function authUnavailable(path) {
 }
 function registerResultCopy(data) {
   if (data.status === 'verification_required') {
-    const base = '请查看邮箱。新注册或尚未验证的账户会收到 24 小时内有效的验证邮件，并使用你刚刚填写的密码。已经可以登录的账户不会被修改，请用原密码登录或找回密码。';
+    const base = '请查看邮箱。新注册或尚未验证的账户会收到 15 分钟内有效的 6 位验证码，并使用你刚刚填写的密码。已经可以登录的账户不会被修改，请用原密码登录或找回密码。';
     return data.delivery === 'unconfirmed' ? base + '邮件服务器没有确认发出，请稍后用同一邮箱重新发送。' : base;
   }
   return '如果这是新账户，现在可以用刚刚设置的密码登录。权益仍需管理员分配。如果这个邮箱已经注册，本次不会覆盖原密码。';
@@ -61,8 +61,8 @@ export function renderAuth(path) {
     '/login':['欢迎回来','使用邮箱和密码登录。','登录'],
     '/setup':['初始化','使用本机的一次性初始化令牌创建管理员。令牌、上游密钥和管理员密码是三项不同凭证。','创建管理员'],
     '/register':['创建您的账户','注册只创建登录账户。资源需要管理员另行分配。','创建账户'],
-    '/verify':['验证电子邮箱','打开邮件中的链接。令牌会填入下面，24 小时内有效，确认后才完成验证。','确认验证'],
-    '/forgot':['找回您的密码','输入注册邮箱。可以重置的账户会收到重置邮件；尚未验证的账户会收到验证邮件。','发送重置邮件'],
+    '/verify':['验证电子邮箱','输入邮件里的 6 位验证码。验证码 15 分钟内有效，最多可以尝试 5 次。','确认验证'],
+    '/forgot':['找回您的密码','输入注册邮箱。可以重置的账户会收到重置邮件；尚未验证的账户会收到验证码。','发送重置邮件'],
     '/reset':['设置新密码','使用重置邮件中的令牌设置新密码。链接 30 分钟内有效。','重置密码'],
   };
   const [title,description,submitLabel] = labels[path];
@@ -75,9 +75,10 @@ export function renderAuth(path) {
     const resendHost = el('div');
     if (path === '/setup') form.append(field('初始化令牌','setup_token',{type:'password',required:true,autocomplete:'off',hint:'仅在服务器终端或受保护文件中提供，不会保存在浏览器。'}));
     if (['/setup','/register'].includes(path)) form.append(field('显示名称','display_name',{required:true,maxlength:100,autocomplete:'name',placeholder:'您希望如何被称呼'}));
-    if (['/login','/setup','/register','/forgot'].includes(path)) form.append(field('电子邮箱','email',{type:'email',required:true,autocomplete:'email',maxlength:254,placeholder:'you@example.com'}));
+    if (['/login','/setup','/register','/forgot','/verify'].includes(path)) form.append(field('电子邮箱','email',{type:'email',required:true,autocomplete:'email',maxlength:254,placeholder:'you@example.com'}));
     if (path === '/register') { const note = registrationPolicyNote(); if (note) form.append(note); }
-    if (['/verify','/reset'].includes(path)) form.append(field(path === '/verify' ? '验证令牌' : '重置令牌','token',{type:'password',required:true,autocomplete:'off',value:state.token,spellcheck:'false',hint:path === '/verify' ? '验证链接 24 小时内有效。令牌已从地址栏移除，提交后才会完成验证。' : '重置链接 30 分钟内有效。令牌已从地址栏移除，请勿分享。'}));
+    if (path === '/verify') form.append(field('验证码','code',{required:true,inputmode:'numeric',autocomplete:'one-time-code',minlength:6,maxlength:6,pattern:'[0-9]{6}',placeholder:'6 位数字',spellcheck:'false',hint:'验证码 15 分钟内有效，连续输错 5 次后需要重新发送。'}));
+    if (path === '/reset') form.append(field('重置令牌','token',{type:'password',required:true,autocomplete:'off',value:state.token,spellcheck:'false',hint:'重置链接 30 分钟内有效。令牌已从地址栏移除，请勿分享。'}));
     if (['/login','/setup','/register','/reset'].includes(path)) form.append(field(path === '/reset' ? '新密码' : '密码','password',{type:'password',required:true,autocomplete:path === '/login' ? 'current-password' : 'new-password',...(path === '/login' ? {} : {minlength:7}),maxlength:256,placeholder:path === '/login' ? '请输入您的密码' : '至少 7 个字符'}));
     if (['/setup','/register','/reset'].includes(path)) form.append(field('确认密码','confirmation',{type:'password',required:true,autocomplete:'new-password',minlength:7,maxlength:256}));
     form.append(el('button',{class:'btn primary',type:'submit',text:submitLabel}));
@@ -96,12 +97,27 @@ export function renderAuth(path) {
         state.token = ''; form.querySelector('input[name=token]')?.setAttribute('value','');
         const input = form.querySelector('input[name=token]'); if (input) input.value = '';
         form.querySelector('button[type=submit]').textContent = '已提交';
-        const messages = {'/register':registerResultCopy(data),'/verify':'邮箱已验证，请返回登录。','/forgot':'如果这个邮箱可以重置密码，你会收到 30 分钟内有效的重置邮件。如果账户还没完成验证，你会收到验证邮件，而不是重置链接。请同时检查垃圾邮件。','/reset':'密码已重置，请使用新密码登录。'};
-        message.replaceChildren(notice('请求已完成',messages[path],'success',el('a',{class:'btn small',href:'/login',text:'返回登录'})));
+        const messages = {'/register':registerResultCopy(data),'/verify':'邮箱已验证，请返回登录。','/forgot':'如果这个邮箱可以重置密码，你会收到 30 分钟内有效的重置邮件。如果账户还没完成验证，你会收到验证码，而不是重置链接。请同时检查垃圾邮件。','/reset':'密码已重置，请使用新密码登录。'};
+        const done = path === '/register' && data.status === 'verification_required'
+          ? el('div',{class:'auth-links'},el('a',{class:'btn small',href:'/verify',text:'输入验证码'}),el('a',{class:'btn small',href:'/login',text:'返回登录'}))
+          : el('a',{class:'btn small',href:'/login',text:'返回登录'});
+        message.replaceChildren(notice('请求已完成',messages[path],'success',done));
         if (path === '/register' && data.status === 'verification_required') resendHost.replaceChildren(resendVerificationForm());
       }
     });
-    if (path === '/verify') resendHost.replaceChildren(resendVerificationForm());
+    if (path === '/verify') {
+      const resend = el('button',{class:'btn',type:'button',text:'重新发送验证码'});
+      resend.addEventListener('click', async () => {
+        resend.disabled = true;
+        try {
+          const data = await api('/api/auth/resend-verification',{method:'POST',body:{email:form.querySelector('input[name=email]').value.trim()}});
+          if (data.ok !== true) throw new Error('服务器尚未确认是否发送。');
+          toast('如果这个邮箱仍需验证，我们已重新发送 15 分钟内有效的验证码。请检查垃圾邮件。');
+        } catch (error) { toast(error.message || '暂时无法发送验证码。'); }
+        finally { resend.disabled = false; }
+      });
+      form.append(resend);
+    }
     inner.append(form, resendHost);
     const links = el('div',{class:'auth-links'});
     if (path === '/login') {

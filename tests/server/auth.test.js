@@ -103,9 +103,11 @@ test('registration requires verification; tokens are hashed, expire, single-use 
   assert.equal((await f.request('POST','/api/auth/login',{email:'new@example.test',password})).status,401);
   assert.equal(deliveries[0].kind,'verify');
   const token=deliveries[0].token;
+  assert.match(token,/^\d{6}$/);
   assert.equal(JSON.stringify(f.store.db.prepare('SELECT * FROM auth_tokens').all()).includes(token),false);
-  assert.equal((await f.request('POST','/api/auth/verify',{token})).status,200);
-  assert.equal((await f.request('POST','/api/auth/verify',{token})).status,400);
+  assert.equal((await f.request('POST','/api/auth/verify',{email:'new@example.test',code:token==='000000'?'111111':'000000'})).status,400);
+  assert.equal((await f.request('POST','/api/auth/verify',{email:'new@example.test',code:token})).status,200);
+  assert.equal((await f.request('POST','/api/auth/verify',{email:'new@example.test',code:token})).status,400);
   const session=await f.request('POST','/api/auth/login',{email:'new@example.test',password});assert.equal(session.status,200);
   const miss=await f.request('POST','/api/auth/forgot-password',{email:'absent@example.test'});
   const known=await f.request('POST','/api/auth/forgot-password',{email:'new@example.test'});
@@ -170,4 +172,24 @@ test('mail delivery errors reveal neither transport credentials nor verification
   const audit=await f.request('GET','/api/admin/audit',undefined,admin);
   assert.ok(audit.data.events.some(event=>event.outcome==='delivery_unknown'));
   assert.equal(audit.raw.includes('SMTP_PASSWORD'),false);
+});
+
+test('a verification code is six digits, stored only as a hash, and burned after five failures',async t=>{
+  const deliveries=[];
+  const f=await fixture(t,{env:{SMTP_HOST:'smtp.example.invalid',SMTP_FROM:'merchant@example.test'},mailer:{async send(address,kind,token){deliveries.push({address,kind,token});}}});
+  const admin=await f.request('POST','/api/setup',{...credentials,setup_token:f.setupToken});
+  await f.request('PATCH','/api/admin/settings',{registration_enabled:true},admin);
+  assert.equal((await f.request('POST','/api/auth/register',{email:'coded@example.test',password,display_name:'Coded'})).status,200);
+  const code=deliveries.at(-1).token;
+  const wrong=code==='000000'?'111111':'000000';
+  assert.match(code,/^\d{6}$/);
+  assert.equal(JSON.stringify(f.store.db.prepare('SELECT token_hash,attempts FROM auth_tokens').all()).includes(code),false);
+  for(let i=0;i<5;i++) assert.equal((await f.request('POST','/api/auth/verify',{email:'coded@example.test',code:wrong})).status,400);
+  assert.equal((await f.request('POST','/api/auth/verify',{email:'coded@example.test',code})).status,400);
+  assert.equal((await f.request('POST','/api/auth/resend-verification',{email:'coded@example.test'})).data.ok,true);
+  const replacement=deliveries.at(-1).token;
+  assert.match(replacement,/^\d{6}$/);
+  assert.notEqual(replacement,code);
+  assert.equal((await f.request('POST','/api/auth/verify',{email:'coded@example.test',code:replacement})).status,200);
+  assert.equal((await f.request('POST','/api/auth/login',{email:'coded@example.test',password})).status,200);
 });

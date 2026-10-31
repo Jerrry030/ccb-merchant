@@ -119,7 +119,8 @@ test('repeat registration does not reveal whether an email exists', async t => {
   assert.equal(first.data.delivery, 'sent');
   assert.equal(deliveries.at(-1).kind, 'verify');
   assert.equal((await f.request('POST', '/api/auth/login', { email: 'again@example.test', password })).status, 401);
-  assert.equal((await f.request('POST', '/api/auth/verify', { token: deliveries.at(-1).token })).status, 200);
+  assert.match(deliveries.at(-1).token, /^\d{6}$/);
+  assert.equal((await f.request('POST', '/api/auth/verify', { email: 'again@example.test', code: deliveries.at(-1).token })).status, 200);
   assert.equal((await f.request('POST', '/api/auth/login', { email: 'again@example.test', password })).status, 401);
   assert.equal((await f.request('POST', '/api/auth/login', { email: 'again@example.test', password: 'replacement password 456' })).status, 200);
   const named = f.store.db.prepare('SELECT display_name,password_hash FROM users WHERE email=?').get('again@example.test');
@@ -157,10 +158,11 @@ test('repeat registration does not reveal whether an email exists', async t => {
 });
 
 test('verification and reset messages are Chinese and state their lifetime', () => {
-  const verify = mailMessage('verify', 'https://merchant.example/verify?token=secret');
-  assert.match(verify.subject, /验证/);
-  assert.match(verify.text, /24 小时/);
-  assert.match(verify.text, /https:\/\/merchant\.example\/verify\?token=secret/);
+  const verify = mailMessage('verify', '123456');
+  assert.match(verify.subject, /验证码/);
+  assert.match(verify.text, /15 分钟/);
+  assert.match(verify.text, /123456/);
+  assert.equal(verify.text.includes('http'), false);
   const reset = mailMessage('reset', 'https://merchant.example/reset?token=secret');
   assert.match(reset.subject, /重置/);
   assert.match(reset.text, /30 分钟/);
