@@ -110,6 +110,32 @@ export class Upstream {
    return {saved:body.action==='save',revision:this.revision,connection:data};
   } finally {this.changing=false;}
  }
+ async customerEntitlements(customerId,{includeAccounts=false,signal}={}) {
+  const id=opaqueId(customerId);
+  const [data,cardData]=await Promise.all([
+   this.request('GET',`/access/v1/grants?customer_id=${id}`,undefined,signal),
+   includeAccounts?this.request('GET',`/access/v1/customers/${id}/accounts`,undefined,signal):null,
+  ]);
+  if(!Array.isArray(data.grants)||data.grants.length>10000||(includeAccounts&&(!Array.isArray(cardData.accounts)||cardData.accounts.length>10000)))throw new HttpError(503,'invalid_core_response','Customer entitlements are unavailable.');
+  const grants=data.grants.map(row=>{
+   const grant=project(row,schemas.grant);
+   if(!grant?.id||typeof grant.customer_id!=='string'||!['active','revoked'].includes(grant.status))throw new HttpError(503,'invalid_core_response','Invalid customer grant metadata.');
+   return grant;
+  }).filter(grant=>grant.customer_id===customerId&&grant.status==='active'&&!grant.pending);
+  const current=new Map(grants.map(grant=>[grant.id,grant]));
+  // Account state describes usability, not ownership: a reclaimed card can
+  // still contain quota/device metadata. Keep expired or temporarily unusable
+  // cards only while their grant still belongs to this customer.
+  const accounts=(cardData?.accounts||[]).map(row=>{
+   const account=project(row,schemas.account);
+   if(!account?.id)throw new HttpError(503,'invalid_core_response','Invalid customer account metadata.');
+   return account;
+  }).filter(account=>{
+   const grant=current.get(account.grant_id||account.id);
+   return grant&&account.id===grant.id&&(!account.account_lease_id||!grant.account_lease_id||account.account_lease_id===grant.account_lease_id);
+  });
+  return {grants,accounts};
+ }
  async request(method,path,body,signal,allocation=null) {
   const config={...this.config};
   if(!config.upstreamUrl||!config.upstreamKey)throw new HttpError(503,'core_not_configured','Upstream connection is not configured.');

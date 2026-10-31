@@ -6,15 +6,21 @@ import { publicRental } from './store.js';
 export function publicPlan(row,admin=false) {
  return {id:row.id,name:row.name,description:row.description,duration_days:row.duration_days,amount_minor:row.amount_minor,currency:row.currency,status:row.status,revision:row.revision,...(admin?{resource_id:row.resource_id,cost_minor:row.cost_minor,source_plan_id:row.source_plan_id}:{})};
 }
+// A retail offer needs a current Code subscription authorization that covers
+// the requested term; retained plans and stale seat rows are not authority.
+function subscriptionCovers(resource,end=Date.now()) {
+ return Boolean(resource?.kind==='subscription'&&resource.status==='active'&&resource.surfaces?.includes('code')&&(resource.expires_at==null||Date.parse(resource.expires_at)>=end));
+}
 export class Commerce {
  constructor(store,core,customers) {this.store=store;this.core=core;this.customers=customers;this.running=new Set();}
  async importPlans() {
   const data=await this.core.request('GET','/access/v1/resources');
-  const resources=Array.isArray(data.resources)?data.resources:[];
+  if(!Array.isArray(data.resources))throw new HttpError(503,'invalid_core_response','Resource inventory is unavailable.');
+  const resources=data.resources;
   const now=new Date().toISOString();
   this.store.transaction(()=>{
    for(const resource of resources){
-    if(resource.kind!=='subscription'||!Array.isArray(resource.plans)) continue;
+    if(!subscriptionCovers(resource)||!Array.isArray(resource.plans)) continue;
     for(const plan of resource.plans){
      if(!plan||typeof plan.id!=='string'||!plan.id||plan.status!=='active'||!Number.isSafeInteger(plan.duration_days)||!Number.isSafeInteger(plan.amount_minor)||!Number.isSafeInteger(plan.revision)) continue;
      const name=`${plan.duration_days} 天`;
@@ -25,6 +31,7 @@ export class Commerce {
     }
    }
   });
+  return resources;
  }
  async savePlan(id,body,authorize) {
   fields(body,['name','description','resource_id','duration_days','amount_minor','status','expected_revision'],['name','duration_days','amount_minor','status',...(id?['expected_revision']:['resource_id'])]);
@@ -37,7 +44,7 @@ export class Commerce {
   if(body.status==='active') {
    const data=await this.core.request('GET','/access/v1/resources');
    const r=data.resources?.find(r=>r.id===resourceId);
-   if(!r || r.kind!=='subscription' || r.status!=='active' || !r.surfaces?.includes('code')) throw new HttpError(409,'supply_unavailable','Supply cannot cover this term.');
+   if(!subscriptionCovers(r)) throw new HttpError(409,'supply_unavailable','Supply cannot cover this term.');
   }
   const actor=authorize();const now=new Date().toISOString();
   return this.store.transaction(()=>{
@@ -49,17 +56,18 @@ export class Commerce {
   });
  }
  async catalog(admin,customerID,renewGrantID) {
-  await this.importPlans();
+  const resources=new Map((await this.importPlans()).map(resource=>[resource.id,resource]));
   const data=await this.core.request('GET','/access/v1/accounts');
   if(!Array.isArray(data.accounts))throw new HttpError(503,'invalid_core_response','Allocated-account inventory is unavailable.');
   let renewal;
   if(renewGrantID){if(!customerID)throw new HttpError(409,'customer_not_ready','No customer account to renew.');const list=await this.core.request('GET',`/access/v1/grants?customer_id=${opaqueId(customerID)}`);renewal=list.grants?.find(g=>g.id===renewGrantID&&g.customer_id===customerID&&g.status==='active'&&Number.isFinite(Date.parse(g.expires_at)));if(!renewal)throw new HttpError(404,'grant_not_found','Renewal account not found.');}
   const held=new Set(this.store.accountHolds().keys());
   let plans=this.store.db.prepare(admin?'SELECT * FROM plans ORDER BY created_at DESC':"SELECT * FROM plans WHERE status='active' ORDER BY created_at DESC").all();
+  if(!admin)plans=plans.filter(p=>subscriptionCovers(resources.get(p.resource_id)));
   if(renewal)plans=plans.filter(p=>p.resource_id===renewal.resource_id);
   return plans.map(plan=>{
    const stock=new Map(),end=Math.max(Date.now(),renewal?Date.parse(renewal.expires_at):0)+plan.duration_days*86400000;
-   for(const a of data.accounts){if(a.resource_id!==plan.resource_id||a.status!=='active'||(renewal?a.grant_id!==renewal.id:a.assigned!==false)||held.has(a.id)||!Number.isFinite(Date.parse(a.expires_at))||Date.parse(a.expires_at)<end)continue;stock.set(a.platform,(stock.get(a.platform)||0)+1);}
+   for(const a of data.accounts){if(!subscriptionCovers(resources.get(plan.resource_id),end)||a.resource_id!==plan.resource_id||a.status!=='active'||(renewal?a.grant_id!==renewal.id:a.assigned!==false)||held.has(a.id)||!Number.isFinite(Date.parse(a.expires_at))||Date.parse(a.expires_at)<end)continue;stock.set(a.platform,(stock.get(a.platform)||0)+1);}
    return {...publicPlan(plan,admin),renew_grant_id:renewal?.id||'',platforms:[...stock].map(([platform,available])=>({platform,label:platform,available})),device_limit:1};
   });
  }
@@ -92,7 +100,7 @@ export class Commerce {
    const now=Date.now(),start=grant?Math.max(now,Date.parse(grant.expires_at)):now,end=start+plan.duration_days*86400000;
    const holds=new Set(this.store.accountHolds().keys());
    const account=owned.accounts.find(a=>a.resource_id===plan.resource_id&&a.platform===platform&&a.status==='active'&&Number.isFinite(Date.parse(a.expires_at))&&Date.parse(a.expires_at)>=end&&!holds.has(a.id)&&(renewGrant?a.grant_id===renewGrant:a.assigned===false));
-   if(!r||r.kind!=='subscription'||r.status!=='active'||!r.surfaces?.includes('code')||!account)throw new HttpError(409,'supply_unavailable','No allocated account can cover this platform and term. No payment was started.');
+   if(!subscriptionCovers(r,end)||!account)throw new HttpError(409,'supply_unavailable','No allocated account can cover this platform and term. No payment was started.');
    return this.store.transaction(()=>{
     const fresh=this.store.db.prepare('SELECT * FROM plans WHERE id=?').get(plan.id);
     if(fresh.status!=='active'||fresh.revision!==plan.revision) throw new HttpError(409,'plan_changed','Plan changed before checkout.');

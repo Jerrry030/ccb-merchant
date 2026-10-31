@@ -291,7 +291,7 @@ export class Access {
   else if((match=path.match(/^\/access\/v1\/customers\/([A-Za-z0-9_-]+)(\/devices(?:\/[A-Za-z0-9_-]+(?:\/selection)?)?)$/)))result=await this.devices(p.account,match[1],method,match[2],body,check);
   else if((match=path.match(/^\/access\/v1\/customers\/([A-Za-z0-9_-]+)\/accounts$/))&&method==='GET') {
    const customer=this.object('access_customers',match[1],p.account.id);if(!customer.upstream_id||customer.pending)throw new HttpError(409,'customer_pending','Customer not ready.');
-   const data=await this.upstream.request('GET',`/access/v1/customers/${opaqueId(customer.upstream_id)}/accounts`);check();
+   const data=await this.upstream.customerEntitlements(customer.upstream_id,{includeAccounts:true});check();
    result={accounts:(data.accounts||[]).flatMap(item=>{const g=this.db.prepare('SELECT * FROM access_grants WHERE upstream_id=? AND account_id=? AND customer_id=?').get(item.id,p.account.id,customer.id);if(!g||!this.runtimeGrant(g))return [];const v=project(item,schemas.account);v.id=g.id;v.grant_id=g.id;delete v.account_lease_id;return [v];})};
   }
   else if((match=path.match(/^\/access\/v1\/customers\/([A-Za-z0-9_-]+)\/usage$/))&&method==='GET')result=await this.usage(p.account,match[1],url.searchParams,check);

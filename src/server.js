@@ -1,5 +1,6 @@
 import { managementProfiles } from '../public/management-policy.js';
 import { Inventory } from './inventory.js';
+import { Devices } from './devices.js';
 import { readOrderPage, readAuditPage } from './admin-queries.js';
 import { deliveryReviewStatuses, paymentReviewStatuses } from '../public/admin-workflow.js';
 import { Access } from './access.js';
@@ -59,7 +60,7 @@ export function createMerchant(config, options={}) {
   const store=new Store(config), core=new Upstream(config,store);
   const mailerNow=()=>options.mailer || (effectiveMail(config,store) ? createMailer({...config, mail:effectiveMail(config,store)}) : null);
   const auth=new Auth(config,store,mailerNow), payments=new Payments(config,store,options.paymentTransport);
-  const access=new Access(store,core);
+  const access=new Access(store,core),devices=new Devices(store,core);
   const customers=new Customers(store,core), commerce=new Commerce(store,core,customers);
   const reconciler=new Reconciler(store,customers,payments,commerce,options.reconcileIntervalMs??config.reconcileIntervalMs);
   const lockedUsers=customers.locks;
@@ -189,8 +190,7 @@ export function createMerchant(config, options={}) {
         check();
         const base=`/access/v1/customers/${opaqueId(target.core_customer_id)}`;
         if(req.method==='GET'&&!id) {
-          const [data,accounts]=await Promise.all([core.request('GET',base+'/devices'),core.request('GET',base+'/accounts')]);check();
-          const cards=store.labelAccounts(collection(accounts.accounts,schemas.account));const names=new Map(cards.map(a=>[a.grant_id||a.id,a.name]));respond(res,200,{devices:collection(data.devices,schemas.device).map(d=>({...d,account_name:d.current_grant_id?(names.get(d.current_grant_id)||'账号（编号待核对）'):null})),accounts:cards});return;
+          const data=await devices.read({userId:targetId},check);respond(res,200,data);return;
         }
         if(!id||!(req.method==='DELETE'&&!selection||req.method==='PATCH'&&!selection||req.method==='PUT'&&selection))throw new HttpError(404,'not_found','Unsupported device operation.');
         let payload={};
@@ -222,6 +222,13 @@ export function createMerchant(config, options={}) {
         respond(res,200,{usage,requests:collection(data.requests,schemas.request),sessions:project(data.sessions||[],[schemas.session]),total:data.total,timeline:project(data.timeline,schemas.timeline)||null});return;
       }
       switch(route) {
+        case 'GET /api/admin/devices': {
+          const params=url.searchParams;
+          for(const key of params.keys())if(!['q','status','limit','offset'].includes(key)||params.getAll(key).length!==1)throw new HttpError(400,'invalid_query','Invalid device filter.');
+          const q=params.get('q')||'',status=params.get('status')||'',limit=Number(params.get('limit')||50),offset=Number(params.get('offset')||0);
+          if(q.length>100||status&&!['approved','pending','expired','revoked','cancelled','unknown'].includes(status)||!Number.isSafeInteger(limit)||limit<1||limit>200||!Number.isSafeInteger(offset)||offset<0||offset>1000000)throw new HttpError(400,'invalid_query','Invalid device filter or pagination.');
+          respond(res,200,await devices.read({q,status,limit,offset},()=>auth.require(req,true)));return;
+        }
         case 'GET /api/me/overview': {
           const state=await connection(), pending=[];
           let grants=[],devices=[],usage=null;
@@ -230,10 +237,10 @@ export function createMerchant(config, options={}) {
           if(user.core_pending) pending.push('customer_sync_pending');
           if(memberPrefix && state.available && !user.core_pending) {
             const results=await Promise.allSettled([
-              core.request('GET',`/access/v1/grants?customer_id=${opaqueId(user.core_customer_id)}`),
+              core.customerEntitlements(user.core_customer_id),
               core.request('GET',`${memberPrefix}/devices`),core.request('GET',`${memberPrefix}/usage?limit=1`),
             ]);
-            if(results[0].status==='fulfilled') grants=store.labelAccounts(collection(results[0].value.grants,schemas.grant).filter(g=>g.customer_id===user.core_customer_id)); else pending.push('grants_unavailable');
+            if(results[0].status==='fulfilled') grants=store.labelAccounts(results[0].value.grants); else pending.push('grants_unavailable');
             if(results[1].status==='fulfilled') devices=collection(results[1].value.devices,schemas.device); else pending.push('devices_unavailable');
             if(results[2].status==='fulfilled') usage=project(results[2].value.usage,schemas.usage) ?? null; else pending.push('usage_unavailable');
           }
@@ -242,14 +249,14 @@ export function createMerchant(config, options={}) {
         }
         case 'GET /api/me/grants': {
           customerReady();
-          const data=await core.request('GET',`/access/v1/grants?customer_id=${opaqueId(user.core_customer_id)}`);
-          respond(res,200,{grants:store.labelAccounts(collection(data.grants,schemas.grant).filter(g=>g.customer_id===user.core_customer_id))}); return;
+          const data=await core.customerEntitlements(user.core_customer_id);
+          respond(res,200,{grants:store.labelAccounts(data.grants)}); return;
         }
         case 'GET /api/me/accounts': {
           if(!memberPrefix) {respond(res,200,{accounts:[]});return;}
           customerReady();
-          const data=await core.request('GET',`${memberPrefix}/accounts`);
-          respond(res,200,{accounts:store.labelAccounts(collection(data.accounts,schemas.account))}); return;
+          const data=await core.customerEntitlements(user.core_customer_id,{includeAccounts:true});
+          respond(res,200,{accounts:store.labelAccounts(data.accounts)}); return;
         }
         case 'POST /api/me/devices/preview':
         case 'POST /api/me/devices/approve': {

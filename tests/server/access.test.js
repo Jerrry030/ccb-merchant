@@ -255,3 +255,27 @@ test('account cards remap the explicit grant identity and omit unmapped upstream
  const result=await f.request('GET',`/access/v1/customers/${customer.id}/accounts`,undefined,c.actor);
  assert.equal(result.status,200,result.raw);assert.equal(result.data.accounts[0].grant_id,grant.id);assert.equal('account_lease_id' in result.data.accounts[0],false);assert.equal(result.raw.includes('PRIVATE-UPSTREAM-LEASE'),false);
 });
+
+test('downstream account cards immediately honor upstream revocation without a prior grant-list read',async t=>{
+ let failGrants=false;
+ const {f,c,admin}=await provider(t,{onCore:({url,state,json})=>{
+  if(failGrants&&url.pathname==='/access/v1/grants'){json({error:{code:'unavailable'}},503);return true;}
+  if(!url.pathname.match(/^\/access\/v1\/customers\/[^/]+\/accounts$/))return false;
+  const g=state.grants[0];json({accounts:[{id:g.id,grant_id:g.id,account_lease_id:'PRIVATE-UPSTREAM-LEASE',name:'Historical quota',state:'available'}]});return true;
+ }});
+ const customer=(await f.request('POST','/access/v1/customers',{external_id:'reclaim-owner',display_name:'Owner'},c.actor)).data.customer;
+ const created=await f.request('POST','/access/v1/grants',{customer_id:customer.id,resource_id:c.resource.id},c.actor);assert.equal(created.status,201,created.raw);
+ const path='/access/v1/customers/'+customer.id+'/accounts';
+ const before=await f.request('GET',path,undefined,c.actor);assert.equal(before.status,200,before.raw);assert.equal(before.data.accounts.length,1);
+ f.state.grants[0].status='revoked';
+ const revoked=await f.request('GET',path,undefined,c.actor);assert.equal(revoked.status,200,revoked.raw);assert.deepEqual(revoked.data.accounts,[]);
+ assert.equal(f.store.db.prepare('SELECT status FROM access_grants WHERE id=?').get(created.data.grant.id).status,'active','read must not depend on an earlier synchronization');
+ f.state.grants[0].status='active';f.state.grants[0].customer_id='another-owner';
+ assert.deepEqual((await f.request('GET',path,undefined,c.actor)).data.accounts,[]);
+ f.state.grants[0].customer_id=f.state.customers[0].id;failGrants=true;
+ assert.equal((await f.request('GET',path,undefined,c.actor)).status,503);
+ failGrants=false;
+ const disabled=await f.request('PATCH','/api/admin/access-accounts/'+c.account.id+'/resources/'+c.resource.id,{name:c.resource.name,expected_revision:c.resource.revision,status:'disabled'},admin);
+ assert.equal(disabled.status,200,disabled.raw);assert.deepEqual((await f.request('GET',path,undefined,c.actor)).data.accounts,[]);
+ assert.equal((await f.request('GET','/access/v1/resources',undefined,c.actor)).data.resources[0].available,false,'resource history is retained but cannot be used');
+});

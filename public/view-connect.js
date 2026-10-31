@@ -123,7 +123,7 @@ export async function connectView() {
   const steps = el('ol',{class:'connection-steps'},
     el('li',{},el('h2',{text:'安装 ccb'}),el('p',{text:'需要 Node.js 18 或更新版本。Windows、macOS 和 Linux 使用同一条命令。'}),commandBlock('安装命令','npm install -g @rimuruchan/ccb'),el('p',{class:'instruction-note'},'首次启动时 ccb 会下载官方 Claude Code；电脑上已有 ',el('code',{text:'claude'}),' 时直接使用。以后用同一条命令更新。')),
     el('li',{},el('h2',{text:'登录这台电脑'}),el('p',{text:'在需要接入的电脑上运行登录命令，浏览器会打开本页让你确认设备。'}),commandBlock('登录命令',loginCommand(selected?.id)),el('p',{class:'instruction-note',text:'浏览器没有自动打开时，在本页「确认终端连接码」中输入终端显示的连接码。登录命令使用本站公开地址；其他电脑需要能访问它。'})),
-    el('li',{},el('h2',{text:'选择账号，开始项目'}),el('p',{},'在项目目录运行 ccb。指定账号的登录命令会在确认设备后完成选择；未指定时会列出可用账号。之后用 ',el('code',{text:'ccb account'}),' 切换。'),commandBlock('启动命令','ccb')));
+    el('li',{},el('h2',{text:'选择账号，开始项目'}),el('p',{text:'回到项目目录，运行启动命令，开始你的项目。'}),commandBlock('启动命令','ccb'),el('p',{class:'instruction-note'},'指定账号的登录命令会在确认设备后完成选择；未指定时会列出可用账号。之后用 ',el('code',{text:'ccb account'}),' 切换。')));
   const reference = el('dl',{class:'connection-reference','aria-label':'常用命令'});
   for (const [name, command] of [['继续上次会话','ccb -c'],['切换账号','ccb account'],['检查连接','ccb status'],['设备续期','ccb login --renew'],['更新 Claude Code','ccb update']]) reference.append(el('div',{},el('dt',{text:name}),el('dd',{},el('code',{text:command}))));
   const guide = el('section',{class:'connection-instructions','aria-label':'安装与登录指南'},steps,reference);

@@ -552,8 +552,10 @@
 }
 
 .connection-steps > li {
-  display: flex;
-  flex-direction: column;
+  display: grid;
+  grid-template-rows: subgrid;
+  grid-row: span 5;
+  align-items: start;
   gap: 8px;
   min-width: 0;
   padding: 22px 24px 24px;
@@ -577,7 +579,12 @@
 }
 
 .connection-steps h2 {
+  margin: 0;
   font-size: 20px;
+}
+
+.connection-steps p {
+  margin: 0;
 }
 
 .connection-steps p,
@@ -594,11 +601,15 @@
 }
 
 .connection-steps .command-block {
-  margin-top: auto;
+  display: flex;
+  flex-direction: column;
+  align-self: stretch;
+  margin: 0;
 }
 
-.connection-steps .command-block + .instruction-note {
-  margin-top: 6px;
+.connection-steps .command-line {
+  flex: 1;
+  align-items: flex-start;
 }
 
 /* Commands read as a terminal in both themes. */
@@ -916,6 +927,11 @@
     grid-template-columns: minmax(0, 1fr);
   }
 
+  .connection-steps > li {
+    grid-template-rows: none;
+    grid-row: auto;
+  }
+
   .connect-layout > .approval-card,
   .connect-layout.confirmation-first > .approval-card,
   .connection-reference,
@@ -1003,31 +1019,11 @@
   font-weight: 600;
 }
 
-.quota-list {
-  display: grid;
-  gap: 14px;
-}
-
-.quota-label {
-  display: flex;
-  justify-content: space-between;
-  font-size: 13.5px;
-}
-
-.quota-label strong {
-  font: 400 15px var(--font-serif);
-}
-
-.quota-label strong.full {
-  color: var(--red);
-}
-
 .quota-track {
-  height: 6px;
-  margin-top: 6px;
+  height: 8px;
   overflow: hidden;
   border-radius: 999px;
-  background: var(--well);
+  background: var(--line);
   box-shadow: inset 0 0 0 1px var(--line);
 }
 
@@ -1038,11 +1034,6 @@
   background: var(--primary);
 }
 
-.quota-track span.full {
-  background: var(--red);
-}
-
-.quota-row p,
 .quota-empty {
   margin: 6px 0 0;
   color: var(--muted);
@@ -1819,9 +1810,20 @@
 }
 
 /* Local account identity, quota and durable allocation controls. */
-.quota-summary { min-width: 145px; font-size: 12px; display: grid; gap: 5px; }
-.quota-summary strong { font-variant-numeric: tabular-nums; }
-.quota-updated { color: var(--muted); font-size: 12px; }
+.quota-summary { min-width: 180px; width: 100%; font-size: 12px; display: grid; gap: 10px; }
+.quota-summary-window, .quota-summary-error { display: grid; gap: 4px; }
+.quota-summary-error .badge { justify-self: start; }
+.quota-summary-label { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+.quota-summary-label strong { white-space: nowrap; font-variant-numeric: tabular-nums; font-size: 13px; }
+.quota-summary-window.near-limit strong { color: var(--amber); }
+.quota-summary-window.near-limit .quota-track span { background: var(--amber); }
+.quota-summary-window.full strong { color: var(--red); }
+.quota-summary-window.full .quota-track span { background: var(--red); }
+.quota-summary .table-sub { margin-top: 0; }
+@media (max-width: 600px) {
+  .quota-summary { min-width: 0; }
+  .quota-summary-label { gap: 6px; }
+}
 .batch-toolbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
 .customer-picker { display: grid; gap: 8px; margin-bottom: 12px; }
 .allocation-mapping { padding: 14px 0; border-top: 1px solid var(--line); }
@@ -1832,3 +1834,25 @@
 .inventory-page [data-label="账号"] { min-width: 105px; }
 .inventory-page [data-label="设备"] { min-width: 70px; }
 .audit-change { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 12px; }
+
+/* Personal devices use the same scoped actions as the staff table. */
+.device-toolbar { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; }
+.device-toolbar p { margin: 0 auto 0 0; }
+.device-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 340px), 1fr)); gap: 16px; }
+.device-card { display: flex; flex-direction: column; min-width: 0; padding: 22px 24px; gap: 18px; }
+.device-card-head { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 12px; }
+.device-card-title { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.device-card-title h2 { margin: 0; font: 600 17px/1.5 var(--font-sans); }
+.device-card-title p { margin: 3px 0 0; color: var(--muted); font-size: 13px; }
+.device-card-head > .badge { margin-left: auto; }
+.device-card-facts { display: grid; grid-template-columns: 82px minmax(0, 1fr); gap: 10px 14px; margin: 0; font-size: 13px; }
+.device-card-facts dt { color: var(--muted); }
+.device-card-facts dd { margin: 0; overflow-wrap: anywhere; }
+.device-card-hint { margin: 0; color: var(--muted); font-size: 12.5px; }
+.device-card-actions { margin-top: auto; padding-top: 14px; border-top: 1px solid var(--line); }
+.device-read-failures { padding: 14px 18px; background: var(--panel); border-radius: var(--radius-control); }
+.device-read-failures ul { margin: 10px 0 0; padding-left: 20px; overflow-wrap: anywhere; }
+@media (max-width: 600px) {
+ .device-card { padding: 18px; }
+ .device-card-facts { grid-template-columns: 82px minmax(0, 1fr); gap: 10px; }
+}

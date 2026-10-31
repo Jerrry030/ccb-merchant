@@ -9,7 +9,7 @@ export const navigation = [
   { path:"/", nav:"home", title:"首页", icon:"overview", description:'查看账单与用量。参考费用只供核对，不会从钱包扣费。' },
   { path:"/connect", nav:"connect", title:"开始使用", icon:"terminal", description:connectGuides.idle },
   { path:"/accounts", nav:"accounts", title:"我的账号", icon:"layers", description:'查看已分配或订阅交付的账号、额度和正在使用的设备。' },
-  { path:"/devices", nav:"devices", hidden:true, title:"我的设备", icon:"monitor", description:'每个账号最多绑定 1 台设备。换机请先撤销旧设备，再连接新设备。' },
+  { path:"/devices", nav:"devices", title:"我的设备", icon:"monitor", description:'每个账号最多绑定 1 台设备。换机请先撤销旧设备，再连接新设备。' },
   { path:"/usage", nav:"usage", title:"使用记录", icon:"chart", description:'查看请求与 Token。参考成本只供核对，不会从钱包扣费。' },
   { path:"/orders", nav:"billing", title:"我的订单", icon:"receipt", description:'核对套餐支付、开通、续期及退回余额。' },
   { path:"/wallet", nav:"billing", hidden:true, title:"充值/订阅", icon:"wallet", description:'充值人民币余额，或购买固定期限订阅。购买时选择一个登录平台，并查看是否有货。' },
@@ -18,6 +18,7 @@ export const navigation = [
   { path:"/admin/customers", nav:"customers", title:"客户", icon:"users", admin:true, description:"管理站点客户。账号、设备、用量和订单在客户内部处理。" },
   { path:"/admin/access", nav:"customers", hidden:true, title:"API 接入", icon:"key", admin:true, description:'管理直接接入的客户、密钥和资源范围。' },
   { path:"/admin/inventory", nav:"inventory", title:"库存", icon:"layers", admin:true, description:'查看平台管理员分配的账号、有效期和客户分配状态。每个账号最多绑定 1 台设备。' },
+  { path:"/admin/devices", nav:"admin-devices", title:"设备", icon:"monitor", admin:true, description:'汇总本站客户的设备、账号选择和授权状态。操作始终归属于对应客户。' },
   { path:"/admin/rentals", nav:"commerce", title:"订单", icon:"receipt", admin:true, description:"核对套餐、交付和支付。支付结果以服务端记录为准。" },
   { path:"/admin/plans", nav:"commerce", hidden:true, title:"套餐", icon:"layers", admin:true, description:'只为订阅分组设置有效期和金额。普通分组不在这里出售。' },
   { path:"/admin/orders", nav:"commerce", hidden:true, title:"支付", icon:"receipt", admin:true, description:'核对服务端记录的支付状态，不以回跳参数判定到账。' },
@@ -25,7 +26,6 @@ export const navigation = [
   { path:"/admin/settings", nav:"settings", title:"设置", icon:"settings", admin:true, description:'管理公开信息、注册策略、上游连接，以及邮件和支付服务。' },
   { path:"/admin/upstream", nav:"settings", hidden:true, title:"上游接入", icon:"link", admin:true, description:'连接直接上级，核对账户与可用资源。' },
   { path:"/admin/customer-usage", nav:"customers", hidden:true, title:"客户使用记录", icon:"chart", admin:true, description:'在本站客户范围内查看用量和设备活动。' },
-  { path:"/admin/devices", nav:"customers", hidden:true, title:"客户设备", icon:"monitor", admin:true, description:'管理客户设备、账号选择和连接状态。' },
 ];
 export function safeRoute(value) {
   try { const url = new URL(value,location.origin); return url.origin === location.origin && navigation.some(v => v.path === url.pathname) ? url.pathname + url.search : '/'; }
