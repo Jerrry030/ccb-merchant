@@ -9,7 +9,7 @@ import { Commerce, publicPlan } from './commerce.js';
 import { Reconciler } from './reconciler.js';
 import { createServer } from 'node:http';
 import { readFile, realpath, stat } from 'node:fs/promises';
-import { resolve, relative, extname, isAbsolute } from 'node:path';
+import { resolve, relative, extname, isAbsolute, basename } from 'node:path';
 import { Store, publicUser, publicOrder, publicRental } from './store.js';
 import { Auth } from './auth.js';
 import { Upstream, project, schemas, scopes } from './upstream.js';
@@ -100,7 +100,12 @@ export function createMerchant(config, options={}) {
       if(local.startsWith('..') || isAbsolute(local)) throw new HttpError(404,'not_found','Not found.');
       const mime={'.html':'text/html; charset=utf-8','.js':'text/javascript; charset=utf-8','.css':'text/css; charset=utf-8','.svg':'image/svg+xml','.png':'image/png','.ico':'image/x-icon','.webp':'image/webp','.woff2':'font/woff2','.json':'application/json'}[extname(resolved)];
       if(!mime) throw new HttpError(404,'not_found','Not found.');
-      const bytes=await readFile(resolved);
+      let bytes=await readFile(resolved);
+      if(basename(resolved)==='index.html' && bytes.includes('<title>CCB</title>')) {
+        const name=String(readSite(store).name || config.siteName);
+        const escaped=name.replace(/[&<>"]/g, char=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[char]));
+        bytes=Buffer.from(bytes.toString('utf8').replace('<title>CCB</title>', `<title>${escaped}</title>`));
+      }
       res.writeHead(200,{'Content-Type':mime,'Content-Length':bytes.length,'Cache-Control':'no-cache'});
       res.end(req.method==='HEAD'?undefined:bytes);
     } catch(error) {

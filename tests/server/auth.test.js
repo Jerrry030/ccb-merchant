@@ -193,3 +193,23 @@ test('a verification code is six digits, stored only as a hash, and burned after
   assert.equal((await f.request('POST','/api/auth/verify',{email:'coded@example.test',code:replacement})).status,200);
   assert.equal((await f.request('POST','/api/auth/login',{email:'coded@example.test',password})).status,200);
 });
+
+test('app shell title uses the saved site name and leaves other HTML unchanged', async t => {
+  const f = await fixture(t);
+  const admin = await f.request('POST', '/api/setup', { ...credentials, setup_token: f.setupToken });
+  assert.equal((await f.request('PATCH', '/api/admin/settings', { name: 'CCB Shop <&>' }, admin)).status, 200);
+  await writeFile(join(f.root, 'public', 'index.html'), '<!doctype html><title>CCB</title><p>CCB</p>');
+  await writeFile(join(f.root, 'public', 'airwallex-checkout.html'), '<!doctype html><title>Airwallex 收银台</title>');
+  const page = await f.request('GET', '/login');
+  assert.match(page.raw, /<title>CCB Shop &lt;&amp;&gt;<\/title>/);
+  assert.match(page.raw, /<p>CCB<\/p>/);
+  assert.equal(page.headers.get('content-length'), String(Buffer.byteLength(page.raw)));
+  const head = await f.request('HEAD', '/login');
+  assert.equal(head.status, 200);
+  assert.equal(head.headers.get('content-length'), page.headers.get('content-length'));
+  assert.equal(head.raw, '');
+  const checkout = await f.request('GET', '/airwallex-checkout.html');
+  assert.match(checkout.raw, /<title>Airwallex 收银台<\/title>/);
+  await writeFile(join(f.root, 'public', 'index.html'), '<!doctype html><title>real static test shell</title>');
+  assert.match((await f.request('GET', '/connect')).raw, /real static test shell/);
+});
