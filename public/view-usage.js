@@ -91,9 +91,9 @@ export async function usageView() {
   if(params.get('grant_id')&&!accountChoices.some(a=>a.value===params.get('grant_id')))accountChoices.push({value:params.get('grant_id'),label:'指定的历史授权'});
   form.append(field('账号','grant_id',{type:'select',value:params.get('grant_id')||'',choices:[{value:'',label:'全部账号'},...accountChoices]}));
   form.append(field('设备 ID','device_id',{value:params.get('device_id')||''}),field('模型','model',{value:params.get('model')||''}),field('结果','result',{type:'select',choices:[{value:'',label:'全部'},{value:'success',label:'成功'},{value:'error',label:'失败'}],value:params.get('result')||''}),field('查看方式','view',{type:'select',choices:[{value:'requests',label:'请求'},{value:'sessions',label:'会话'}],value:view}));
-  const timeline=data.timeline,points=timeline?.points||[];
-  const graph=timeline?panel('用量趋势',`${date(timeline.from)} — ${date(timeline.to)} · ${timeline.interval==='hour'?'按小时':'按天'} UTC · 完整筛选结果，不是本页采样。未知 Token 单独计数。`,el('div',{class:'usage-trend',role:'img','aria-label':'请求量时间趋势'},points.map(p=>el('div',{class:'usage-trend-bar',title:`${date(p.time)}：${p.requests} 请求，${p.errors} 失败，${p.unknown_usage} 未知用量`,style:`height:${Math.max(2,100*p.requests/Math.max(1,...points.map(v=>v.requests)))}%`})) )):notice('趋势尚不可用','提供方尚未返回聚合时间序列，不能用当前页拼出完整趋势。');
   const total = Number.isSafeInteger(data.total) ? data.total : null;
+  const timeline=data.timeline,points=timeline?.points||[];
+  const graph=timeline?panel('用量趋势',`${date(timeline.from)} — ${date(timeline.to)} · ${timeline.interval==='hour'?'按小时':'按天'} UTC · 完整筛选结果，不是本页采样。未知 Token 单独计数。`,el('div',{class:'usage-trend',role:'img','aria-label':'请求量时间趋势'},points.map(p=>el('div',{class:'usage-trend-bar',title:`${date(p.time)}：${p.requests} 请求，${p.errors} 失败，${p.unknown_usage} 未知用量`,style:`height:${Math.max(2,100*p.requests/Math.max(1,...points.map(v=>v.requests)))}%`})) )):(total>0?notice('趋势尚不可用','提供方尚未返回聚合时间序列，不能用当前页拼出完整趋势。'):null);
   const pageOf = nextOffset => {
     const next = new URLSearchParams(params);next.set('range',range);
     if (from) next.set('from',from);

@@ -220,9 +220,10 @@ export function createMerchant(config, options={}) {
       if(historyRoute && req.method==='GET') {
         const staff=historyRoute[1]!=='me',target=staff?store.db.prepare('SELECT * FROM users WHERE id=?').get(historyRoute[2]):user;
         if(!target)throw new HttpError(404,'not_found','Customer not found.');
-        if(!target.core_customer_id||target.core_pending)throw new HttpError(409,'customer_not_ready','Customer is not synchronized.');
+        auth.require(req,staff);
+        if(!target.core_customer_id){respond(res,200,{usage:{requests:0,errors:0,input_tokens:0,output_tokens:0,cache_read_input_tokens:0,cache_creation_input_tokens:0,cache_creation_5m:0,cache_creation_1h:0,cost_usd:0,unknown_usage:0},requests:[],sessions:[],total:0,timeline:null});return;}
         const data=await core.request('GET',`/access/v1/customers/${opaqueId(target.core_customer_id)}/usage?${usageQuery(url.searchParams)}`);auth.require(req,staff);
-        const current=store.db.prepare('SELECT * FROM users WHERE id=?').get(target.id);if(!current||current.core_customer_id!==target.core_customer_id||current.core_pending)throw new HttpError(409,'customer_changed','Customer changed during read.');
+        const current=store.db.prepare('SELECT * FROM users WHERE id=?').get(target.id);if(!current||current.core_customer_id!==target.core_customer_id)throw new HttpError(409,'customer_changed','Customer changed during read.');
         const usage=project(data.usage,schemas.usage);if(!usage||!Number.isSafeInteger(data.total))throw new HttpError(503,'invalid_core_response','Invalid usage metadata.');
         respond(res,200,{usage,requests:collection(data.requests,schemas.request),sessions:project(data.sessions||[],[schemas.session]),total:data.total,timeline:project(data.timeline,schemas.timeline)||null});return;
       }

@@ -93,7 +93,7 @@
 
 对直接提供方和 API 客户，设备修改使用公开的 `/access/v1/customers/:id/devices/:device_id` 与 `/selection`；设备、客户、授权 ID 逐跳映射。设备选择的嵌套响应同样建立映射，不再依赖额外的首次状态轮询。本站 API 客户的设备名称留在本站，不将经营资料传播给更上游。Desktop 仍未开放。
 
-本站 `/api/me/usage` 与管理员 `/api/admin/users/:id/usage` 支持时间、分页、`device_id/grant_id/model/result/session_id/view`。`result` 为 `success/error`，`view` 为 `requests/sessions`。提供方返回的 `timeline` 必须是完整筛选范围的聚合，不能使用本页数据替代；缺少聚合时页面明确显示不可用。图表展示返回的实际范围和 UTC 分桶，未知 Token 与已知用量区分。调用下级接口时筛选 ID 同样先校验归属再映射，不泄露更上游 ID。
+本站 `/api/me/usage` 与管理员 `/api/admin/users/:id/usage` 支持时间、分页、`device_id/grant_id/model/result/session_id/view`。`result` 为 `success/error`，`view` 为 `requests/sessions`。提供方返回的 `timeline` 必须是完整筛选范围的聚合，不能使用本页数据替代；缺少聚合且筛选范围内已有记录时，页面明确显示不可用；没有提供方客户映射时返回空用量和 total=0，不把它当成版本冲突。已有映射时，待确认的资料变更不阻止读取；映射在读取期间变化仍返回冲突。图表展示返回的实际范围和 UTC 分桶，未知 Token 与已知用量区分。调用下级接口时筛选 ID 同样先校验归属再映射，不泄露更上游 ID。
 
 ## 当前分页与错误
 

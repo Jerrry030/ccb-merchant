@@ -341,9 +341,14 @@
 .tok-out,
 .tok-read,
 .tok-write {
-  color: var(--text);
   font-weight: 500;
+  font-variant-numeric: tabular-nums;
 }
+
+.tok-in { color: var(--record-input); }
+.tok-out { color: var(--record-output); }
+.tok-read { color: var(--record-read); }
+.tok-write { color: var(--record-write); }
 
 .token-cell,
 .cost-cell {
@@ -366,7 +371,7 @@
 .token-line .icon {
   width: 14px;
   height: 14px;
-  color: var(--muted);
+  color: currentColor;
 }
 
 .token-tag {

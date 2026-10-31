@@ -53,3 +53,19 @@ test('usage device/model/result filters and aggregate metadata survive the publi
  assert.equal(result.status,200,result.raw);assert.equal(result.data.timeline.points[0].requests,50);assert.equal(result.data.sessions[0].session_id,'s-1');assert.equal(result.raw.includes('LEAK'),false);
  assert.equal((await f.request('GET','/api/me/usage?result=bad',undefined,admin)).status,400);
 });
+test('unmapped customers get empty usage, and a pending profile change does not hide mapped usage',async t=>{
+ const f=await fixture(t);
+ const admin=await f.request('POST','/api/setup',{setup_token:f.setupToken,email:'admin@example.test',password,display_name:'Admin'});
+ const member=await f.request('POST','/api/admin/users',{email:'pending@example.test',password,display_name:'Pending',role:'member'},admin),id=member.data.user.id;
+ const before=f.state.requests.length;
+ const empty=await f.request('GET',`/api/admin/users/${id}/usage?limit=20&offset=0`,undefined,admin);
+ assert.equal(empty.status,200,empty.raw);assert.equal(empty.data.total,0);assert.deepEqual(empty.data.requests,[]);assert.equal(empty.data.sessions.length,0);assert.equal(empty.data.timeline,null);assert.equal(empty.data.usage.requests,0);assert.equal(empty.data.usage.cost_usd,0);
+ assert.equal(f.state.requests.slice(before).some(r=>String(r.path).includes('/usage')),false);
+ const self=await f.request('GET','/api/me/usage',undefined,admin);
+ assert.equal(self.status,200,self.raw);assert.equal(self.data.total,0);
+ await f.request('POST',`/api/admin/users/${id}/provision`,undefined,admin);
+ f.store.db.prepare('UPDATE users SET core_pending=? WHERE id=?').run(JSON.stringify({status:'active',display_name:'Pending'}),id);
+ const mapped=await f.request('GET',`/api/admin/users/${id}/usage`,undefined,admin);
+ assert.equal(mapped.status,200,mapped.raw);assert.equal(mapped.data.usage.cost_usd,4.2);assert.equal(mapped.data.requests.length,1);
+ assert.equal(f.state.requests.filter(r=>r.method==='GET'&&String(r.path).includes('/usage')).length,1);
+});
