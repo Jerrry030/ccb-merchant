@@ -60,30 +60,66 @@ export function renderAuth(path) {
   const labels = {
     '/login':['欢迎回来','使用邮箱和密码登录。','登录'],
     '/setup':['初始化','使用本机的一次性初始化令牌创建管理员。令牌、上游密钥和管理员密码是三项不同凭证。','创建管理员'],
-    '/register':['创建您的账户','注册只创建登录账户。资源需要管理员另行分配。','创建账户'],
+    '/register':['创建一个账户','已有账户？','创建账户'],
     '/verify':['验证电子邮箱','输入邮件里的 6 位验证码。验证码 15 分钟内有效，最多可以尝试 5 次。','确认验证'],
     '/forgot':['找回您的密码','输入注册邮箱。可以重置的账户会收到重置邮件；尚未验证的账户会收到验证码。','发送重置邮件'],
     '/reset':['设置新密码','使用重置邮件中的令牌设置新密码。链接 30 分钟内有效。','重置密码'],
   };
   const [title,description,submitLabel] = labels[path];
   document.title = `${title} · ${state.public.site.name}`;
-  const inner = el('div',{class:'auth-form'},el('h1',{text:title}),el('p',{class:'auth-description',text:description}));
+  const inner = el('div',{class:'auth-form'},el('h1',{text:title}),path === '/register' ? el('p',{class:'auth-description'},'已有账户？',el('a',{href:'/login',text:'登录'})) : el('p',{class:'auth-description',text:description}));
   const disabled = (path === '/setup' && !state.public.setup_required) || (path === '/register' && features.registration !== true) || (path === '/verify' && features.email_verification !== true) || (['/forgot','/reset'].includes(path) && features.password_reset !== true);
   if (disabled) inner.append(notice('此功能当前不可用',authUnavailable(path),'warn'),el('div',{class:'auth-links'},el('a',{href:'/login',text:'返回登录'})));
   else {
     const form = el('form',{});
     const resendHost = el('div');
     if (path === '/setup') form.append(field('初始化令牌','setup_token',{type:'password',required:true,autocomplete:'off',hint:'仅在服务器终端或受保护文件中提供，不会保存在浏览器。'}));
-    if (['/setup','/register'].includes(path)) form.append(field('显示名称','display_name',{required:true,maxlength:100,autocomplete:'name',placeholder:'您希望如何被称呼'}));
-    if (['/login','/setup','/register','/forgot','/verify'].includes(path)) form.append(field('电子邮箱','email',{type:'email',required:true,autocomplete:'email',maxlength:254,placeholder:'you@example.com'}));
-    if (path === '/register') { const note = registrationPolicyNote(); if (note) form.append(note); }
+    if (path === '/setup') form.append(field('显示名称','display_name',{required:true,maxlength:100,autocomplete:'name',placeholder:'您希望如何被称呼'}));
+    if (['/login','/setup','/forgot','/verify'].includes(path)) form.append(field('电子邮箱','email',{type:'email',required:true,autocomplete:'email',maxlength:254,placeholder:'you@example.com'}));
     if (path === '/verify') form.append(field('验证码','code',{required:true,inputmode:'numeric',autocomplete:'one-time-code',minlength:6,maxlength:6,pattern:'[0-9]{6}',placeholder:'6 位数字',spellcheck:'false',hint:'验证码 15 分钟内有效，连续输错 5 次后需要重新发送。'}));
     if (path === '/reset') form.append(field('重置令牌','token',{type:'password',required:true,autocomplete:'off',value:state.token,spellcheck:'false',hint:'重置链接 30 分钟内有效。令牌已从地址栏移除，请勿分享。'}));
-    if (['/login','/setup','/register','/reset'].includes(path)) form.append(field(path === '/reset' ? '新密码' : '密码','password',{type:'password',required:true,autocomplete:path === '/login' ? 'current-password' : 'new-password',...(path === '/login' ? {} : {minlength:6}),maxlength:256,placeholder:path === '/login' ? '请输入您的密码' : '至少 6 个字符'}));
-    if (['/setup','/register','/reset'].includes(path)) form.append(field('确认密码','confirmation',{type:'password',required:true,autocomplete:'new-password',minlength:6,maxlength:256}));
+    if (['/login','/setup','/reset'].includes(path)) form.append(field(path === '/reset' ? '新密码' : '密码','password',{type:'password',required:true,autocomplete:path === '/login' ? 'current-password' : 'new-password',...(path === '/login' ? {} : {minlength:6}),maxlength:256,placeholder:path === '/login' ? '请输入您的密码' : '至少 6 个字符'}));
+    if (['/setup','/reset'].includes(path)) form.append(field('确认密码','confirmation',{type:'password',required:true,autocomplete:'new-password',minlength:6,maxlength:256}));
+    if (path === '/register') {
+      const verifying = features.email_verification === true;
+      form.append(field('显示名称','display_name',{required:true,maxlength:100,autocomplete:'name',placeholder:'您希望如何被称呼'}));
+      form.append(field('密码','password',{type:'password',required:true,autocomplete:'new-password',minlength:6,maxlength:256,placeholder:'至少 6 个字符'}));
+      form.append(field('确认密码','confirmation',{type:'password',required:true,autocomplete:'new-password',minlength:6,maxlength:256,placeholder:'确认密码'}));
+      form.append(field(verifying ? '电子邮箱（验证必需）' : '电子邮箱','email',{type:'email',required:true,autocomplete:'email',maxlength:254,placeholder:'name@example.com'}));
+      const note = registrationPolicyNote(); if (note) form.append(note);
+      if (verifying) {
+        const send = el('button',{class:'btn',type:'button',text:'发送验证码'});
+        form.append(el('div',{class:'auth-code-row'},field('验证码','code',{required:true,inputmode:'numeric',autocomplete:'one-time-code',minlength:6,maxlength:6,pattern:'[0-9]{6}',placeholder:'验证码',spellcheck:'false'}),send));
+        send.addEventListener('click', async () => {
+          if (form.dataset.busy === 'true') return;
+          const code = form.querySelector('input[name=code]');
+          code.required = false;
+          const valid = [...form.querySelectorAll('input')].filter(input => input !== code).every(input => input.reportValidity());
+          code.required = true;
+          if (!valid) return;
+          const password = form.querySelector('input[name=password]').value;
+          const message = form.querySelector('.form-message');
+          if (password !== form.querySelector('input[name=confirmation]').value) {
+            message.replaceChildren(notice('两次输入的密码不一致','请重新填写后再发送验证码。','warn'));
+            return;
+          }
+          send.disabled = true;
+          try {
+            const data = await api('/api/auth/register',{method:'POST',body:{email:form.querySelector('input[name=email]').value.trim(),password,display_name:form.querySelector('input[name=display_name]').value.trim()}});
+            if (!['created','verification_required'].includes(data.status) || (data.delivery && !['sent','unconfirmed','not_required'].includes(data.delivery))) throw new Error('注册结果无法识别，请联系管理员确认。');
+            message.replaceChildren(notice(data.status === 'verification_required' ? '验证码已发送' : '请求已完成',registerResultCopy(data),data.delivery === 'unconfirmed' ? 'warn' : 'success'));
+            if (data.status === 'verification_required') send.textContent = '重新发送验证码';
+          } catch (error) {
+            message.replaceChildren(notice(error.message || '暂时无法发送验证码。','','error'));
+          } finally { send.disabled = false; }
+        });
+      }
+    }
     form.append(el('button',{class:'btn primary',type:'submit',text:submitLabel}));
     bindForm(form,async values => {
-      if (values.has('confirmation') && values.get('password') !== values.get('confirmation')) throw new Error('两次输入的密码不一致。');
+      const verifying = path === '/register' && features.email_verification === true;
+      if (!verifying && values.has('confirmation') && values.get('password') !== values.get('confirmation')) throw new Error('两次输入的密码不一致。');
+      if (verifying) return api('/api/auth/verify',{method:'POST',body:{email:String(values.get('email') || '').trim(),code:String(values.get('code') || '').trim()}});
       if (path === '/setup' && !await confirmAction('创建首位管理员','此操作将完成站点初始化。请确认邮箱、显示名称与密码已正确填写。','确认初始化')) return CANCEL;
       const payload = Object.fromEntries(values); delete payload.confirmation;
       const endpoint = {'/setup':'/api/setup','/login':'/api/auth/login','/register':'/api/auth/register','/verify':'/api/auth/verify','/forgot':'/api/auth/forgot-password','/reset':'/api/auth/reset-password'}[path];
@@ -91,6 +127,10 @@ export function renderAuth(path) {
     },(data,message) => {
       if (path === '/login' || path === '/setup') {
         adoptSession(data); if (path === '/setup') state.public.setup_required = false; const next = path==='/setup'?'/admin/settings#upstream':state.returnTo; state.returnTo = '/'; navigate(next,true);
+      } else if (path === '/register' && features.email_verification === true) {
+        if (data.ok !== true) throw new Error('服务器尚未确认操作完成，请联系管理员确认。');
+        form.querySelector('button[type=submit]').textContent = '已提交';
+        message.replaceChildren(notice('请求已完成','邮箱已验证，请返回登录。','success',el('a',{class:'btn small',href:'/login',text:'返回登录'})));
       } else {
         if (path === '/register' && (!['created','verification_required'].includes(data.status) || (data.delivery && !['sent','unconfirmed','not_required'].includes(data.delivery)))) throw new Error('注册结果无法识别，请联系管理员确认。');
         if (path !== '/register' && data.ok !== true) throw new Error('服务器尚未确认操作完成，请联系管理员确认。');
@@ -124,8 +164,8 @@ export function renderAuth(path) {
       if (features.password_reset === true) links.append(el('a',{href:'/forgot',text:'忘记密码？'}));
       if (features.registration === true) links.append(el('a',{href:'/register',text:'创建账户 →'}));
       if (state.public.setup_required) links.append(el('a',{href:'/setup',text:'初始化站点 →'}));
-    } else links.append(el('a',{href:'/login',text:'← 返回登录'}));
-    inner.append(links);
+    } else if (path !== '/register') links.append(el('a',{href:'/login',text:'← 返回登录'}));
+    if (path !== '/register') inner.append(links);
   }
   const support = String(state.public?.site?.support_email || '').trim();
   if (support) inner.append(el('p',{class:'inline-info'},'需要帮助？',el('a',{href:`mailto:${support}`,text:support})));

@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import { once } from 'node:events';
 import { mkdtemp, readFile, writeFile, realpath, rm } from 'node:fs/promises';
 import { createServer } from 'node:net';
@@ -29,6 +30,11 @@ async function readThrough(reader, marker) {
 }
 
 test('Caddy preserves uncompressed API progress, static gzip and downstream cancellation', {timeout:30000}, async t=>{
+  const {caddy}=JSON.parse(await readFile(new URL('../tools.json',import.meta.url),'utf8'));
+  const executable=fileURLToPath(new URL('../../node_modules/.bin/'+(process.platform==='win32'?'caddy.exe':'caddy'),import.meta.url));
+  const version=spawnSync(executable,['version'],{encoding:'utf8',windowsHide:true,timeout:10000});
+  assert.equal(version.status,0,'Run node scripts/install-caddy.mjs before the proxy test');
+  assert.equal(version.stdout.trim().split(/\s+/)[0],'v'+caddy.version,'Caddy must match the checked-in test-tool pin');
   const waiting=Promise.withResolvers(),waitingClosed=Promise.withResolvers(),streamClosed=Promise.withResolvers();
   const completeReleases=new Map();
   // The first write must exceed the encoder's 512-byte threshold. Small
@@ -72,7 +78,7 @@ test('Caddy preserves uncompressed API progress, static gzip and downstream canc
   const template=await readFile(new URL('../../Caddyfile.example',import.meta.url),'utf8');
   const config=`{\n admin off\n auto_https off\n}\n`+template.replace('merchant.example.com {',`${origin} {`).replace('127.0.0.1:8787',backend);
   const configPath=join(root,'Caddyfile');await writeFile(configPath,config);
-  child=spawn(process.env.CADDY_BIN||'caddy',['run','--config',configPath,'--adapter','caddyfile'],{
+  child=spawn(executable,['run','--config',configPath,'--adapter','caddyfile'],{
     windowsHide:true,env:{...process.env,APPDATA:join(root,'appdata'),XDG_DATA_HOME:join(root,'data'),XDG_CONFIG_HOME:join(root,'config')},stdio:['ignore','pipe','pipe'],
   });
   stopped=new Promise(resolve=>{child.once('error',error=>{spawnError=error;resolve();});child.once('exit',resolve);});
@@ -83,7 +89,7 @@ test('Caddy preserves uncompressed API progress, static gzip and downstream canc
     try {const response=await fetch(origin+'/api/public',{signal:AbortSignal.timeout(200)});await response.arrayBuffer();if(response.ok){ready=true;break;}}catch{}
     await delay(50);
   }
-  assert.ok(ready,`Caddy must be installed (or set CADDY_BIN): ${spawnError?.message||log}`);
+  assert.ok(ready,`Pinned Caddy failed to start: ${spawnError?.message||log}`);
   const headers={Authorization:'Bearer original-device-bearer-fixture','Content-Type':'application/json','Accept-Encoding':'gzip, deflate, br, zstd'};
   for(const encoding of ['identity','gzip','gzip, deflate, br, zstd']) {
     await t.test(`API progress before EOF with Accept-Encoding: ${encoding}`,async()=>{

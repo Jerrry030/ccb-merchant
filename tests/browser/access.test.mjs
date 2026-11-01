@@ -1,16 +1,16 @@
+import { chromium } from 'playwright';
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createRequire } from 'node:module';
 import { resolve,dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { mkdir } from 'node:fs/promises';
 import { fixture,password,upstreamKey } from '../server/fixtures.js';
-const require=createRequire(import.meta.url),{chromium}=require(process.env.PLAYWRIGHT_MODULE||'playwright');
+
 const project=resolve(dirname(fileURLToPath(import.meta.url)),'../..');
 
 test('actual wizard and local API account UI isolate credentials, manage resources and confirm rotation/revocation',async t=>{
  const f=await fixture(t,{withoutCore:true,publicDir:resolve(project,'public')});
- const browser=await chromium.launch({headless:true,...(process.env.PLAYWRIGHT_EXECUTABLE_PATH?{executablePath:process.env.PLAYWRIGHT_EXECUTABLE_PATH}:{})});t.after(()=>browser.close());
+ const browser=await chromium.launch({headless:true});t.after(()=>browser.close());
  const context=await browser.newContext({viewport:{width:1440,height:1080},reducedMotion:'reduce'}),page=await context.newPage(),errors=[],external=[];
  page.on('pageerror',e=>errors.push(e.message));page.setDefaultTimeout(10000);
  await context.route('**/*',route=>{if(new URL(route.request().url()).origin!==f.config.publicOrigin){external.push(route.request().url());return route.abort();}return route.continue();});

@@ -1,11 +1,11 @@
+import { chromium } from 'playwright';
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {createRequire} from 'node:module';
 import {resolve,dirname} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {mkdir} from 'node:fs/promises';
 import {fixture,password} from '../server/fixtures.js';
-const require=createRequire(import.meta.url),{chromium}=require(process.env.PLAYWRIGHT_MODULE||'playwright');
+
 const root=resolve(dirname(fileURLToPath(import.meta.url)),'../..');
 
 test('numbered inventory exposes quota uncertainty and batches retain customers beyond the first 200',async t=>{

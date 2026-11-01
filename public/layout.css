@@ -734,6 +734,20 @@
   margin-top: 6px;
 }
 
+.auth-description a { margin-left: 6px; }
+
+.auth-code-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 12px;
+  margin-bottom: 18px;
+}
+
+.auth-code-row .field { flex: 1 1 180px; margin-bottom: 0; }
+
+.auth-code-row .btn { min-height: 40px; white-space: nowrap; }
+
 .auth-links {
   display: flex;
   flex-wrap: wrap;

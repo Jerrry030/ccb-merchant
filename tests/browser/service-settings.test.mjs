@@ -1,12 +1,11 @@
+import { chromium } from 'playwright';
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createRequire } from 'node:module';
 import { mkdir } from 'node:fs/promises';
 import { resolve,dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { fixture,password } from '../server/fixtures.js';
-const require=createRequire(import.meta.url);
-const {chromium}=require(process.env.PLAYWRIGHT_MODULE||'playwright');
+
 const project=resolve(dirname(fileURLToPath(import.meta.url)),'../..');
 
 test('real settings UI separates modules, tests unsaved SMTP drafts, preserves secrets and saves independent payment sections',async t=>{
@@ -15,7 +14,7 @@ test('real settings UI separates modules, tests unsaved SMTP drafts, preserves s
     const call={options};mailCalls.push(call);return {async verify(){call.verify=true;},async sendMail(message){call.message=message;return {accepted:[message.to]};},close(){call.closed=true;}};
   },paymentTransport:async(url,options)=>{paymentCalls.push({url,options});return Response.json({object:'balance',livemode:false});}});
   const admin=await f.request('POST','/api/setup',{email:'admin@example.test',password,display_name:'设置测试',setup_token:f.setupToken});
-  const browser=await chromium.launch({headless:true,...(process.env.PLAYWRIGHT_EXECUTABLE_PATH?{executablePath:process.env.PLAYWRIGHT_EXECUTABLE_PATH}:{})});t.after(()=>browser.close());
+  const browser=await chromium.launch({headless:true});t.after(()=>browser.close());
   const context=await browser.newContext({viewport:{width:1440,height:1100},reducedMotion:'reduce'}),page=await context.newPage(),failures=[],external=[];
   t.after(()=>{assert.deepEqual(failures,[]);assert.deepEqual(external,[]);});
   page.on('pageerror',error=>failures.push(error.message));page.setDefaultTimeout(10000);
@@ -69,7 +68,7 @@ test('environment-managed SMTP controls are all read-only while testing remains 
   const observed=[];
   const f=await fixture(t,{withoutCore:true,publicDir:resolve(project,'public'),env:{SMTP_HOST:'smtp.example.test',SMTP_FROM:'sender@example.test',SMTP_USER:'mailer',SMTP_PASSWORD:'env-fixture-secret'},mailTransportFactory:options=>({async verify(){observed.push(options);},close(){}})});
   await f.request('POST','/api/setup',{email:'admin@example.test',password,display_name:'环境配置测试',setup_token:f.setupToken});
-  const browser=await chromium.launch({headless:true,...(process.env.PLAYWRIGHT_EXECUTABLE_PATH?{executablePath:process.env.PLAYWRIGHT_EXECUTABLE_PATH}:{})});t.after(()=>browser.close());
+  const browser=await chromium.launch({headless:true});t.after(()=>browser.close());
   const page=await browser.newPage({viewport:{width:1280,height:900}});page.setDefaultTimeout(10000);
   await page.goto(f.config.publicOrigin+'/login');await page.getByLabel('电子邮箱',{exact:true}).fill('admin@example.test');await page.getByLabel('密码',{exact:true}).fill(password);await page.locator('.auth-form button[type=submit]').click();
   await page.getByRole('link',{name:'设置',exact:true}).click();await page.getByRole('tab',{name:'邮件配置',exact:true}).click();

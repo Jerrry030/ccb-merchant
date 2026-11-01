@@ -1,8 +1,8 @@
-import { randomUUID,randomBytes } from 'node:crypto';
+import { randomUUID,randomBytes,createHmac } from 'node:crypto';
 import { HttpError,fields,text,opaqueId,expiry,digest,readBody,respond } from './security.js';
 import { project,schemas } from './upstream.js';
 
-export const accessScopes=['resources.read','customers.read','customers.write','delegation.grants.read','delegation.grants.write','delegation.devices.read','delegation.devices.write','delegation.usage.read','runtime'];
+export const accessScopes=['managed_accounts.read','managed_accounts.write','resources.read','customers.read','customers.write','delegation.grants.read','delegation.grants.write','delegation.devices.read','delegation.devices.write','delegation.usage.read','runtime'];
 const live=end=>!end||Date.parse(end)>Date.now();
 function accountView(a){return {id:a.id,slug:a.slug,name:a.name,status:a.status,revision:a.revision,created_at:a.created_at};}
 function customerView(c){return {id:c.id,external_id:c.external_id,display_name:c.display_name,status:c.status,revision:c.revision,created_at:c.created_at};}
@@ -11,7 +11,7 @@ function keyView(k){return {id:k.id,name:k.name,prefix:k.prefix,scopes:JSON.pars
 // A provider knows only its directly contracted API accounts. No parent ID,
 // ancestor credentials or recursive topology is stored or accepted here.
 export class Access {
- constructor(store,upstream){this.store=store;this.db=store.db;this.upstream=upstream;this.busy=false;}
+ constructor(store,upstream,custody){this.store=store;this.db=store.db;this.upstream=upstream;this.custody=custody;this.busy=false;}
  authenticate(req,scope){
   const runtime=req.url.startsWith('/bridge/');
   const header=runtime?'x-ccb-access-key':'authorization';
@@ -28,7 +28,11 @@ export class Access {
   if(!['access_accounts','access_resources','access_customers','access_grants','access_devices'].includes(table))throw new Error('Invalid local table');
   opaqueId(id);
   const row=table==='access_accounts'?this.db.prepare('SELECT * FROM access_accounts WHERE id=?').get(id):this.db.prepare(`SELECT * FROM ${table} WHERE id=? AND account_id=?`).get(id,accountId);
-  if(!row)throw new HttpError(404,'not_found','Object is not owned by this API account.');
+  const origin=this.upstream.context.getStore()?.localOrigin;
+  let source=row;
+  if(row&&table==='access_grants')source=this.db.prepare('SELECT origin_ref FROM access_customers WHERE id=?').get(row.customer_id);
+  if(row&&table==='access_devices'&&row.customer_id)source=this.db.prepare('SELECT origin_ref FROM access_customers WHERE id=?').get(row.customer_id);
+  if(!row || origin!==undefined && source?.origin_ref!==undefined && source.origin_ref!==origin && (table!=='access_resources'||row.source==='owned'))throw new HttpError(404,'not_found','Object is not owned by this API account.');
   return row;
  }
  async mutate(work){
@@ -36,19 +40,20 @@ export class Access {
   this.busy=true;try{return await work();}finally{this.busy=false;}
  }
  async resources(accountId){
-  const account=this.object('access_accounts',accountId),rows=this.db.prepare('SELECT * FROM access_resources WHERE account_id=? ORDER BY id').all(accountId);
-  if(!rows.length)return [];
+  const account=this.object('access_accounts',accountId),origin=this.upstream.context.getStore()?.localOrigin||'';
   const data=await this.upstream.request('GET','/access/v1/resources');
   if(!Array.isArray(data.resources))throw new HttpError(503,'invalid_core_response','Supply inventory is unavailable.');
+  for(const source of data.resources)if(this.upstream.context.getStore()&&source.source==='owned')this.custody.resource(accountId,origin,source.id);
+  const rows=this.db.prepare("SELECT * FROM access_resources WHERE account_id=? AND(source<>'owned' OR origin_ref=?) ORDER BY id").all(accountId,origin);
   return rows.map(r=>{
    const source=data.resources.find(v=>v.id===r.upstream_id),ends=[r.expires_at,source?.expires_at].filter(Boolean).map(Date.parse);
    const end=ends.length?new Date(Math.min(...ends)).toISOString():null;
-   return {id:r.id,name:r.name,status:r.status,surfaces:['code'],expires_at:end,revision:r.revision,available:account.status==='active'&&r.status==='active'&&source?.status==='active'&&source.available!==false&&live(end)};
+   return {id:r.id,name:r.name,status:r.status,kind:source?.kind||'shared',source:r.source,surfaces:['code'],expires_at:end,revision:r.revision,available:account.status==='active'&&r.status==='active'&&source?.status==='active'&&source.available!==false&&live(end)};
   });
  }
  grantView(g){
   const r=this.object('access_resources',g.resource_id,g.account_id),ends=[g.expires_at,r.expires_at].filter(Boolean).map(Date.parse);
-  return {id:g.id,customer_id:g.customer_id,resource_id:g.resource_id,name:r.name,status:g.status,surfaces:['code'],expires_at:ends.length?new Date(Math.min(...ends)).toISOString():null,revision:g.revision,updated_at:g.updated_at,pending:Boolean(g.pending)};
+  return {id:g.id,account_lease_id:g.account_lease_id||null,customer_id:g.customer_id,resource_id:g.resource_id,name:r.name,status:g.status,surfaces:['code'],expires_at:ends.length?new Date(Math.min(...ends)).toISOString():null,revision:g.revision,updated_at:g.updated_at,pending:Boolean(g.pending)};
  }
  async syncCustomer(row,check){
   const list=await this.upstream.request('GET',`/access/v1/customers?external_id=${encodeURIComponent(row.upstream_external)}`);check();
@@ -64,19 +69,20 @@ export class Access {
  }
  async customers(account,method,id,body,query,check){
   if(method==='GET'){
+   if(id)return {customer:customerView(this.object('access_customers',id,account.id))};
    const limit=Number(query.get('limit')||100),offset=Number(query.get('offset')||0),external=query.get('external_id')||'';
    if(!Number.isSafeInteger(limit)||limit<1||limit>501||!Number.isSafeInteger(offset)||offset<0)throw new HttpError(400,'invalid_page','Invalid pagination.');
-   const total=this.db.prepare("SELECT count(*) AS n FROM access_customers WHERE account_id=? AND(?='' OR external_id=?)").get(account.id,external,external).n;
-   return {customers:this.db.prepare("SELECT * FROM access_customers WHERE account_id=? AND(?='' OR external_id=?) AND id>? ORDER BY id LIMIT ? OFFSET ?").all(account.id,external,external,query.get('after')||'',limit,offset).map(customerView),total,limit,offset};
+   const total=this.db.prepare("SELECT count(*) AS n FROM access_customers WHERE account_id=? AND origin_ref=? AND(?='' OR external_id=?)").get(account.id,this.upstream.context.getStore()?.localOrigin||'',external,external).n;
+   return {customers:this.db.prepare("SELECT * FROM access_customers WHERE account_id=? AND origin_ref=? AND(?='' OR external_id=?) AND id>? ORDER BY id LIMIT ? OFFSET ?").all(account.id,this.upstream.context.getStore()?.localOrigin||'',external,external,query.get('after')||'',limit,offset).map(customerView),total,limit,offset};
   }
   return await this.mutate(async()=>{
    let row;
    if(method==='POST'){
     fields(body,['external_id','display_name'],['external_id','display_name']);const external=text(body.external_id,'external_id',150),name=text(body.display_name,'display_name',100);
     row=this.db.prepare('SELECT * FROM access_customers WHERE account_id=? AND external_id=?').get(account.id,external);
-    if(row){if(row.display_name!==name)throw new HttpError(409,'customer_conflict','Customer already exists with different content.');}
+    if(row){this.object('access_customers',row.id,account.id);if(row.display_name!==name)throw new HttpError(409,'customer_conflict','Customer already exists with different content.');}
     else{
-     const uuid=randomUUID();this.db.prepare("INSERT INTO access_customers(id,account_id,external_id,display_name,status,upstream_external,created_at) VALUES(?,?,?,?,'active',?,?)").run(uuid,account.id,external,name,randomUUID(),new Date().toISOString());row=this.object('access_customers',uuid,account.id);}
+     const uuid=randomUUID();this.db.prepare("INSERT INTO access_customers(id,account_id,external_id,display_name,status,upstream_external,created_at,origin_ref) VALUES(?,?,?,?,'active',?,?,?)").run(uuid,account.id,external,name,randomUUID(),new Date().toISOString(),this.upstream.context.getStore()?.localOrigin||'');row=this.object('access_customers',uuid,account.id);}
    }else{
     fields(body,['expected_revision','status','display_name'],['expected_revision']);row=this.object('access_customers',id,account.id);
     if(body.expected_revision!==row.revision||(!body.status&&!body.display_name)||body.status&&!['active','disabled'].includes(body.status))throw new HttpError(409,'customer_conflict','Refresh customer state.');
@@ -89,67 +95,118 @@ export class Access {
  }
  async grants(account,method,id,body,query,check){
   if(method==='GET'){
+   if(id){const g=this.object('access_grants',id,account.id);query.set('customer_id',g.customer_id);query.set('resource_id',g.resource_id);}
    const customer=query.get('customer_id'),resource=query.get('resource_id');if(customer)this.object('access_customers',customer,account.id);if(resource)this.object('access_resources',resource,account.id);
    const limit=Number(query.get('limit')||100),offset=Number(query.get('offset')||0);
    if(!Number.isSafeInteger(limit)||limit<1||limit>501||!Number.isSafeInteger(offset)||offset<0)throw new HttpError(400,'invalid_page','Invalid pagination.');
-   const where=' WHERE account_id=? AND(? IS NULL OR customer_id=?) AND(? IS NULL OR resource_id=?)';
-   const args=[account.id,customer,customer,resource,resource];
+   const where=' WHERE account_id=? AND customer_id IN(SELECT id FROM access_customers WHERE origin_ref=?) AND(? IS NULL OR customer_id=?) AND(? IS NULL OR resource_id=?)';
+   const args=[account.id,this.upstream.context.getStore()?.localOrigin||'',customer,customer,resource,resource];
    const total=this.db.prepare('SELECT count(*) AS n FROM access_grants'+where).get(...args).n;
    const rows=this.db.prepare('SELECT * FROM access_grants'+where+' AND id>? ORDER BY id LIMIT ? OFFSET ?').all(...args,query.get('after')||'',limit,offset);
    for(const g of rows){
-    if(!g.upstream_id||g.pending)continue;
+    if(!g.upstream_id&&!g.pending)continue;
     const c=this.object('access_customers',g.customer_id,account.id),r=this.object('access_resources',g.resource_id,account.id);
+    if(g.pending){await this.syncGrant(g,c,r,check,false);continue;}
     const remote=await this.upstream.request('GET',`/access/v1/grants?customer_id=${opaqueId(c.upstream_id)}&resource_id=${opaqueId(r.upstream_id)}`);check();
     if(!Array.isArray(remote.grants))throw new HttpError(503,'invalid_core_response','Grant lookup unavailable.');
     const current=remote.grants.find(v=>v.id===g.upstream_id),status=current?.status||'revoked',end=current?current.expires_at:g.expires_at;
     if(!['active','revoked'].includes(status))throw new HttpError(503,'invalid_core_response','Unexpected grant state.');
-    if(status!==g.status||(end!==g.expires_at&&Date.parse(end||'')!==Date.parse(g.expires_at||''))){
-     this.db.prepare('UPDATE access_grants SET status=?,expires_at=?,revision=revision+1,updated_at=? WHERE id=? AND pending=0 AND revision=?').run(status,end,new Date().toISOString(),g.id,g.revision);
+    if(current&&current.revision!==g.upstream_revision||status!==g.status||(end!==g.expires_at&&Date.parse(end||'')!==Date.parse(g.expires_at||''))){
+     this.db.prepare('UPDATE access_grants SET status=?,expires_at=?,upstream_revision=?,revision=revision+1,updated_at=? WHERE id=? AND pending=0 AND revision=?').run(status,end,current?.revision||g.upstream_revision,new Date().toISOString(),g.id,g.revision);
     }
    }
+   if(id)return {grant:this.grantView(this.object('access_grants',id,account.id))};
    return {grants:rows.map(g=>this.grantView(this.object('access_grants',g.id,account.id))),total,limit,offset};
   }
   return await this.mutate(async()=>{
    let g,c,r;
    if(method==='POST'){
-    fields(body,['customer_id','resource_id','expires_at'],['customer_id','resource_id']);c=this.object('access_customers',body.customer_id,account.id);r=this.object('access_resources',body.resource_id,account.id);
-    g=this.db.prepare('SELECT * FROM access_grants WHERE customer_id=? AND resource_id=?').get(c.id,r.id);
+    fields(body,['customer_id','resource_id','expires_at','account_lease_id','expected_account_revision'],['customer_id','resource_id']);c=this.object('access_customers',body.customer_id,account.id);r=this.object('access_resources',body.resource_id,account.id);
+    g=this.db.prepare('SELECT * FROM access_grants WHERE customer_id=? AND resource_id=? AND account_lease_id IS ?').get(c.id,r.id,body.account_lease_id||null);
     const offered=(await this.resources(account.id)).find(v=>v.id===r.id);check();const end=body.expires_at===undefined?offered.expires_at:expiry(body.expires_at);
     if(!offered.available||c.status!=='active'||c.pending||!live(end)||(offered.expires_at&&(!end||Date.parse(end)>Date.parse(offered.expires_at))))throw new HttpError(409,'supply_unavailable','Customer, resource or term is unavailable.');
-    if(g){if(g.status!=='active'||Date.parse(g.expires_at||'')!==Date.parse(end||'')&&g.expires_at!==end)throw new HttpError(409,'grant_conflict','Existing grant differs. Use its revision to update.');}
+    let intent={customer_id:c.upstream_id,resource_id:r.upstream_id,expires_at:end};
+    if(body.account_lease_id){
+     const link=this.db.prepare('SELECT * FROM access_account_leases WHERE id=? AND account_id=? AND origin_ref=? AND resource_id=?').get(opaqueId(body.account_lease_id),account.id,this.upstream.context.getStore()?.localOrigin||'',r.id);
+     if(!link)throw new HttpError(404,'not_found','Concrete account is not owned by this source.');
+     if(!g&&this.db.prepare('SELECT 1 FROM access_grants WHERE account_lease_id=? AND pending=1').get(link.id))throw new HttpError(409,'grant_pending','This concrete account has an unresolved delivery.');
+     const snapshot=JSON.parse(link.snapshot);
+     if(!g&&(snapshot.revision!==body.expected_account_revision||!link.upstream_revision||snapshot.assigned||snapshot.status!=='active'||!['available','limited'].includes(snapshot.details?.state)))throw new HttpError(409,'account_changed','Refresh concrete account inventory before delivery.');
+     if(!end||!Number.isFinite(Date.parse(end)))throw new HttpError(400,'invalid_expiry','Customer delivery needs an explicit expiry.');
+     intent.account_lease_id=link.upstream_id;intent.expected_account_revision=link.upstream_revision;
+    }else if(r.source==='owned')throw new HttpError(400,'concrete_account_required','Choose the exact owned account.');
+    if(g&&!g.pending){const before=g.revision;g=await this.syncGrant(g,c,r,check,false);if(g.revision!==before)throw new HttpError(409,'grant_reconciled','Grant changed upstream; refresh instead of replaying create.');}
+    if(g){if(g.pending&&JSON.parse(g.intent||'{}').operation==='patch')throw new HttpError(409,'grant_pending','Reconcile the previous mutation first.');if(g.status!=='active'||Date.parse(g.expires_at||'')!==Date.parse(end||'')&&g.expires_at!==end)throw new HttpError(409,'grant_conflict','Existing grant differs. Use its revision to update.');}
     else{
-     const uuid=randomUUID();this.db.prepare("INSERT INTO access_grants(id,account_id,customer_id,resource_id,status,expires_at,updated_at) VALUES(?,?,?,?,'active',?,?)").run(uuid,account.id,c.id,r.id,end,new Date().toISOString());g=this.object('access_grants',uuid,account.id);
+     const uuid=randomUUID();this.db.prepare("INSERT INTO access_grants(id,account_id,customer_id,resource_id,status,expires_at,updated_at,account_lease_id,intent) VALUES(?,?,?,?,'active',?,?,?,?)").run(uuid,account.id,c.id,r.id,end,new Date().toISOString(),body.account_lease_id||null,JSON.stringify(intent));g=this.object('access_grants',uuid,account.id);
     }
    }else{
     fields(body,['expected_revision','status','expires_at'],['expected_revision']);g=this.object('access_grants',id,account.id);c=this.object('access_customers',g.customer_id,account.id);r=this.object('access_resources',g.resource_id,account.id);
+    if(g.pending){const previous=JSON.parse(g.intent||'{}');if(previous.operation!=='patch'||previous.local_revision!==body.expected_revision||(body.status!==undefined&&body.status!==previous.body.status)||(body.expires_at!==undefined&&body.expires_at!==previous.body.expires_at))throw new HttpError(409,'grant_pending','Only the original pending intent can be retried.');g=await this.syncGrant(g,c,r,check);return {grant:this.grantView(g)};}
     if(body.expected_revision!==g.revision||body.status&&!['active','revoked'].includes(body.status))throw new HttpError(409,'grant_conflict','Grant changed.');
     const status=body.status||g.status,end=body.expires_at===undefined?g.expires_at:expiry(body.expires_at),offered=(await this.resources(account.id)).find(v=>v.id===r.id);check();
+    if(status==='active'&&g.account_lease_id&&(!end||!Number.isFinite(Date.parse(end))))throw new HttpError(400,'invalid_expiry','Concrete account delivery needs a finite customer expiry.');
     if(status==='active'&&(!offered.available||c.pending||c.status!=='active'||!live(end)||(offered.expires_at&&(!end||Date.parse(end)>Date.parse(offered.expires_at)))))throw new HttpError(409,'supply_unavailable','Grant cannot be activated.');
-    const changed=this.db.prepare('UPDATE access_grants SET status=?,expires_at=?,pending=1,revision=revision+1,updated_at=? WHERE id=? AND revision=?').run(status,end,new Date().toISOString(),g.id,g.revision);
+    const current=await this.upstream.request('GET',`/access/v1/grants?customer_id=${opaqueId(c.upstream_id)}&resource_id=${opaqueId(r.upstream_id)}`);check();const remote=current.grants?.find(v=>v.id===g.upstream_id);
+    if(!remote||remote.pending||!Number.isSafeInteger(remote.revision))throw new HttpError(409,'grant_pending','Upstream state is not confirmed.');
+    if(g.upstream_revision&&remote.revision!==g.upstream_revision){
+     this.db.prepare('UPDATE access_grants SET status=?,expires_at=?,upstream_revision=?,revision=revision+1,updated_at=? WHERE id=? AND revision=? AND pending=0').run(remote.status,remote.expires_at,remote.revision,new Date().toISOString(),g.id,g.revision);
+     throw new HttpError(409,'grant_changed','Upstream changed after the observed revision. Read and confirm a new intent.');
+    }
+    const intent={operation:'patch',local_revision:g.revision,body:{expected_revision:remote.revision,status,expires_at:end}};
+    const changed=this.db.prepare('UPDATE access_grants SET status=?,expires_at=?,intent=?,pending=1,revision=revision+1,updated_at=? WHERE id=? AND revision=?').run(status,end,JSON.stringify(intent),new Date().toISOString(),g.id,g.revision);
     if(changed.changes!==1)throw new HttpError(409,'grant_conflict','Grant changed during validation; refresh.');g=this.object('access_grants',g.id,account.id);
    }
    if(g.pending)g=await this.syncGrant(g,c,r,check);
    return {grant:this.grantView(g)};
   });
  }
- async syncGrant(g,c,r,check){
+ async syncGrant(g,c,r,check,write=true){
   if(!c.upstream_id)throw new HttpError(409,'customer_pending','Customer provisioning is pending.');
+  const intent=JSON.parse(g.intent||'{}'),patch=intent.operation==='patch';
   const list=await this.upstream.request('GET',`/access/v1/grants?customer_id=${opaqueId(c.upstream_id)}&resource_id=${opaqueId(r.upstream_id)}`);check();
-  let remote=list.grants?.find(v=>v.customer_id===c.upstream_id&&v.resource_id===r.upstream_id);
-  if(g.upstream_id&&remote?.id!==g.upstream_id)throw new HttpError(409,'mapping_conflict','Grant mapping changed.');
+  if(!Array.isArray(list.grants))throw new HttpError(503,'invalid_core_response','Grant lookup unavailable.');
+  let remote=list.grants.find(v=>v.customer_id===c.upstream_id&&v.resource_id===r.upstream_id&&(g.upstream_id?v.id===g.upstream_id:(v.account_lease_id||null)===(intent.account_lease_id||null)));
+  if(remote?.pending){if(write)throw new HttpError(503,'core_outcome_unknown','The provider has not confirmed this grant.');return g;}
   const allocation={accountId:g.account_id,resourceId:r.id,authorize:check};
-  if(!remote){if(g.status==='revoked'){this.db.prepare('UPDATE access_grants SET pending=0 WHERE id=?').run(g.id);return this.object('access_grants',g.id,g.account_id);}
-   const data=await this.upstream.request('POST','/access/v1/grants',{customer_id:c.upstream_id,resource_id:r.upstream_id,expires_at:g.expires_at},undefined,allocation);check();remote=data.grant;
-  }else if(remote.status!==g.status||Date.parse(remote.expires_at||'')!==Date.parse(g.expires_at||'')&&remote.expires_at!==g.expires_at){
-   if(!g.upstream_id){
-    if(!remote.id||!['active','revoked'].includes(remote.status))throw new HttpError(503,'core_outcome_unknown','Grant outcome remains unknown.');
-    this.db.prepare('UPDATE access_grants SET upstream_id=?,status=?,expires_at=?,pending=0,revision=revision+1,updated_at=? WHERE id=? AND pending=1').run(remote.id,remote.status,remote.expires_at,new Date().toISOString(),g.id);
-    throw new HttpError(409,'grant_reconciled','The original create was found with changed state. Refresh and submit an explicit versioned edit.');
+  const equal=()=>remote?.status===g.status&&(remote.expires_at===g.expires_at||Date.parse(remote.expires_at)===Date.parse(g.expires_at));
+  if(patch){
+   if(!remote)throw new HttpError(503,'core_outcome_unknown','The original grant cannot be verified.');
+   if(remote.revision===intent.body.expected_revision){
+    if(!write)return g;
+    try{remote=(await this.upstream.request('PATCH',`/access/v1/grants/${opaqueId(remote.id)}`,intent.body,undefined,allocation)).grant;check();}
+    catch(error){
+     if(['core_rejected','core_conflict'].includes(error.code)&&[400,403,404,409].includes(error.status))this.store.transaction(()=>{
+      this.db.prepare('INSERT OR IGNORE INTO access_grant_attempts VALUES(?,?,?,?,?,?)').run(g.id,g.revision,g.account_id,g.intent,'rejected:'+error.status,new Date().toISOString());
+      this.db.prepare('UPDATE access_grants SET status=?,expires_at=?,pending=0,revision=revision+1 WHERE id=? AND revision=?').run(remote.status,remote.expires_at,g.id,g.revision);
+     });throw error;
+    }
    }
-   const data=await this.upstream.request('PATCH',`/access/v1/grants/${opaqueId(remote.id)}`,{expected_revision:remote.revision,status:g.status,expires_at:g.expires_at},undefined,allocation);check();remote=data.grant;
+   if(remote?.revision!==intent.body.expected_revision+1||!equal()){
+    this.db.prepare('UPDATE access_grants SET status=?,expires_at=?,upstream_revision=?,pending=0,revision=revision+1,updated_at=? WHERE id=?').run(remote?.status||'revoked',remote?.expires_at||g.expires_at,remote?.revision||g.upstream_revision,new Date().toISOString(),g.id);
+    if(write)throw new HttpError(409,'grant_reconciled','The observed state differs from the original receipt; no mutation was replayed.');
+    return this.object('access_grants',g.id,g.account_id);
+   }
+  }else if(!remote){
+   if(!write)return g;
+   if(g.upstream_id)throw new HttpError(503,'core_outcome_unknown','The grant mapping is missing upstream.');
+   if(g.status==='revoked'){this.db.prepare('UPDATE access_grants SET pending=0 WHERE id=?').run(g.id);return this.object('access_grants',g.id,g.account_id);}
+   const payload=Object.keys(intent).length?intent:{customer_id:c.upstream_id,resource_id:r.upstream_id,expires_at:g.expires_at};
+   try{remote=(await this.upstream.request('POST','/access/v1/grants',payload,undefined,allocation)).grant;check();}
+   catch(error){
+    if(['core_rejected','core_conflict'].includes(error.code)&&[400,403,404,409].includes(error.status))this.store.transaction(()=>{
+     this.db.prepare('INSERT OR IGNORE INTO access_grant_attempts VALUES(?,?,?,?,?,?)').run(g.id,g.revision,g.account_id,JSON.stringify(payload),'rejected:'+error.status,new Date().toISOString());
+     this.db.prepare('DELETE FROM access_grants WHERE id=? AND pending=1 AND upstream_id IS NULL').run(g.id);
+    });throw error;
+   }
+  }else if(!equal()||!g.upstream_id&&remote.revision!==1){
+   if(!remote.id||!['active','revoked'].includes(remote.status))throw new HttpError(503,'core_outcome_unknown','Grant result is unconfirmed.');
+   this.db.prepare('UPDATE access_grants SET upstream_id=?,status=?,expires_at=?,upstream_revision=?,pending=0,revision=revision+1,updated_at=? WHERE id=?').run(remote.id,remote.status,remote.expires_at,remote.revision,new Date().toISOString(),g.id);
+   if(write)throw new HttpError(409,'grant_reconciled','Original create was found with changed state. Use an explicit versioned edit.');
+   return this.object('access_grants',g.id,g.account_id);
   }
-  if(!remote?.id||remote.customer_id!==c.upstream_id||remote.resource_id!==r.upstream_id||remote.status!==g.status)throw new HttpError(503,'core_outcome_unknown','Grant result is unconfirmed.');
-  this.store.transaction(()=>{this.db.prepare('UPDATE access_grants SET upstream_id=?,pending=0 WHERE id=?').run(remote.id,g.id);});
+  if(!remote?.id||remote.customer_id!==c.upstream_id||remote.resource_id!==r.upstream_id||!equal()||remote.pending)throw new HttpError(503,'core_outcome_unknown','Grant result is unconfirmed.');
+  this.db.prepare('UPDATE access_grants SET upstream_id=?,upstream_revision=?,pending=0 WHERE id=?').run(remote.id,remote.revision,g.id);
   return this.object('access_grants',g.id,g.account_id);
  }
  async fulfillment(account,orderId,body,check){
@@ -186,8 +243,8 @@ export class Access {
    this.store.transaction(()=>{
     if(v.status==='fulfilled'){
      if(g?.upstream_id&&g.upstream_id!==v.grant_id)throw new HttpError(409,'mapping_conflict','Fulfilled grant mapping differs.');
-     if(!g){g={id:randomUUID()};this.db.prepare("INSERT INTO access_grants(id,account_id,customer_id,resource_id,upstream_id,status,expires_at,pending,updated_at) VALUES(?,?,?,?,?,?,?,0,?)").run(g.id,account.id,c.id,r.id,v.grant_id,currentGrant.status,currentGrant.expires_at,new Date().toISOString());}
-     else this.db.prepare("UPDATE access_grants SET upstream_id=?,status=?,expires_at=?,pending=0,revision=revision+1,updated_at=? WHERE id=?").run(v.grant_id,currentGrant.status,currentGrant.expires_at,new Date().toISOString(),g.id);
+     if(!g){g={id:randomUUID()};this.db.prepare("INSERT INTO access_grants(id,account_id,customer_id,resource_id,upstream_id,status,expires_at,pending,updated_at,upstream_revision) VALUES(?,?,?,?,?,?,?,0,?,?)").run(g.id,account.id,c.id,r.id,v.grant_id,currentGrant.status,currentGrant.expires_at,new Date().toISOString(),currentGrant.revision);}
+     else this.db.prepare("UPDATE access_grants SET upstream_id=?,status=?,expires_at=?,upstream_revision=?,pending=0,revision=revision+1,updated_at=? WHERE id=?").run(v.grant_id,currentGrant.status,currentGrant.expires_at,currentGrant.revision,new Date().toISOString(),g.id);
     }
     this.db.prepare('UPDATE access_fulfillments SET status=?,grant_id=?,expires_at=? WHERE id=?').run(v.status,v.status==='fulfilled'?g.id:null,v.expires_at||null,f.id);
     
@@ -259,23 +316,29 @@ export class Access {
  async protocol(req,res,url){
   const path=url.pathname,method=req.method;let match,scope;
   if(path==='/access/v1/me')scope=null;
-  else if(path==='/access/v1/resources')scope='resources.read';
+  else if(path==='/access/v1/resources'||path==='/access/v1/accounts')scope='resources.read';
+  else if(/^\/access\/v1\/(account-intake|account-authorizations|managed-accounts)(?:\/|$)/.test(path))scope=method==='GET'?'managed_accounts.read':'managed_accounts.write';
   else if(/^\/access\/v1\/customers(?:\/[A-Za-z0-9_-]+)?$/.test(path))scope=method==='GET'?'customers.read':'customers.write';
   else if(/^\/access\/v1\/grants(?:\/[A-Za-z0-9_-]+)?$/.test(path)||path.startsWith('/access/v1/fulfillments/'))scope=method==='GET'?'delegation.grants.read':'delegation.grants.write';
   else if(path.endsWith('/accounts'))scope='delegation.grants.read';
   else if(path.endsWith('/usage'))scope='delegation.usage.read';
   else if(path.includes('/devices'))scope=method==='GET'?'delegation.devices.read':'delegation.devices.write';
   else throw new HttpError(404,'not_found','No local API operation at this path.');
-  const allowedQuery=path==='/access/v1/grants'?['customer_id','resource_id','limit','cursor']:path==='/access/v1/customers'?['external_id','limit','cursor']:path.endsWith('/usage')?['from','to','limit','cursor','device_id','grant_id','model','result','session_id','view']:path.endsWith('/resources')||path.endsWith('/accounts')||path.endsWith('/devices')?['limit','cursor']:[];
+  const allowedQuery=path==='/access/v1/grants'?['customer_id','resource_id','limit','cursor']:path==='/access/v1/customers'?['external_id','limit','cursor']:path.endsWith('/usage')?['from','to','limit','cursor','device_id','grant_id','model','result','session_id','view']:path.endsWith('/resources')||path.endsWith('/managed-accounts')||path.endsWith('/accounts')||path.endsWith('/devices')?['limit','cursor']:[];
   for(const [name,value] of url.searchParams)if(!allowedQuery.includes(name)||url.searchParams.getAll(name).length!==1||value.length>1024)throw new HttpError(400,'invalid_query','Unsupported query.');
   const p=this.authenticate(req,scope),check=()=>this.authenticate(req,scope);
+  const origin=req.headers['x-ccb-origin']||'',budget=req.headers['x-ccb-access-hops'];
+  if(['x-ccb-origin','x-ccb-access-hops'].some(h=>req.rawHeaders.filter((v,i)=>i%2===0&&v.toLowerCase()===h).length>1)||typeof origin!=='string'||! /^[A-Za-z0-9_-]{0,128}$/.test(origin)||budget!==undefined&&!/^[0-8]$/.test(budget))throw new HttpError(400,'invalid_origin','Invalid source context.');
+  const originRef=createHmac('sha256',this.upstream.originKey).update('custody-origin:peer:'+p.account.id+'\0'+origin).digest('hex');
+  return await this.upstream.context.run({originRef,localOrigin:origin,peerAccountId:p.account.id,hops:budget===undefined?8:Number(budget)},async()=>{
+
   this.store.throttle(`access:${p.account.id}`,300,60000);
-  const paged=method==='GET'&&['resources','accounts','customers','grants','devices'].includes(path.split('/').at(-1));
+  const paged=method==='GET'&&['resources','accounts','managed-accounts','customers','grants','devices'].includes(path.split('/').at(-1));
   const pageLimit=Number(url.searchParams.get('limit')||100);
   let after='',pageScope='';
   if(paged){
    if(!Number.isSafeInteger(pageLimit)||pageLimit<1||pageLimit>500)throw new HttpError(400,'invalid_page','Invalid page size.');
-   const filters=new URLSearchParams(url.searchParams);filters.delete('cursor');filters.delete('limit');filters.sort();pageScope=p.account.id+'|'+path+'|'+filters.toString();
+   const filters=new URLSearchParams(url.searchParams);filters.delete('cursor');filters.delete('limit');filters.sort();pageScope=p.account.id+'|'+origin+'|'+path+'|'+filters.toString();
    if(url.searchParams.has('cursor')){let cursor;try{cursor=JSON.parse(Buffer.from(url.searchParams.get('cursor'),'base64url').toString())}catch{throw new HttpError(400,'invalid_page','Invalid continuation.');}if(cursor.scope!==pageScope||typeof cursor.after!=='string'||cursor.after.length>150)throw new HttpError(400,'invalid_page','Cursor belongs to a different query.');after=cursor.after;}
    url.searchParams.delete('cursor');url.searchParams.set('after',after);url.searchParams.set('limit',String(pageLimit+1));
   }
@@ -285,8 +348,12 @@ export class Access {
   let result;
   if(path==='/access/v1/me'&&method==='GET')result={authority_id:this.upstream.instanceId,user:{...accountView(p.account),can_delegate:true},scopes:JSON.parse(p.key.scopes)};
   else if(path==='/access/v1/resources'&&method==='GET')result={resources:await this.resources(p.account.id)};
-  else if((match=path.match(/^\/access\/v1\/customers(?:\/([A-Za-z0-9_-]+))?$/))&&((!match[1]&&['GET','POST'].includes(method))||(match[1]&&method==='PATCH')))result=await this.customers(p.account,method,match[1],body,url.searchParams,check);
-  else if((match=path.match(/^\/access\/v1\/grants(?:\/([A-Za-z0-9_-]+))?$/))&&((!match[1]&&['GET','POST'].includes(method))||(match[1]&&method==='PATCH')))result=await this.grants(p.account,method,match[1],body,url.searchParams,check);
+  else if(path==='/access/v1/accounts'&&method==='GET')result={accounts:await this.custody.inventory(p.account.id)};
+  else if(path==='/access/v1/account-intake'&&method==='GET')result=await this.custody.options();
+  else if((match=path.match(/^\/access\/v1\/account-authorizations(?:\/([A-Za-z0-9_-]+)(\/complete)?)?$/))&&(!match[1]?method==='GET':match[2]?method==='POST':['PUT','GET','DELETE'].includes(method)))result=await this.custody.authorization(method,match[1],body,Boolean(match[2]),check);
+  else if((match=path.match(/^\/access\/v1\/managed-accounts(?:\/([A-Za-z0-9_-]+))?$/))&&(method==='GET'||match[1]&&['PATCH','DELETE'].includes(method)))result=await this.custody.managed(method,match[1],body,check);
+  else if((match=path.match(/^\/access\/v1\/customers(?:\/([A-Za-z0-9_-]+))?$/))&&((!match[1]&&['GET','POST'].includes(method))||(match[1]&&['GET','PATCH'].includes(method))))result=await this.customers(p.account,method,match[1],body,url.searchParams,check);
+  else if((match=path.match(/^\/access\/v1\/grants(?:\/([A-Za-z0-9_-]+))?$/))&&((!match[1]&&['GET','POST'].includes(method))||(match[1]&&['GET','PATCH'].includes(method))))result=await this.grants(p.account,method,match[1],body,url.searchParams,check);
   else if((match=path.match(/^\/access\/v1\/fulfillments\/([A-Za-z0-9_-]+)$/))&&method==='PUT')result=await this.fulfillment(p.account,match[1],body,check);
   else if((match=path.match(/^\/access\/v1\/customers\/([A-Za-z0-9_-]+)(\/devices(?:\/[A-Za-z0-9_-]+(?:\/selection)?)?)$/)))result=await this.devices(p.account,match[1],method,match[2],body,check);
   else if((match=path.match(/^\/access\/v1\/customers\/([A-Za-z0-9_-]+)\/accounts$/))&&method==='GET') {
@@ -298,12 +365,13 @@ export class Access {
   else throw new HttpError(404,'not_found','No local API operation.');
   try{check();}catch(error){if(method==='GET')throw error;throw new HttpError(503,'core_outcome_unknown','Permission changed; another valid key must reconcile the outcome.');}
   if(paged){
-   const field=path.split('/').at(-1),rows=result[field];if(!Array.isArray(rows))throw new HttpError(503,'invalid_core_response','Invalid collection.');
+   const field=path.endsWith('/managed-accounts')?'accounts':path.split('/').at(-1),rows=result[field];if(!Array.isArray(rows))throw new HttpError(503,'invalid_core_response','Invalid collection.');
    const selected=rows.filter(row=>row.id>after).sort((a,b)=>a.id<b.id?-1:a.id>b.id?1:0);
    const more=selected.length>pageLimit,visible=selected.slice(0,pageLimit);
    result={...result,[field]:visible,limit:pageLimit,next_cursor:more?Buffer.from(JSON.stringify({scope:pageScope,after:visible.at(-1).id})).toString('base64url'):''};delete result.offset;
   }
-  respond(res,method==='POST'&&['/access/v1/customers','/access/v1/grants'].includes(path)?201:200,result);
+  respond(res,method==='POST'&&path.endsWith('/complete')?202:method==='POST'&&['/access/v1/customers','/access/v1/grants'].includes(path)?201:200,result);
+  });
  }
  async admin(req,res,url,authorize){
   const actor=authorize().user,method=req.method,path=url.pathname;
@@ -366,12 +434,12 @@ export class Access {
     if(old&&body.upstream_id&&body.upstream_id!==source||!['active','disabled'].includes(status))throw new HttpError(400,'invalid_input','Invalid status or immutable resource.');
     if(!old&&this.db.prepare('SELECT 1 FROM access_resources WHERE account_id=? AND upstream_id=?').get(id,source))throw new HttpError(409,'resource_conflict','Resource is already authorized; edit it instead.');
     const supply=await this.upstream.request('GET','/access/v1/resources');authorize();
-    const sourceRow=supply.resources?.find(r=>r.id===source);if(!sourceRow)throw new HttpError(409,'supply_unavailable','Source resource is unavailable.');
+    const sourceRow=supply.resources?.find(r=>r.id===source);if(!sourceRow||sourceRow.source==='owned')throw new HttpError(409,'supply_unavailable','Source resource is unavailable.');
     const ends=body.expires_at===undefined?(old?.expires_at??sourceRow.expires_at):expiry(body.expires_at);
     if(status==='active'&&(sourceRow.status!=='active'||sourceRow.available!==true||!live(ends)||sourceRow.expires_at&&(!ends||Date.parse(ends)>Date.parse(sourceRow.expires_at))))throw new HttpError(409,'supply_unavailable','The source cannot cover this authorization term.');
     subject=old?.id||randomUUID();
     if(old){const updated=this.db.prepare('UPDATE access_resources SET name=?,expires_at=?,status=?,revision=revision+1 WHERE id=? AND revision=?').run(text(body.name,'name',100),ends,status,old.id,body.expected_revision);if(updated.changes!==1)throw new HttpError(409,'resource_conflict','Resource changed; refresh.');}
-    else this.db.prepare('INSERT INTO access_resources VALUES(?,?,?,?,?,?,1)').run(subject,id,source,text(body.name,'name',100),status,ends);
+    else this.db.prepare('INSERT INTO access_resources(id,account_id,upstream_id,name,status,expires_at,revision) VALUES(?,?,?,?,?,?,1)').run(subject,id,source,text(body.name,'name',100),status,ends);
     result={resource:{...(await this.resources(id)).find(v=>v.id===subject),upstream_id:source}};
    }
    if(!result)throw new HttpError(404,'not_found','API account operation not found.');

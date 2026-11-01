@@ -1,19 +1,19 @@
+import { chromium } from 'playwright';
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createRequire } from 'node:module';
 import { resolve,dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { mkdir } from 'node:fs/promises';
 import { fixture,password } from '../server/fixtures.js';
 import { providerFixture } from '../server/payment-provider-fixture.js';
-const require=createRequire(import.meta.url),{chromium}=require(process.env.PLAYWRIGHT_MODULE||'playwright');
+
 const project=resolve(dirname(fileURLToPath(import.meta.url)),'../..');
 
 test('actual multi-channel storefront renders local QR codes, confirms payment and opens owner-scoped Airwallex checkout',async t=>{
  const remote=providerFixture(),f=await fixture(t,{withoutCore:true,publicDir:resolve(project,'public'),paymentTransport:remote.transport});
  const admin=await f.request('POST','/api/setup',{email:'admin@example.test',password,display_name:'支付测试管理员',setup_token:f.setupToken});
  assert.equal((await f.request('PATCH','/api/admin/payment',{expected_revision:1,providers:{alipay:remote.configs.alipay,wxpay:remote.configs.wxpay,airwallex:remote.configs.airwallex},methods:{alipay:{enabled:true,source:'official_alipay'},wxpay:{enabled:true,source:'official_wxpay'},airwallex:{enabled:true,source:'airwallex_checkout'}}},admin)).status,200);
- const browser=await chromium.launch({headless:true,...(process.env.PLAYWRIGHT_EXECUTABLE_PATH?{executablePath:process.env.PLAYWRIGHT_EXECUTABLE_PATH}:{})});t.after(()=>browser.close());
+ const browser=await chromium.launch({headless:true});t.after(()=>browser.close());
  const context=await browser.newContext({viewport:{width:1365,height:1000},reducedMotion:'reduce'}),page=await context.newPage(),errors=[],external=[];
  page.setDefaultTimeout(10000);page.on('pageerror',error=>errors.push(error.message));
  await context.route('**/*',route=>{if(new URL(route.request().url()).origin!==f.config.publicOrigin){external.push(route.request().url());return route.abort();}return route.continue();});

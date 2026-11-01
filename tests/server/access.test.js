@@ -279,3 +279,21 @@ test('downstream account cards immediately honor upstream revocation without a p
  assert.equal(disabled.status,200,disabled.raw);assert.deepEqual((await f.request('GET',path,undefined,c.actor)).data.accounts,[]);
  assert.equal((await f.request('GET','/access/v1/resources',undefined,c.actor)).data.resources[0].available,false,'resource history is retained but cannot be used');
 });
+
+test('unknown grant patch preserves the original upstream version across restart and never revives intervening revocation',async t=>{
+ let drop=true;
+ const {f,c}=await provider(t,{onCore:({req,url,body,state,json})=>{
+  if(req.method==='PATCH'&&url.pathname.startsWith('/access/v1/grants/')&&drop){
+   const g=state.grants.find(g=>g.id===url.pathname.split('/').at(-1));assert.equal(body.expected_revision,g.revision);Object.assign(g,{expires_at:body.expires_at,status:body.status,revision:g.revision+1});json({code:'lost'},503);return true;
+  }
+ }});
+ const customer=(await f.request('POST','/access/v1/customers',{external_id:'patch-buyer',display_name:'Buyer'},c.actor)).data.customer;
+ const end=new Date(Date.now()+3600000).toISOString(),created=await f.request('POST','/access/v1/grants',{customer_id:customer.id,resource_id:c.resource.id,expires_at:end},c.actor);assert.equal(created.status,201,created.raw);
+ const body={expected_revision:created.data.grant.revision,expires_at:new Date(Date.now()+7200000).toISOString()},path='/access/v1/grants/'+created.data.grant.id;
+ assert.equal((await f.request('PATCH',path,body,c.actor)).status,503);
+ await f.restart();Object.assign(f.state.grants[0],{status:'revoked',revision:f.state.grants[0].revision+1});drop=false;
+ const patches=f.state.requests.filter(r=>r.method==='PATCH'&&r.path.startsWith('/access/v1/grants/')).length;
+ assert.equal((await f.request('PATCH',path,body,c.actor)).status,409);
+ assert.equal(f.state.requests.filter(r=>r.method==='PATCH'&&r.path.startsWith('/access/v1/grants/')).length,patches);
+ const fresh=await f.request('GET',path,undefined,c.actor);assert.equal(fresh.status,200,fresh.raw);assert.equal(fresh.data.grant.status,'revoked');assert.equal(fresh.data.grant.pending,false);
+});

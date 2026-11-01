@@ -1,17 +1,16 @@
+import { chromium } from 'playwright';
 import test, { before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { createRequire } from 'node:module';
 import { mkdir } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { startFixture, fixtureAccounts } from './fixture-server.mjs';
 
 // Use an existing local/bundled Playwright package. This suite never installs browsers or packages.
-const require = createRequire(import.meta.url);
-const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
+
 const captureRoot = resolve(dirname(fileURLToPath(import.meta.url)),'artifacts');
 let browser;
-before(async () => { browser = await chromium.launch({headless:true,...(process.env.PLAYWRIGHT_EXECUTABLE_PATH ? {executablePath:process.env.PLAYWRIGHT_EXECUTABLE_PATH} : {})}); });
+before(async () => { browser = await chromium.launch({headless:true}); });
 after(async () => { await browser?.close(); });
 
 async function harness(t, options = {}) {
@@ -101,12 +100,19 @@ test('unconfigured public features remain inaccessible, including direct URLs',a
 test('enabled registration, verification and password reset are explicit and scrub URL tokens',async t => {
   const {page,fixture} = await harness(t,{features:{registration:true,email_verification:true,password_reset:true}});
   await page.goto(fixture.origin+'/register');
-  await page.getByLabel('显示名称',{exact:true}).fill('新测试成员'); await page.getByLabel('电子邮箱',{exact:true}).fill('new@example.test');
+  await page.getByRole('heading',{name:'创建一个账户',exact:true}).waitFor();
+  await page.getByLabel('显示名称',{exact:true}).fill('新测试成员'); await page.getByLabel('电子邮箱（验证必需）',{exact:true}).fill('new@example.test');
   await page.getByLabel('密码',{exact:true}).fill('fixture-new-password-123'); await page.getByLabel('确认密码',{exact:true}).fill('fixture-new-password-123');
-  await page.getByRole('button',{name:'创建账户',exact:true}).click(); await page.getByText('请查看邮箱。新注册或尚未验证的账户会收到 15 分钟内有效的 6 位验证码，并使用你刚刚填写的密码。已经可以登录的账户不会被修改，请用原密码登录或找回密码。',{exact:true}).waitFor();
+  await page.getByRole('button',{name:'发送验证码',exact:true}).click(); await page.getByText('请查看邮箱。新注册或尚未验证的账户会收到 15 分钟内有效的 6 位验证码，并使用你刚刚填写的密码。已经可以登录的账户不会被修改，请用原密码登录或找回密码。',{exact:true}).waitFor();
+  assert.equal(fixture.state.requests.filter(r => r.path === '/api/auth/register').length,1);
+  assert.equal(fixture.state.requests.filter(r => r.path === '/api/auth/verify').length,0);
+  await page.getByLabel('验证码',{exact:true}).fill('123456');
+  await page.getByRole('button',{name:'创建账户',exact:true}).click(); await page.getByText('邮箱已验证，请返回登录。',{exact:true}).waitFor();
+  assert.equal(fixture.state.requests.filter(r => r.path === '/api/auth/verify').length,1);
+  const verified = fixture.state.requests.filter(r => r.path === '/api/auth/verify').length;
   await page.goto(fixture.origin+'/verify?token=fixture-verification-token');
   await page.getByRole('heading',{name:'验证电子邮箱',exact:true}).waitFor(); assert.equal(new URL(page.url()).search,'');
-  assert.equal(fixture.state.requests.filter(r => r.path === '/api/auth/verify').length,0,'Opening a link must not auto-submit');
+  assert.equal(fixture.state.requests.filter(r => r.path === '/api/auth/verify').length,verified,'Opening a link must not auto-submit');
   await page.getByLabel('电子邮箱',{exact:true}).fill('new@example.test'); await page.getByLabel('验证码',{exact:true}).fill('123456');
   await page.getByRole('button',{name:'确认验证',exact:true}).click(); await page.getByText('邮箱已验证，请返回登录。',{exact:true}).waitFor();
   await page.goto(fixture.origin+'/forgot'); await page.getByLabel('电子邮箱',{exact:true}).fill('anyone@example.test');

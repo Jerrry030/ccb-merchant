@@ -1,19 +1,18 @@
+import { chromium } from 'playwright';
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createRequire } from 'node:module';
 import { mkdir, readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { startFixture, fixtureAccounts } from './fixture-server.mjs';
 
-const require = createRequire(import.meta.url);
-const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
+
 
 for (const custom of [false, true]) {
   test(custom ? 'an explicitly configured logo still overrides the bundled portal' : 'portal SVG is shared by login, navigation and favicon in light and dark layouts', async t => {
     const fixture = await startFixture();
     t.after(() => fixture.close());
     fixture.state.public.site.logo_url = custom ? fixture.origin + '/custom-brand.svg' : '';
-    const browser = await chromium.launch({headless:true,...(process.env.PLAYWRIGHT_EXECUTABLE_PATH ? {executablePath:process.env.PLAYWRIGHT_EXECUTABLE_PATH} : {})});
+    const browser = await chromium.launch({headless:true});
     t.after(() => browser.close());
     const context = await browser.newContext({viewport:{width:1440,height:960},colorScheme:'light',reducedMotion:'reduce'});
     const page = await context.newPage(), errors = [], external = [];

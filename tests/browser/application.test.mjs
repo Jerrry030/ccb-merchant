@@ -1,8 +1,8 @@
+import { chromium } from 'playwright';
 // Runs the shipped browser UI against the actual Node/SQLite application.
 // Core, mail and payment credentials are intentionally absent.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createRequire } from 'node:module';
 import { mkdtemp, readFile, rm, realpath } from 'node:fs/promises';
 import { dirname, resolve, join, relative, isAbsolute, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -11,8 +11,7 @@ import { tmpdir } from 'node:os';
 import { createMerchant } from '../../src/server.js';
 import { loadConfig } from '../../src/config.js';
 
-const require=createRequire(import.meta.url);
-const {chromium}=require(process.env.PLAYWRIGHT_MODULE || 'playwright');
+
 const project=resolve(dirname(fileURLToPath(import.meta.url)),'../..');
 
 test('shipped UI works with real setup, sessions, customer CRUD and unconfigured services',async t=>{
@@ -34,7 +33,7 @@ test('shipped UI works with real setup, sessions, customer CRUD and unconfigured
   config.port=app.server.address().port;
   config.publicOrigin=`http://127.0.0.1:${config.port}`;
   config.publicHost=`127.0.0.1:${config.port}`;
-  browser=await chromium.launch({headless:true,...(process.env.PLAYWRIGHT_EXECUTABLE_PATH?{executablePath:process.env.PLAYWRIGHT_EXECUTABLE_PATH}:{})});
+  browser=await chromium.launch({headless:true});
   const context=await browser.newContext({viewport:{width:1280,height:960},reducedMotion:'reduce'});
   await context.route('**/*',route=>{
     if(new URL(route.request().url()).origin!==config.publicOrigin){outbound.push(route.request().url());return route.abort();}

@@ -1,12 +1,12 @@
+import { chromium } from 'playwright';
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createRequire } from 'node:module';
 import { createPrivateKey,createPublicKey } from 'node:crypto';
 import { resolve,dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { fixture,password } from '../server/fixtures.js';
 import { providerFixture } from '../server/payment-provider-fixture.js';
-const require=createRequire(import.meta.url),{chromium}=require(process.env.PLAYWRIGHT_MODULE||'playwright');
+
 const project=resolve(dirname(fileURLToPath(import.meta.url)),'../..');
 
 test('saved Suixing 1024-bit merchant draft enables from the browser without re-entering secrets; weak platform errors name the field',async t=>{
@@ -15,7 +15,7 @@ test('saved Suixing 1024-bit merchant draft enables from the browser without re-
  const f=await fixture(t,{withoutCore:true,publicDir:resolve(project,'public'),paymentTransport:remote.transport});
  const admin=await f.request('POST','/api/setup',{email:'admin@example.test',password,display_name:'配置测试管理员',setup_token:f.setupToken});
  assert.equal((await f.request('PATCH','/api/admin/payment',{expected_revision:1,providers:{suixingpay:config}},admin)).status,200);
- const browser=await chromium.launch({headless:true,...(process.env.PLAYWRIGHT_EXECUTABLE_PATH?{executablePath:process.env.PLAYWRIGHT_EXECUTABLE_PATH}:{})});t.after(()=>browser.close());
+ const browser=await chromium.launch({headless:true});t.after(()=>browser.close());
  const context=await browser.newContext({viewport:{width:1365,height:1000},reducedMotion:'reduce'}),page=await context.newPage(),errors=[],external=[];
  page.on('pageerror',error=>errors.push(error.message));page.setDefaultTimeout(10000);
  await context.route('**/*',route=>{if(new URL(route.request().url()).origin!==f.config.publicOrigin){external.push(route.request().url());return route.abort();}return route.continue();});

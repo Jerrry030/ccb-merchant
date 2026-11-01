@@ -27,8 +27,8 @@ export function localDateTime(value) {
 }
 
 export function renewalExpiry(account, days, now = Date.now()) {
-  const prior = Date.parse(account.customer_expires_at), ceiling = Date.parse(account.expires_at);
-  if (!Number.isFinite(prior) || !Number.isFinite(ceiling) || ![7,30].includes(days)) return null;
+  const prior = Date.parse(account.customer_expires_at), ceiling = account.source==='owned'&&account.expires_at===null?Infinity:Date.parse(account.expires_at);
+  if (!Number.isFinite(prior) || Number.isNaN(ceiling) || ![7,30].includes(days)) return null;
   const end = Math.max(now, prior) + days * 86400000;
   return end <= ceiling ? new Date(end).toISOString() : null;
 }

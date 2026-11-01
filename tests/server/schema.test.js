@@ -10,7 +10,7 @@ test('fresh schema has the current ledger and local API tables, and reopen prese
  const data=await mkdtemp(join(tmpdir(),'ccb-schema-'));
  t.after(async()=>{const actual=await realpath(data),inside=relative(await realpath(tmpdir()),actual);if(inside.startsWith('..')||isAbsolute(inside)||!basename(actual).startsWith('ccb-schema-'))throw new Error('Unsafe fixture cleanup');await rm(actual,{recursive:true,force:true});});
  const config={dataDir:data,siteName:'Schema fixture'};let store=new Store(config);
- assert.equal(store.db.prepare('PRAGMA application_id').get().application_id,1128481357);assert.equal(store.db.prepare('PRAGMA user_version').get().user_version,5);
+ assert.equal(store.db.prepare('PRAGMA application_id').get().application_id,1128481357);assert.equal(store.db.prepare('PRAGMA user_version').get().user_version,6);
  const tables=store.db.prepare("SELECT name FROM sqlite_schema WHERE type='table'").all().map(v=>v.name);
  for(const name of ['users','ledger','rentals','plans','access_accounts','access_keys','access_grants','access_devices'])assert.ok(tables.includes(name),name);
  assert.ok(store.db.prepare('PRAGMA table_info(access_keys)').all().some(column=>column.name==='token'));
@@ -53,7 +53,7 @@ test('recognized version-2 preview data upgrades additively without changing use
  const db=new DatabaseSync(join(data,'merchant.sqlite'));
  let schema=await readFile(new URL('../../src/schema.sql',import.meta.url),'utf8');schema=schema.replace("  platform TEXT NOT NULL DEFAULT '',\n",'').replace(',payment_method,platform ON rentals',',payment_method ON rentals').replace('PRAGMA user_version=4','PRAGMA user_version=2');
  db.exec(schema);db.prepare("INSERT INTO audit(actor_id,action,subject_id,outcome,created_at) VALUES(NULL,'grant.update','legacy-grant','ok','2020-01-01T00:00:00Z')").run();db.prepare("INSERT INTO users(id,email,display_name,password_hash,role,status,created_at) VALUES('kept','kept@example.test','Kept','fixture','admin','active','2026-10-26')").run();db.prepare("INSERT INTO settings VALUES('setup_complete','true')").run();db.prepare("INSERT INTO orders(id,user_id,amount_minor,currency,status,created_at,updated_at) VALUES('payment','kept',100,'CNY','paid','2026-10-26','2026-10-26')").run();db.prepare("INSERT INTO ledger(id,user_id,order_id,amount_minor,currency,kind,reference,created_at) VALUES('entry','kept','payment',100,'CNY','stripe_credit','test','2026-10-26')").run();db.close();
- const store=new Store({dataDir:data,siteName:'Upgrade fixture'});assert.equal(store.wallet('kept').balance_minor,100);assert.equal(store.db.prepare('SELECT id FROM users').get().id,'kept');const historical=store.db.prepare("SELECT * FROM audit WHERE subject_id='legacy-grant'").get();assert.equal(historical.action,'grant.update');assert.equal(historical.customer_id,null);assert.equal(historical.subject_label,null);assert.equal(store.db.prepare('PRAGMA user_version').get().user_version,5);assert.ok(store.db.prepare('PRAGMA table_info(rentals)').all().some(c=>c.name==='account_lease_id'));store.db.close();
+ const store=new Store({dataDir:data,siteName:'Upgrade fixture'});assert.equal(store.wallet('kept').balance_minor,100);assert.equal(store.db.prepare('SELECT id FROM users').get().id,'kept');const historical=store.db.prepare("SELECT * FROM audit WHERE subject_id='legacy-grant'").get();assert.equal(historical.action,'grant.update');assert.equal(historical.customer_id,null);assert.equal(historical.subject_label,null);assert.equal(store.db.prepare('PRAGMA user_version').get().user_version,6);assert.ok(store.db.prepare('PRAGMA table_info(rentals)').all().some(c=>c.name==='account_lease_id'));store.db.close();
 });
 
 
@@ -71,4 +71,25 @@ test('v4 payment migration preserves receipts and credentials, requires draft ac
  assert.deepEqual(store.db.prepare('PRAGMA foreign_key_check').all(),[]);assert.throws(()=>store.db.prepare("UPDATE orders SET provider='easypay'").run(),/immutable_order/);assert.throws(()=>store.db.prepare('DELETE FROM ledger').run(),/immutable_ledger/);
  store.db.close();const key=join(data,'payment.key'),backup=join(data,'payment.key.saved');await rename(key,backup);assert.throws(()=>new Store(config),/missing payment encryption key/);await rename(backup,key);
  store=new Store(config);assert.equal(store.wallet('owner').balance_minor,1234);store.db.close();
+});
+
+test('custody migration preserves existing grants, devices, fulfillments and immutable mapping triggers',async t=>{
+ const data=await mkdtemp(join(tmpdir(),'ccb-schema-'));
+ t.after(async()=>{const actual=await realpath(data),inside=relative(await realpath(tmpdir()),actual);if(inside.startsWith('..')||isAbsolute(inside)||!basename(actual).startsWith('ccb-schema-'))throw new Error('Unsafe fixture cleanup');await rm(actual,{recursive:true,force:true});});
+ const db=new DatabaseSync(join(data,'merchant.sqlite'));
+ db.exec(await readFile(new URL('../../src/schema.sql',import.meta.url),'utf8'));
+ db.exec(`INSERT INTO access_accounts(id,slug,name,status,created_at) VALUES('peer','peer-one','Peer','active','2026-11-01');
+ INSERT INTO access_resources(id,account_id,upstream_id,name,status) VALUES('resource','peer','up-resource','Supply','active');
+ INSERT INTO access_customers(id,account_id,external_id,display_name,status,upstream_external,upstream_id,created_at) VALUES('buyer','peer','buyer','Buyer','active','external','up-buyer','2026-11-01');
+ INSERT INTO access_grants(id,account_id,customer_id,resource_id,upstream_id,status,pending,updated_at) VALUES('grant','peer','buyer','resource','up-grant','active',0,'2026-11-01');
+ INSERT INTO access_devices(token_hash,id,account_id,customer_id,current_grant_id) VALUES('device-hash','device','peer','buyer','grant');
+ INSERT INTO access_fulfillments(id,account_id,order_id,customer_id,resource_id,duration_days,action,status,grant_id,created_at) VALUES('fulfillment','peer','order','buyer','resource',1,'fulfill','fulfilled','grant','2026-11-01');`);db.close();
+ const store=new Store({dataDir:data,siteName:'Custody migration'});
+ assert.equal(store.db.prepare('SELECT upstream_id FROM access_grants WHERE id=?').get('grant').upstream_id,'up-grant');
+ assert.equal(store.db.prepare('SELECT current_grant_id FROM access_devices').get().current_grant_id,'grant');assert.equal(store.db.prepare('SELECT grant_id FROM access_fulfillments').get().grant_id,'grant');
+ assert.throws(()=>store.db.prepare("UPDATE access_grants SET upstream_id='other' WHERE id='grant'").run(),/immutable_access_mapping/);
+ store.db.exec("INSERT INTO access_account_leases(id,account_id,origin_ref,upstream_id,resource_id) VALUES('lease-a','peer','','up-lease-a','resource'),('lease-b','peer','','up-lease-b','resource')");
+ for(const n of ['a','b'])store.db.prepare("INSERT INTO access_grants(id,account_id,customer_id,resource_id,status,account_lease_id,updated_at) VALUES(?,'peer','buyer','resource','active',?,'2026-11-01')").run('concrete-'+n,'lease-'+n);
+ assert.equal(store.db.prepare("SELECT count(*) n FROM access_grants WHERE customer_id='buyer'").get().n,3);
+ assert.deepEqual(store.db.prepare('PRAGMA foreign_key_check').all(),[]);assert.equal(store.db.prepare('PRAGMA user_version').get().user_version,6);store.db.close();
 });

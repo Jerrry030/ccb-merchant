@@ -1,18 +1,17 @@
+import { chromium } from 'playwright';
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {createRequire} from 'node:module';
 import {resolve,dirname} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {mkdir} from 'node:fs/promises';
 import {fixture,password} from '../server/fixtures.js';
-const require=createRequire(import.meta.url);
-const {chromium}=require(process.env.PLAYWRIGHT_MODULE||'playwright');
+
 const project=resolve(dirname(fileURLToPath(import.meta.url)),'../..');
 
 async function inventoryHarness(t, options) {
  const f=await fixture(t,{publicDir:resolve(project,'public'),...options});
  const admin=await f.request('POST','/api/setup',{setup_token:f.setupToken,email:'admin@example.test',password,display_name:'Owner'});
- const browser=await chromium.launch({headless:true,...(process.env.PLAYWRIGHT_EXECUTABLE_PATH?{executablePath:process.env.PLAYWRIGHT_EXECUTABLE_PATH}:{})});
+ const browser=await chromium.launch({headless:true});
  const context=await browser.newContext({viewport:{width:1440,height:1050},reducedMotion:'reduce'}),page=await context.newPage(),errors=[],unexpected=[];
  t.after(async()=>{await browser.close();assert.deepEqual(errors,[]);assert.deepEqual(unexpected,[]);});
  page.setDefaultTimeout(12000);page.on('pageerror',error=>errors.push(error.message));
@@ -33,7 +32,7 @@ test('shipped merchant inventory has operator-allocated accounts and no upstream
  const member=await f.request('POST','/api/admin/users',{email:'member@example.test',password,display_name:'无需预先同步的客户',role:'member'},admin);
  assert.equal(f.state.customers.length,0);
 
- const browser=await chromium.launch({headless:true,...(process.env.PLAYWRIGHT_EXECUTABLE_PATH?{executablePath:process.env.PLAYWRIGHT_EXECUTABLE_PATH}:{})});t.after(()=>browser.close());
+ const browser=await chromium.launch({headless:true});t.after(()=>browser.close());
  const context=await browser.newContext({viewport:{width:1440,height:1050},reducedMotion:'reduce'}),page=await context.newPage(),errors=[];
  page.on('pageerror',error=>errors.push(error.message));page.setDefaultTimeout(12000);
  await context.route('**/*',route=>new URL(route.request().url()).origin===f.config.publicOrigin?route.continue():route.abort());
@@ -80,7 +79,7 @@ test('a lost manual-delivery response freezes the intent and reconciliation neve
  const f=await fixture(t,{publicDir:resolve(project,'public'),afterGrant:({res})=>{if(!dropped){dropped=true;res.destroy();return true;}}});
  const admin=await f.request('POST','/api/setup',{setup_token:f.setupToken,email:'admin@example.test',password,display_name:'Owner'});
  const member=await f.request('POST','/api/admin/users',{email:'member@example.test',password,display_name:'Pending customer',role:'member'},admin);
- const browser=await chromium.launch({headless:true,...(process.env.PLAYWRIGHT_EXECUTABLE_PATH?{executablePath:process.env.PLAYWRIGHT_EXECUTABLE_PATH}:{})});t.after(()=>browser.close());
+ const browser=await chromium.launch({headless:true});t.after(()=>browser.close());
  const page=await browser.newPage();page.setDefaultTimeout(10000);const errors=[];page.on('pageerror',error=>errors.push(error.message));
  await page.route('**/*',route=>new URL(route.request().url()).origin===f.config.publicOrigin?route.continue():route.abort());
  await page.goto(f.config.publicOrigin+'/login');await page.getByLabel('电子邮箱',{exact:true}).fill('admin@example.test');await page.getByLabel('密码',{exact:true}).fill(password);await page.getByRole('button',{name:'登录',exact:true}).click();await page.getByRole('link',{name:'库存',exact:true}).click();

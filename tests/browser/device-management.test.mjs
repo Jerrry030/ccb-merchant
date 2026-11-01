@@ -1,11 +1,11 @@
+import { chromium } from 'playwright';
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {createRequire} from 'node:module';
 import {resolve,dirname} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {mkdir} from 'node:fs/promises';
 import {fixture,password} from '../server/fixtures.js';
-const require=createRequire(import.meta.url),{chromium}=require(process.env.PLAYWRIGHT_MODULE||'playwright'),root=resolve(dirname(fileURLToPath(import.meta.url)),'../..');
+const root=resolve(dirname(fileURLToPath(import.meta.url)),'../..');
 
 test('personal device cards and global staff devices expose navigation, truthful status and scoped controls',async t=>{
  const deviceSets=new Map();let failingCustomer='';
@@ -34,7 +34,7 @@ test('personal device cards and global staff devices expose navigation, truthful
   {id:'revoked',name:'已撤销设备',platform:'Linux/x64',state:'revoked'},
   {id:'unknown',name:'资料不完整的设备',state:'unrecognized'}]);
  deviceSets.set(users[1].core,[{id:'shared-device',name:'乙的办公电脑',platform:'macOS/arm64',state:'approved',selection_version:2,current_grant_id:users[1].grant.id,expires_at:future}]);
- const browser=await chromium.launch({headless:true,...(process.env.PLAYWRIGHT_EXECUTABLE_PATH?{executablePath:process.env.PLAYWRIGHT_EXECUTABLE_PATH}:{})}),faults=[],external=[];t.after(async()=>{await browser.close();assert.deepEqual(faults,[]);assert.deepEqual(external,[]);});
+ const browser=await chromium.launch({headless:true}),faults=[],external=[];t.after(async()=>{await browser.close();assert.deepEqual(faults,[]);assert.deepEqual(external,[]);});
  const pages=[];
  for(const email of [users[0].email,'admin@example.test','audit@example.test']){
   const context=await browser.newContext({viewport:{width:1440,height:1000},reducedMotion:'reduce'}),page=await context.newPage();pages.push(page);page.setDefaultTimeout(12000);page.on('pageerror',e=>faults.push(e.message));

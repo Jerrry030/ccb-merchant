@@ -68,14 +68,31 @@ export async function proxyRuntime(req, res, integration, store, url, access) {
     await integration.inspect(config,true,controller.signal);
     if(boundary.peer){access.authenticate(req,'runtime');if(boundary.selected&&!access.runtimeGrant(access.object('access_grants',boundary.selected.id,boundary.peer.account.id)))throw new HttpError(403,'grant_unavailable','Grant changed before admission.');}
     const upstream = await upstreamFetch(config,`${config.upstreamUrl}${boundary.path}${url.search}`, { method:req.method,headers,body:body?.length?body:undefined,signal:controller.signal,redirect:'error' });
+    // Limit feedback is needed on successes too (warnings and cleared limits).
+    for (const [name,value] of upstream.headers) {
+      if(name==='retry-after'||name==='x-should-retry'&&['true','false'].includes(value)||runtimeLimitHeader(name,value))res.setHeader(name,value);
+    }
     if (!upstream.ok) {
-      let failure;try{failure=await readUpstreamJSON(upstream);}catch{}
+      clearTimeout(timer);
+      // Header latency must not grant an unbounded or oversized error body.
+      const errorTimer=setTimeout(()=>controller.abort(),Math.min(config.upstreamTimeoutMs,5000));errorTimer.unref();
+      let failure;try{failure=await readUpstreamJSON(upstream,64*1024);}catch{}finally{clearTimeout(errorTimer);}
       const code=failure?.code??failure?.error?.code??failure?.error?.type;
-      if(upstream.headers.has('retry-after'))res.setHeader('Retry-After',upstream.headers.get('retry-after'));
-      const safe={account_device_limit:[409,'每个账号最多绑定 1 台设备，请先撤销旧设备。'],account_selection_changed:[409,'账号已变化，请重新启动客户端。'],rate_limited:[429,'请求过于频繁，请稍后重试。'],concurrency_limited:[429,'当前并发请求过多，请稍后重试。']};
-      if(Object.hasOwn(safe,code)&&safe[code][0]===upstream.status)throw new HttpError(upstream.status,code,safe[code][1]);
+      const safe={
+        account_device_limit:[409,'每个账号最多绑定 1 台设备，请先撤销旧设备。'],
+        account_selection_changed:[409,'账号已变化，请重新启动客户端。'],
+        rate_limited:[429,'请求过于频繁，请按返回的重试信息稍后重试。'],
+        concurrency_limited:[429,'当前并发请求过多，请稍后重试。'],
+        rate_limit_error:[429,'Upstream request rate or usage limit reached; follow the returned limit and retry information.'],
+        grant_usage_limit_exceeded:[429,'CCB authorization usage limit reached; wait for the usage window to reset or choose another authorized account.'],
+      };
+      if(Object.hasOwn(safe,code)&&safe[code][0]===upstream.status){
+        respond(res,upstream.status,{type:'error',error:{type:code==='grant_usage_limit_exceeded'?'rate_limit_error':code,code,message:safe[code][1]}});
+        return;
+      }
       const status = [400,401,403,404,409,413,415,429].includes(upstream.status) ? upstream.status : 503;
-      throw new HttpError(status,'runtime_rejected','Core rejected the runtime request. It was not retried.');
+      respond(res,status,{type:'error',error:{type:'gateway_error',code:'runtime_rejected',message:'Core rejected the runtime request. It was not retried.'}});
+      return;
     }
     if (kind === 'data') clearTimeout(timer);
     if (kind === 'control') {
@@ -97,7 +114,7 @@ export async function proxyRuntime(req, res, integration, store, url, access) {
       respond(res,upstream.status,data);
     } else {
       const responseHeaders = { 'Cache-Control':'no-store', 'X-Accel-Buffering':'no' };
-      for (const name of ['content-type','request-id','retry-after']) if (upstream.headers.has(name)) responseHeaders[name]=upstream.headers.get(name);
+      for (const name of ['content-type','request-id']) if (upstream.headers.has(name)) responseHeaders[name]=upstream.headers.get(name);
       res.writeHead(upstream.status,responseHeaders); res.flushHeaders();
       await pipeline(Readable.fromWeb(upstream.body), res, { signal:controller.signal });
     }
@@ -112,3 +129,17 @@ export async function proxyRuntime(req, res, integration, store, url, access) {
 
 
 
+
+// Keep this finite projection aligned with docs/downstream-api.md in Core.
+// Shared prefixes never authorize new provider metadata or opaque values.
+function runtimeLimitHeader(name,value){
+ const prefix='anthropic-ratelimit-unified-';
+ if(!name.startsWith(prefix)||!value||value.length>128)return false;
+ const suffix=name.slice(prefix.length);
+ if(['status','overage-status'].includes(suffix))return ['allowed','allowed_warning','rejected'].includes(value);
+ if(suffix==='representative-claim')return ['five_hour','seven_day','seven_day_opus','seven_day_sonnet','seven_day_overage_included','overage'].includes(value);
+ const windows=['5h','7d','7d_oi','overage'];
+ if(suffix==='reset'||windows.some(window=>suffix===window+'-reset'))return /^[0-9]+$/.test(value)&&Number(value)>0&&Number(value)<=253402300799;
+ if(windows.some(window=>suffix===window+'-utilization'||suffix===window+'-surpassed-threshold')||['overage-period-monthly-utilization','overage-period-channel-utilization'].includes(suffix))return /^[0-9.eE+-]+$/.test(value)&&Number.isFinite(Number(value))&&Number(value)>=0;
+ return false;
+}

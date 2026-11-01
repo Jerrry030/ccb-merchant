@@ -1,3 +1,4 @@
+import { migrateCustody } from './custody-migration.js';
 import { DatabaseSync } from 'node:sqlite';
 import { mkdirSync, chmodSync, existsSync, readFileSync, writeFileSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
@@ -15,7 +16,7 @@ export class Store {
     chmodSync(path, 0o600);
     try {
       const tables=this.db.prepare("SELECT count(*) AS n FROM sqlite_schema WHERE type='table' AND name NOT LIKE 'sqlite_%'").get().n;
-      if(tables && (this.db.prepare('PRAGMA application_id').get().application_id!==1128481357 || ![2,3,4,5].includes(this.db.prepare('PRAGMA user_version').get().user_version))) throw new Error('Database schema does not match this build; use a matching or empty data directory');
+      if(tables && (this.db.prepare('PRAGMA application_id').get().application_id!==1128481357 || ![2,3,4,5,6].includes(this.db.prepare('PRAGMA user_version').get().user_version))) throw new Error('Database schema does not match this build; use a matching or empty data directory');
       this.db.exec('PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000;');
       if(!tables) {
         this.db.exec('BEGIN IMMEDIATE');
@@ -26,14 +27,16 @@ export class Store {
       }
     } catch(error) { this.db.close(); throw error; }
     // Additive local schema changes preserve existing users, wallets and receipts.
+    migrateCustody(this.db);
     this.db.exec('BEGIN IMMEDIATE');
     try {
-      for (const [table, columns] of Object.entries({rentals:{platform:"TEXT NOT NULL DEFAULT ''",account_lease_id:"TEXT NOT NULL DEFAULT ''",renew_grant_id:"TEXT NOT NULL DEFAULT ''"},plans:{source_plan_id:'TEXT',source_revision:'INTEGER',cost_minor:'INTEGER'},audit:{customer_id:'TEXT',subject_label:'TEXT',details:"TEXT NOT NULL DEFAULT '{}'"},auth_tokens:{attempts:"INTEGER NOT NULL DEFAULT 0"},users:{revision:'INTEGER NOT NULL DEFAULT 1',notes:"TEXT NOT NULL DEFAULT ''",tags:"TEXT NOT NULL DEFAULT '[]'",must_change_password:'INTEGER NOT NULL DEFAULT 0',last_login_at:'TEXT',management_profile:"TEXT NOT NULL DEFAULT 'owner'",pending_email:'TEXT'}})) {
+      for (const [table, columns] of Object.entries({access_grants:{upstream_revision:"INTEGER NOT NULL DEFAULT 0"},access_resources:{origin_ref:"TEXT NOT NULL DEFAULT ''",source:"TEXT NOT NULL DEFAULT 'supplied'"},access_customers:{origin_ref:"TEXT NOT NULL DEFAULT ''"},rentals:{platform:"TEXT NOT NULL DEFAULT ''",account_lease_id:"TEXT NOT NULL DEFAULT ''",renew_grant_id:"TEXT NOT NULL DEFAULT ''"},plans:{source_plan_id:'TEXT',source_revision:'INTEGER',cost_minor:'INTEGER'},audit:{customer_id:'TEXT',subject_label:'TEXT',details:"TEXT NOT NULL DEFAULT '{}'"},auth_tokens:{attempts:"INTEGER NOT NULL DEFAULT 0"},users:{revision:'INTEGER NOT NULL DEFAULT 1',notes:"TEXT NOT NULL DEFAULT ''",tags:"TEXT NOT NULL DEFAULT '[]'",must_change_password:'INTEGER NOT NULL DEFAULT 0',last_login_at:'TEXT',management_profile:"TEXT NOT NULL DEFAULT 'owner'",pending_email:'TEXT'}})) {
         const existing=new Set(this.db.prepare(`PRAGMA table_info(${table})`).all().map(c=>c.name));
         for(const [name,type] of Object.entries(columns)) if(!existing.has(name)) this.db.exec(`ALTER TABLE ${table} ADD COLUMN ${name} ${type}`);
       }
       this.db.exec(readFileSync(new URL('./inventory-schema.sql',import.meta.url),'utf8'));
       this.db.exec(readFileSync(new URL('./admin-schema.sql',import.meta.url),'utf8'));
+      this.db.exec(readFileSync(new URL('./custody-schema.sql',import.meta.url),'utf8'));
       for(const batch of this.db.prepare("SELECT id,items FROM allocation_batches WHERE status='running'").all()){const items=JSON.parse(batch.items).map(item=>item.status==='running'?{...item,status:'review',error:'process_interrupted'}:item);this.db.prepare("UPDATE allocation_batches SET items=?,status='review' WHERE id=?").run(JSON.stringify(items),batch.id);}
       this.db.exec('CREATE INDEX IF NOT EXISTS audit_customer ON audit(customer_id,id); CREATE INDEX IF NOT EXISTS audit_action ON audit(action,id); CREATE INDEX IF NOT EXISTS audit_time ON audit(created_at,id);');
       if(this.db.prepare('PRAGMA user_version').get().user_version<4)this.db.exec('PRAGMA user_version=4');
@@ -66,6 +69,7 @@ export class Store {
       this.paymentKey=readFileSync(paymentKey);
       if(this.paymentKey.length!==32)throw new Error('Invalid payment encryption key');
       migratePaymentSchema(config,this);
+      this.db.exec('PRAGMA user_version=6');
     }catch(error){this.db.close();throw error;}
     this.setupFile = join(config.dataDir, 'setup.secret');
     if (!this.db.prepare("SELECT 1 FROM settings WHERE key='setup_complete'").get() && !this.db.prepare('SELECT 1 FROM users LIMIT 1').get()) {

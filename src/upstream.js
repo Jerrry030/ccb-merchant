@@ -1,4 +1,5 @@
-import { createHash, randomUUID, randomBytes, createCipheriv, createDecipheriv } from 'node:crypto';
+import { AsyncLocalStorage } from 'node:async_hooks';
+import { createHash, createHmac, randomUUID, randomBytes, createCipheriv, createDecipheriv } from 'node:crypto';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { upstreamFetch, readUpstreamJSON } from './upstream-network.js';
@@ -8,10 +9,10 @@ import { HttpError, fields, opaqueId } from './security.js';
 const S = 'string', N = 'number', B = 'boolean';
 const tokenUsage = { input_tokens:N, output_tokens:N, cache_read_input_tokens:N, cache_creation_input_tokens:N, cache_creation_5m:N, cache_creation_1h:N };
 export const schemas = {
-  heldAccount: {allow_delegation:B,grant_revision:N,customer_expires_at:S,id:S,resource_id:S,platform:S,grant_id:S,customer_id:S,assigned:B,status:S,expires_at:S,revision:N,created_at:S,device_limit:N,details:{id:S,name:S,plan:S,state:S,device_name:S,platform:S,expires_at:S,device_limit:N,surfaces:[S],quota:{status:S,updated_at:S,windows:[{key:S,label:S,used_percent:N,resets_at:S,reset:B}]}}},
+  heldAccount: {source:S,managed_account_id:S,allow_delegation:B,grant_revision:N,customer_expires_at:S,id:S,resource_id:S,platform:S,grant_id:S,customer_id:S,assigned:B,status:S,expires_at:S,revision:N,created_at:S,device_limit:N,details:{id:S,name:S,plan:S,state:S,device_name:S,platform:S,expires_at:S,device_limit:N,surfaces:[S],quota:{status:S,updated_at:S,windows:[{key:S,label:S,used_percent:N,resets_at:S,reset:B}]}}},
 
   user: { id:S, username:S, name:S, status:S, can_delegate:B, revision:N, created_at:S },
-  resource: { allocatable:B,id:S, name:S, status:S, kind:S, surfaces:[S], expires_at:S, revision:N, available:B, plans:[{id:S,duration_days:N,amount_minor:N,currency:S,status:S,revision:N}], stock:[{platform:S,label:S,available:N}] },
+  resource: {source:S, allocatable:B,id:S, name:S, status:S, kind:S, surfaces:[S], expires_at:S, revision:N, available:B, plans:[{id:S,duration_days:N,amount_minor:N,currency:S,status:S,revision:N}], stock:[{platform:S,label:S,available:N}] },
   account: { grant_id:S,account_lease_id:S,device_limit:N,platform:S,expires_at:S,id:S, name:S, plan:S, state:S, device_name:S, surfaces:[S], quota:{status:S,updated_at:S,windows:[{key:S,label:S,used_percent:N,resets_at:S,reset:B}]} },
   customer: { id:S, external_id:S, display_name:S, status:S, revision:N, created_at:S },
   grant: { account_lease_id:S,id:S, customer_id:S, resource_id:S, name:S, status:S, surfaces:[S], expires_at:S, revision:N, updated_at:S, pending:B },
@@ -39,11 +40,13 @@ export function project(value, schema) {
   }
   return result;
 }
-export const scopes = ['resources.read','customers.read','customers.write','delegation.grants.read','delegation.grants.write','delegation.devices.read','delegation.devices.write','delegation.usage.read','runtime','delegation.keys.manage'];
+export const scopes = ['managed_accounts.read','managed_accounts.write','resources.read','customers.read','customers.write','delegation.grants.read','delegation.grants.write','delegation.devices.read','delegation.devices.write','delegation.usage.read','runtime','delegation.keys.manage'];
 
 export class Upstream {
  constructor(config,store) {
-  this.config=config;this.store=store;this.verified=null;this.changing=false;
+  this.config=config;this.store=store;this.verified=null;this.changing=false;this.context=new AsyncLocalStorage();
+  this.originKey=store.db.prepare("SELECT value FROM settings WHERE key='runtime_salt'").get().value;
+  this.selfOrigin=createHmac('sha256',this.originKey).update('custody-origin:local').digest('hex');
   // Convert only the persisted correlation key; never rebind to another owner.
   store.transaction(()=>{
    const saved=store.db.prepare("SELECT value FROM settings WHERE key='upstream_binding'").get();
@@ -151,13 +154,17 @@ export class Upstream {
     if(!local||local.status!=='active'||local.expires_at&&Date.parse(local.expires_at)<=Date.now())throw new HttpError(409,'supply_unavailable','Local resource authorization is unavailable.');
    }
    const headers={Authorization:`Bearer ${config.upstreamKey}`,Accept:'application/json',...(body?{'Content-Type':'application/json'}:{})};
+   const scope=this.context.getStore();
+   headers['X-CCB-Origin']=scope?.originRef||this.selfOrigin;
+   const hops=scope?.hops??8;if(hops<1)throw new HttpError(503,'access_depth_exceeded','直接提供方链路超出工作预算，未跳级请求。');
+   headers['X-CCB-Access-Hops']=String(hops-1);
    if(method==='POST'&&['/access/v1/customers','/access/v1/grants','/access/v1/keys'].includes(path)) {
     const canonical=JSON.stringify(body,Object.keys(body).sort());
     headers['Idempotency-Key']=createHash('sha256').update(method+' '+path+' '+canonical).digest('hex');
    }
    const requested=new URL(path,'http://internal.invalid');
    const usageRoute=method==='GET'&&/^\/access\/v1\/customers\/[^/]+\/usage$/.test(requested.pathname);
-   const collectionRoute=method==='GET'&&(usageRoute||/^\/access\/v1\/(resources|accounts|customers|grants|keys)$/.test(requested.pathname)||/^\/access\/v1\/customers\/[^/]+\/(accounts|devices)$/.test(requested.pathname));
+   const collectionRoute=method==='GET'&&(usageRoute||/^\/access\/v1\/(resources|accounts|managed-accounts|customers|grants|keys)$/.test(requested.pathname)||/^\/access\/v1\/customers\/[^/]+\/(accounts|devices)$/.test(requested.pathname));
    const offset=Number(requested.searchParams.get('offset')||0),limit=requested.searchParams.has('limit')?Number(requested.searchParams.get('limit')):null;
    if(collectionRoute){requested.searchParams.delete('offset');requested.searchParams.set('limit',usageRoute?String(limit??50):'500');path=requested.pathname+requested.search;}
    const response=await upstreamFetch(config,`${config.upstreamUrl}${path}`,{method,headers,body:body?JSON.stringify(body):undefined,signal:combined});
@@ -181,7 +188,7 @@ export class Upstream {
     data[field]=current;
    }
    if(collectionRoute){
-    const field=usageRoute?(requested.searchParams.get('view')==='sessions'?'sessions':'requests'):requested.pathname.split('/').at(-1), rows=data[field];
+    const field=usageRoute?(requested.searchParams.get('view')==='sessions'?'sessions':'requests'):requested.pathname.endsWith('/managed-accounts')?'accounts':requested.pathname.split('/').at(-1), rows=data[field];
     if(!Array.isArray(rows)||typeof data.next_cursor!=='string')throw new HttpError(503,'invalid_core_response','Missing collection pagination.');
     const seen=new Set();let cursor=data.next_cursor;
     while(cursor&&(!usageRoute||rows.length<offset+(limit??50))){

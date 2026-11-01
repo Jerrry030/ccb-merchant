@@ -1,0 +1,25 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {chromium} from 'playwright';
+import {resolve,dirname} from 'node:path';
+import {fileURLToPath} from 'node:url';
+import {mkdir} from 'node:fs/promises';
+import {fixture,password} from '../server/fixtures.js';
+import {custodyProvider} from '../server/custody-fixture.js';
+const project=resolve(dirname(fileURLToPath(import.meta.url)),'../..');
+test('owned account UI opens authorization with no quota/expiry and preserves unknown states for reconciliation',async t=>{
+ const provider=custodyProvider(),f=await fixture(t,{publicDir:resolve(project,'public'),onCore:provider.onCore});
+ await f.request('POST','/api/setup',{setup_token:f.setupToken,email:'custody-ui@example.test',display_name:'Custody admin',password});
+ const browser=await chromium.launch({headless:true});t.after(()=>browser.close());const page=await browser.newPage({viewport:{width:1280,height:960}}),errors=[];page.on('pageerror',e=>errors.push(e.message));page.setDefaultTimeout(10000);
+ await page.route('**/*',route=>new URL(route.request().url()).origin===f.config.publicOrigin?route.continue():route.abort());
+ await page.goto(f.config.publicOrigin+'/login');await page.getByLabel('电子邮箱',{exact:true}).fill('custody-ui@example.test');await page.getByLabel('密码',{exact:true}).fill(password);await page.getByRole('button',{name:'登录',exact:true}).click();await page.waitForURL(f.config.publicOrigin+'/');
+ await page.goto(f.config.publicOrigin+'/admin/inventory');await page.getByRole('button',{name:'管理自有账号',exact:true}).click();
+ const dialog=page.getByRole('dialog',{name:'自有账号',exact:true});await dialog.getByRole('button',{name:'添加自有账号',exact:true}).click();
+ const form=page.getByRole('dialog',{name:'添加自有账号',exact:true});await form.getByLabel('账号名称',{exact:true}).fill('Own X');await form.getByRole('button',{name:'开始授权',exact:true}).click();
+ const progress=page.getByRole('dialog',{name:'账号授权进度',exact:true});await progress.getByRole('link',{name:'打开供应商授权页面',exact:true}).waitFor();
+ await page.setViewportSize({width:390,height:844});assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1),true);
+ await mkdir(resolve(project,'tests/browser/artifacts'),{recursive:true});await page.screenshot({path:resolve(project,'tests/browser/artifacts/owned-account-mobile.png'),fullPage:true});
+ assert.equal(await page.getByLabel('托管账号额度',{exact:true}).count(),0);assert.doesNotMatch(await page.content(),/PRIVATE_PROXY/);
+ await progress.getByLabel('授权完成后的回调地址',{exact:true}).fill('http://localhost/callback?state=fixture-state&code=fixture');await progress.getByRole('button',{name:'提交授权结果',exact:true}).click();await progress.getByText('账号已就绪',{exact:true}).waitFor();
+ assert.deepEqual(errors,[]);
+});

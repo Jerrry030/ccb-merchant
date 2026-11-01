@@ -1,3 +1,4 @@
+import {ownedAccountsDialog} from './owned-accounts.js';
 import { customerPicker } from './customer-picker.js';
 import { state } from './state.js';
 import { managementAllows } from './management-policy.js';
@@ -33,7 +34,7 @@ export async function inventoryView() {
   const columns=[
    {label:'账号',render:({account:a})=>el('div',{},el('strong',{class:'inventory-account-code',text:a.account_code||a.details?.name||'编号待核对'}),el('span',{class:'table-sub',text:a.resource_name?'分组：'+a.resource_name:''}))},
    {label:'规格 / 平台',render:({account:a})=>el('div',{class:'inventory-platform'},a.details?.plan||'Claude',el('span',{class:'table-sub',text:a.platform||'平台未知'}))},
-   {label:isHistory?'原授权到期':'授权到期',render:({account:a})=>el('div',{},date(a.expires_at),isHistory?null:expiryIndicator(a.expires_at))},
+   {label:isHistory?'原授权到期':'授权到期',render:({account:a})=>el('div',{},a.source==='owned'&&a.expires_at===null?'自有账号 · 无固定托管期限':date(a.expires_at),isHistory?null:expiryIndicator(a.expires_at))},
    {label:'状态',render:entry=>el('div',{},el('span',{class:`badge ${entry.tone}`,text:entry.label}),entry.reason?el('span',{class:'table-sub',text:entry.reason}):null)},
    {label:isHistory?'关联客户':'使用客户',render:({account:a})=>isHistory&&!a.user_id?'未提供':a.assigned?el('div',{},el('strong',{text:a.customer_name||'已分配客户'}),el('span',{class:'table-sub',text:a.customer_email||''}),el('span',{class:'table-sub',text:'客户到期：'+date(a.customer_expires_at)}),expiryIndicator(a.customer_expires_at)):'—'},
   ];
@@ -78,7 +79,7 @@ export async function inventoryView() {
   if(next<0)return;event.preventDefault();showPage(pages[next].id);pages[next].tab.focus();
  }},pages.map(item=>item.tab));
  const inventoryPanel=panel('账号库存',descriptions[selected],el('div',{},tabs,pages.map(item=>item.page)));
- return el('div',{class:'page-content inventory-page'},allLink,filters,quick,
+ return el('div',{class:'page-content inventory-page'},allLink,managementAllows(state.user,'GET','/api/admin/managed-accounts')?actionButton('管理自有账号',async()=>{await ownedAccountsDialog();return CANCEL;}):null,filters,quick,
   el('div',{class:'stats-grid',role:'group','aria-label':'当前库存统计'},stat('可分配',number(current.filter(entry=>entry.assignable).length),'当前筛选范围内可交付的授权','layers'),stat('已分配',number(current.filter(entry=>entry.active&&entry.account.assigned===true).length),'仅统计当前仍有效的客户授权','users')),
   el('div',{class:'batch-toolbar'},el('button',{class:'btn',type:'button',disabled:!canAssign,text:'全选本页可分配账号',onclick:()=>{document.querySelectorAll('#inventory-current input[type=checkbox]:not(:disabled)').forEach(input=>{input.checked=true;input.dispatchEvent(new Event('change'));});}}),el('button',{class:'btn',type:'button',text:'清空选择',onclick:()=>{selectedAccounts.clear();document.querySelectorAll('#inventory-current input[type=checkbox]').forEach(input=>input.checked=false);selectionChanged();}}),batchButton),inventoryPanel,batches);
 }
@@ -103,7 +104,7 @@ async function batchHistory() {
 async function allocationEditor(accounts,customerId=null) {
  try{
   if(accounts.length>100)throw new Error('每批最多选择 100 个账号，请缩小筛选范围。');
-  const picker=await customerPicker(customerId||''),mode=field('分配方式','mode',{type:'select',choices:[{value:'same',label:'分配给同一客户'},{value:'mapped',label:'逐项指定客户'}]}),expires=field('客户到期时间','expires_at',{type:'datetime-local',hint:'留空沿用各账号授权期限；不会静默截短超限期限。'});
+  const picker=await customerPicker(customerId||''),mode=field('分配方式','mode',{type:'select',choices:[{value:'same',label:'分配给同一客户'},{value:'mapped',label:'逐项指定客户'}]}),expires=field('客户到期时间','expires_at',{type:'datetime-local',hint:'自有账号必须填写客户期限；上级供给账号留空可沿用已有授权期限。不会静默截短超限期限。'});
   const mapping=el('div',{hidden:true}),feedback=el('div',{}),results=el('div',{}),preview=el('button',{class:'btn',type:'button',text:'预检分配'}),submit=el('button',{class:'btn primary',type:'submit',text:'确认分配'}),reconcile=el('button',{class:'btn',type:'button',hidden:true,text:'核对分配结果'});
   const form=el('form',{},notice(accounts.length===1?(accounts[0].account_code||accounts[0].details?.name):'批量分配',accounts.length+' 个账号；只交付已获授权的账号。'),mode,picker,expires,mapping,feedback,results,el('div',{class:'button-row'},preview,submit,reconcile));
   const dialog=editorDialog('分配客户',form);let busy=false,id=crypto.randomUUID(),saved=null,individual=[];
@@ -131,10 +132,10 @@ async function allocationEditor(accounts,customerId=null) {
  }catch(error){document.getElementById('page-feedback')?.replaceChildren(errorNotice(error));}
 }
 function extendCustomerAccount(account){
- const input=field('新的客户到期时间','expires_at',{type:'datetime-local',required:true,min:localDateTime(Math.max(Date.now(),Date.parse(account.customer_expires_at))+60000),max:localDateTime(account.expires_at)});
+ const input=field('新的客户到期时间','expires_at',{type:'datetime-local',required:true,min:localDateTime(Math.max(Date.now(),Date.parse(account.customer_expires_at))+60000),max:account.source==='owned'&&account.expires_at===null?'':localDateTime(account.expires_at)});
  const preview=el('div',{class:'inline-info','aria-live':'polite'}),control=input.querySelector('input');
  let chosenExpiry=null;
- const update=()=>{preview.textContent='原客户期限：'+date(account.customer_expires_at)+' → 新客户期限：'+date(chosenExpiry||control.value)+'；授权上限：'+date(account.expires_at);};
+ const update=()=>{preview.textContent='原客户期限：'+date(account.customer_expires_at)+' → 新客户期限：'+date(chosenExpiry||control.value)+'；授权上限：'+(account.source==='owned'&&account.expires_at===null?'自有账号无固定托管期限':date(account.expires_at));};
  const shortcuts=el('div',{class:'button-row'},[7,30].map(days=>el('button',{type:'button',class:'btn small',text:'延长 '+days+' 天',disabled:!renewalExpiry(account,days),title:'从原期限与当前时间中较晚者起算；不能超过上游授权期限。',onclick:()=>{const end=renewalExpiry(account,days);if(end){chosenExpiry=end;control.value=localDateTime(end);update();}}})));
  const form=el('form',{},notice(account.details?.name||'账号','客户：'+(account.customer_name||account.customer_email||'当前客户')+'。快捷延长按 24 小时计一天；超过授权上限的选项不可用。'),shortcuts,input,preview,el('button',{class:'btn primary',type:'submit',text:'确认延长'}));
  control.addEventListener('input',()=>{chosenExpiry=null;update();});update();

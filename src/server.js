@@ -1,3 +1,4 @@
+import { Custody } from './custody.js';
 import { managementProfiles } from '../public/management-policy.js';
 import { Inventory } from './inventory.js';
 import { Devices } from './devices.js';
@@ -60,7 +61,8 @@ export function createMerchant(config, options={}) {
   const store=new Store(config), core=new Upstream(config,store);
   const mailerNow=()=>options.mailer || (effectiveMail(config,store) ? createMailer({...config, mail:effectiveMail(config,store)}) : null);
   const auth=new Auth(config,store,mailerNow), payments=new Payments(config,store,options.paymentTransport);
-  const access=new Access(store,core),devices=new Devices(store,core);
+  const custody=new Custody(store,core);
+  const access=new Access(store,core,custody),devices=new Devices(store,core);
   const customers=new Customers(store,core), commerce=new Commerce(store,core,customers);
   const reconciler=new Reconciler(store,customers,payments,commerce,options.reconcileIntervalMs??config.reconcileIntervalMs);
   const lockedUsers=customers.locks;
@@ -167,6 +169,13 @@ export function createMerchant(config, options={}) {
       if(!['GET','HEAD'].includes(req.method) && (Number(req.headers['content-length'] || 0)>0 || req.headers['transfer-encoding'])) body=await readBody(req,config.jsonBodyLimit);
       if(await auth.handle(req,res,path,body,settings().features)) return;
       const {user}=auth.require(req,path.startsWith('/api/admin/'));
+      const custodyRoute=path.match(/^\/api\/admin\/(account-authorizations|managed-accounts)(?:\/([A-Za-z0-9_-]+)(\/complete)?)?$/);
+      if(custodyRoute){
+        const [,kind,id,complete]=custodyRoute,check=()=>auth.require(req,true);check();
+        if(kind==='managed-accounts'&&(complete||!['GET','PATCH','DELETE'].includes(req.method)||!id&&req.method!=='GET')||kind==='account-authorizations'&&(!id?req.method!=='GET':complete?req.method!=='POST':!['GET','PUT','DELETE'].includes(req.method)))throw new HttpError(404,'not_found','Unknown account operation.');
+        const data=kind==='managed-accounts'?await custody.managed(req.method,id,body,check):await custody.authorization(req.method,id,body,Boolean(complete),check);
+        check();store.audit(user.id,'custody.'+req.method.toLowerCase(),id||'collection');respond(res,complete?202:200,data);return;
+      }
       const memberPrefix=user.core_customer_id?`/access/v1/customers/${opaqueId(user.core_customer_id)}`:null;
       const customerReady=()=>{
         if(!memberPrefix) throw new HttpError(409,'not_provisioned','Contact the administrator to assign an account first.');
@@ -313,7 +322,7 @@ export function createMerchant(config, options={}) {
         case 'GET /api/admin/operations': {
           const pending=store.db.prepare("SELECT * FROM users WHERE core_pending IS NOT NULL OR (provision_name IS NOT NULL AND core_customer_id IS NULL) ORDER BY created_at LIMIT 100").all().map(u=>publicUser(u,true));
           let unassigned=[],inventoryAvailable=true,unassignedTotal=null;
-          try{const rows=await inventory.read();const assigned=new Set(rows.filter(a=>a.assigned&&a.status==='active'&&Date.parse(a.expires_at)>Date.now()&&Date.parse(a.customer_expires_at)>Date.now()).map(a=>a.user_id));const exclusions=JSON.stringify([...assigned].filter(Boolean)),where="role='member' AND status='active' AND core_pending IS NULL AND id NOT IN (SELECT value FROM json_each(?))";unassignedTotal=store.db.prepare('SELECT COUNT(*) n FROM users WHERE '+where).get(exclusions).n;unassigned=store.db.prepare('SELECT * FROM users WHERE '+where+' ORDER BY created_at,id LIMIT 100').all(exclusions).map(u=>publicUser(u,true));}catch{inventoryAvailable=false;unassigned=store.db.prepare("SELECT * FROM users WHERE role='member' AND status='active' AND core_customer_id IS NULL AND core_pending IS NULL ORDER BY created_at,id LIMIT 100").all().map(u=>publicUser(u,true));}
+          try{const rows=await inventory.read();const assigned=new Set(rows.filter(a=>a.assigned&&a.status==='active'&&(a.source==='owned'&&a.expires_at===null||Date.parse(a.expires_at)>Date.now())&&Date.parse(a.customer_expires_at)>Date.now()).map(a=>a.user_id));const exclusions=JSON.stringify([...assigned].filter(Boolean)),where="role='member' AND status='active' AND core_pending IS NULL AND id NOT IN (SELECT value FROM json_each(?))";unassignedTotal=store.db.prepare('SELECT COUNT(*) n FROM users WHERE '+where).get(exclusions).n;unassigned=store.db.prepare('SELECT * FROM users WHERE '+where+' ORDER BY created_at,id LIMIT 100').all(exclusions).map(u=>publicUser(u,true));}catch{inventoryAvailable=false;unassigned=store.db.prepare("SELECT * FROM users WHERE role='member' AND status='active' AND core_customer_id IS NULL AND core_pending IS NULL ORDER BY created_at,id LIMIT 100").all().map(u=>publicUser(u,true));}
           auth.require(req,true);
           const totals=store.db.prepare('SELECT status,count(*) AS count FROM rentals GROUP BY status').all();
           const paymentsPending=store.db.prepare('SELECT count(*) AS n FROM orders WHERE status IN ('+paymentReviewStatuses.map(()=>'?').join(',')+')').get(...paymentReviewStatuses).n;
@@ -416,7 +425,7 @@ export function createMerchant(config, options={}) {
           let rows=store.db.prepare('SELECT * FROM users WHERE '+conditions.join(' AND ')+' ORDER BY created_at,id').all(...args);
           if(['unassigned','assigned'].includes(page.assignment)||page.due){
             const accounts=await inventory.read();auth.require(req,true);
-            rows=rows.filter(u=>{const owned=accounts.filter(a=>a.user_id===u.id&&a.assigned&&a.status==='active'&&Date.parse(a.expires_at)>Date.now()&&Date.parse(a.customer_expires_at)>Date.now());return (!page.assignment||page.assignment==='sync_pending'||(page.assignment==='assigned'?owned.length>0:owned.length===0))&&(!page.due||owned.some(a=>Date.parse(a.customer_expires_at)<=Date.now()+Number(page.due)*86400000));});
+            rows=rows.filter(u=>{const owned=accounts.filter(a=>a.user_id===u.id&&a.assigned&&a.status==='active'&&(a.source==='owned'&&a.expires_at===null||Date.parse(a.expires_at)>Date.now())&&Date.parse(a.customer_expires_at)>Date.now());return (!page.assignment||page.assignment==='sync_pending'||(page.assignment==='assigned'?owned.length>0:owned.length===0))&&(!page.due||owned.some(a=>Date.parse(a.customer_expires_at)<=Date.now()+Number(page.due)*86400000));});
           }
           respond(res,200,{users:rows.slice(page.offset,page.offset+page.limit).map(u=>publicUser(u,true)),total:rows.length,limit:page.limit,offset:page.offset});return;
         }
@@ -430,6 +439,7 @@ export function createMerchant(config, options={}) {
           const created=store.transaction(()=>{ const added=store.createUser({email:address,display_name:name,password_hash:hash,role:body.role,status:'active'}); if(body.role==='admin'&&body.management_profile)store.db.prepare('UPDATE users SET management_profile=? WHERE id=?').run(body.management_profile,added.id);store.audit(user.id,'user.create',added.id);return store.db.prepare('SELECT * FROM users WHERE id=?').get(added.id); });
           respond(res,201,{user:publicUser(created,true)}); return;
         }
+        case 'GET /api/admin/account-intake': { const data=await custody.options();auth.require(req,true);respond(res,200,data);return; }
         case 'GET /api/admin/resources': { const data=await core.request('GET','/access/v1/resources'); respond(res,200,{resources:collection(data.resources,schemas.resource)}); return; }
         case 'GET /api/admin/grants': {
           const limit=Number(url.searchParams.get('limit')||100),offset=Number(url.searchParams.get('offset')||0);if(!Number.isSafeInteger(limit)||limit<1||limit>500||!Number.isSafeInteger(offset)||offset<0)throw new HttpError(400,'invalid_page','Invalid pagination.');

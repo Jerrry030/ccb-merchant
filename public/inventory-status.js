@@ -1,8 +1,8 @@
 // Classify a lease, not its display name. Unknown states remain visible for review.
 export function inventoryStatus(account, now = Date.now()) {
-  const expiresAt = Date.parse(account.expires_at);
+  const expiresAt = Date.parse(account.expires_at),owned=account.source==='owned'&&account.expires_at===null;
   const history = account.status === 'released' || account.status === 'expired' || (Number.isFinite(expiresAt) && expiresAt <= now);
-  const active = !history && account.status === 'active' && Number.isFinite(expiresAt) && expiresAt > now;
+  const active = !history && account.status === 'active' && (owned || Number.isFinite(expiresAt) && expiresAt > now);
   const ready = active && ['available', 'limited'].includes(account.details?.state);
   const assignable = ready && account.assigned === false && account.allow_delegation === true && !account.hold_reason;
   let label, tone = '', reason = '';
@@ -10,7 +10,7 @@ export function inventoryStatus(account, now = Date.now()) {
   else if (history) label = '已到期';
   else if (account.status !== 'active') {
     label = '状态待核对'; tone = 'warn'; reason = '上游授权状态未知，请刷新或联系平台管理员。';
-  } else if (!Number.isFinite(expiresAt)) {
+  } else if (!owned && !Number.isFinite(expiresAt)) {
     label = '有效期待核对'; tone = 'warn'; reason = '授权到期时间缺失或无效，暂不计入可分配或已分配统计。';
   } else if (!ready) {
     label = '暂不可用'; tone = 'warn'; reason = '上游状态未就绪，请联系平台管理员。';

@@ -1,12 +1,12 @@
+import { chromium } from 'playwright';
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {createRequire} from 'node:module';
 import {resolve,dirname} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {mkdir} from 'node:fs/promises';
 import {fixture,password} from '../server/fixtures.js';
 import {seedAdminWorkflow} from '../server/admin-workflow-fixture.js';
-const require=createRequire(import.meta.url),{chromium}=require(process.env.PLAYWRIGHT_MODULE||'playwright');
+
 const project=resolve(dirname(fileURLToPath(import.meta.url)),'../..');
 
 async function workflowHarness(t) {
@@ -17,7 +17,7 @@ async function workflowHarness(t) {
  }});
  const admin=await f.request('POST','/api/setup',{setup_token:f.setupToken,email:'admin@example.test',password,display_name:'体验管理员'});
  const users=await seedAdminWorkflow(f,admin);
- const browser=await chromium.launch({headless:true,...(process.env.PLAYWRIGHT_EXECUTABLE_PATH?{executablePath:process.env.PLAYWRIGHT_EXECUTABLE_PATH}:{})});
+ const browser=await chromium.launch({headless:true});
  const context=await browser.newContext({viewport:{width:1440,height:1000},reducedMotion:'reduce',timezoneId:'Asia/Shanghai'}),page=await context.newPage(),errors=[],outbound=[];
  t.after(async()=>{await browser.close();assert.deepEqual(errors,[]);assert.deepEqual(outbound,[]);});
  await context.route('**/*',route=>{if(new URL(route.request().url()).origin!==f.config.publicOrigin){outbound.push(route.request().url());return route.abort();}return route.continue();});

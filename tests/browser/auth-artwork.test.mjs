@@ -1,19 +1,18 @@
+import { chromium } from 'playwright';
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createRequire } from 'node:module';
 import { mkdir, readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { startFixture, fixtureAccounts } from './fixture-server.mjs';
 
-const require = createRequire(import.meta.url);
-const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
+
 
 test('approved A artwork remains light, local and readable across auth pages and screen sizes', async t => {
   const fixture = await startFixture({features:{registration:true,email_verification:true,password_reset:true}});
   t.after(() => fixture.close());
   fixture.state.public.site.logo_url = '';
   fixture.state.public.site.name = 'CCB';
-  const browser = await chromium.launch({headless:true,...(process.env.PLAYWRIGHT_EXECUTABLE_PATH ? {executablePath:process.env.PLAYWRIGHT_EXECUTABLE_PATH} : {})});
+  const browser = await chromium.launch({headless:true});
   t.after(() => browser.close());
   const context = await browser.newContext({viewport:{width:1280,height:800},colorScheme:'light',reducedMotion:'reduce'});
   const page = await context.newPage(), errors = [], external = [];
@@ -77,7 +76,7 @@ test('approved A artwork remains light, local and readable across auth pages and
   }
 
   await page.setViewportSize({width:1280,height:800});
-  for (const [path,title] of [['/register','创建您的账户'],['/forgot','找回您的密码'],['/verify','验证电子邮箱'],['/reset','设置新密码']]) {
+  for (const [path,title] of [['/register','创建一个账户'],['/forgot','找回您的密码'],['/verify','验证电子邮箱'],['/reset','设置新密码']]) {
     await page.goto(fixture.origin + path);
     await page.getByRole('heading',{name:title,exact:true}).waitFor();
     assert.equal(await page.locator('.auth-art-copy p').innerText(),'一键获取独享账号 · 畅用 Claude');

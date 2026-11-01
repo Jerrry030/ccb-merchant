@@ -176,3 +176,26 @@ test('an interrupted upstream stream stays incomplete and is never replayed',asy
   assert.equal(f.state.requests.filter(r=>r.path==='/bridge/v1/messages').length,1);
   assert.equal((await f.request('GET','/bridge/v1/device/status',undefined,native)).status,200);
 });
+
+for(const code of ['rate_limit_error','grant_usage_limit_exceeded','rate_limited','concurrency_limited']) test('runtime keeps native limit classification without diagnostics: '+code,async t=>{
+ const f=await fixture(t,{onCore:async({url,res,json})=>{
+  if(!['/bridge/v1/messages','/bridge/v1/messages/count_tokens','/bridge/v1/traffic'].includes(url.pathname))return;
+  res.setHeader('Retry-After','60');res.setHeader('X-Should-Retry','false');
+  if(code==='rate_limit_error'){
+   res.setHeader('Anthropic-Ratelimit-Unified-Status','rejected');res.setHeader('Anthropic-Ratelimit-Unified-Reset','1793548800');res.setHeader('Anthropic-Ratelimit-Unified-Representative-Claim','five_hour');
+  }
+  res.setHeader('Anthropic-Ratelimit-Unified-Secret','PRIVATE_ACCOUNT');
+  json({type:'error',error:{type:'rate_limit_error',code,message:'PRIVATE_ACCOUNT_TOKEN',details:{account:'PRIVATE_ID'}}},429);return true;
+ }});
+ for(const route of ['/bridge/v1/messages','/bridge/v1/messages/count_tokens','/bridge/v1/traffic']){
+  const actor=route.endsWith('/traffic')?{native:true,headers:{...native.headers,'X-CCB-Target':'https://api.anthropic.com/v1/messages','X-CCB-Method':'POST'}}:native;
+  const result=await f.request('POST',route,{stream:true},actor);
+  assert.equal(result.status,429);assert.equal(result.data.type,'error');
+  assert.equal(result.data.error.code,code);assert.equal(result.data.error.type,code==='grant_usage_limit_exceeded'?'rate_limit_error':code);
+  assert.equal(result.headers.get('retry-after'),'60');assert.equal(result.headers.get('x-should-retry'),'false');
+  assert.equal(result.headers.get('anthropic-ratelimit-unified-status'),code==='rate_limit_error'?'rejected':null);
+  assert.equal(result.headers.get('anthropic-ratelimit-unified-secret'),null);assert.equal(result.raw.includes('PRIVATE'),false);
+  if(code==='grant_usage_limit_exceeded')assert.match(result.data.error.message,/CCB/);
+  assert.equal(f.state.requests.filter(row=>row.path===route).length,1);
+ }
+});

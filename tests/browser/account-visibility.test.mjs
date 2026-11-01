@@ -1,10 +1,10 @@
+import { chromium } from 'playwright';
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createRequire } from 'node:module';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { fixture, password } from '../server/fixtures.js';
-const require=createRequire(import.meta.url),{chromium}=require(process.env.PLAYWRIGHT_MODULE||'playwright');
+
 const root=resolve(dirname(fileURLToPath(import.meta.url)),'../..');
 
 test('reclaimed accounts disappear after refresh from cards, home, device choices and connection links',async t=>{
@@ -18,7 +18,7 @@ test('reclaimed accounts disappear after refresh from cards, home, device choice
   const created=await f.request('POST','/api/admin/grants',{user_id:user.id,resource_id:'resource-1',account_lease_id,expected_account_revision:1,expires_at:new Date(Date.now()+86400000).toISOString()},admin);
   assert.equal(created.status,201,created.raw);grants.push(created.data.grant);
  }
- const browser=await chromium.launch({headless:true,...(process.env.PLAYWRIGHT_EXECUTABLE_PATH?{executablePath:process.env.PLAYWRIGHT_EXECUTABLE_PATH}:{})});
+ const browser=await chromium.launch({headless:true});
  const faults=[],unexpected=[];t.after(async()=>{await browser.close();assert.deepEqual(faults,[]);assert.deepEqual(unexpected,[]);});
  const pages=[];
  for(const email of ['owner@example.test',user.email]){

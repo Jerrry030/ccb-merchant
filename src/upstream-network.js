@@ -28,7 +28,7 @@ export async function upstreamFetch(config,target,options={}) {
  if(!addresses.length||addresses.some(a=>(a.family===6&&a.address.toLowerCase().startsWith('::ffff:'))||forbiddenIPs.check(a.address,a.family===6?'ipv6':'ipv4')||(!allowed&&privateIPs.check(a.address,a.family===6?'ipv6':'ipv4'))))throw new HttpError(400,'upstream_target_blocked','Resolved address is not allowed by the server network policy.');
  const selected=addresses[0];
  return await new Promise((resolve,reject)=>{
-  const request=(url.protocol==='https:'?httpsRequest:httpRequest)(url,{method:options.method||'GET',headers:options.headers,signal:options.signal,agent:false,maxHeaderSize:16384,
+  const request=(url.protocol==='https:'?httpsRequest:httpRequest)(url,{method:options.method||'GET',headers:{...options.headers,...(options.body!==undefined?{'Content-Length':Buffer.byteLength(options.body)}:{})},signal:options.signal,agent:false,maxHeaderSize:16384,
    lookup:(_name,opts,cb)=>opts.all?cb(null,[selected]):cb(null,selected.address,selected.family)},response=>{
     const headers=new Headers();for(const [name,value] of Object.entries(response.headers))for(const item of Array.isArray(value)?value:[value])if(item!==undefined)headers.append(name,item);
     if(response.statusCode>=300&&response.statusCode<400){response.destroy();reject(new HttpError(503,'upstream_redirect_rejected','Upstream redirects are not followed.'));return;}

@@ -32,12 +32,12 @@ export class Inventory {
               const owned={accounts:accounts||await this.read(batchId)};authorize();
               if(!Array.isArray(owned.accounts))throw new HttpError(503,'invalid_core_response','Account inventory is unavailable.');
               const account=owned.accounts.find(a=>a.id===payload.account_lease_id);
-              if(!account||account.resource_id!==payload.resource_id||account.status!=='active'||!Number.isFinite(Date.parse(account.expires_at))||Date.parse(account.expires_at)<=Date.now())throw new HttpError(409,'account_unavailable','This account is no longer available. Refresh the inventory.');
+              if(!account||account.resource_id!==payload.resource_id||account.status!=='active'||!(account.source==='owned'&&account.expires_at===null||Number.isFinite(Date.parse(account.expires_at))&&Date.parse(account.expires_at)>Date.now()))throw new HttpError(409,'account_unavailable','This account is no longer available. Refresh the inventory.');
               if(account.allow_delegation!==true)throw new HttpError(409,'delegation_forbidden','This allocation cannot be delegated.');
               const hold=this.store.accountHolds(batchId).get(account.id);if(hold)throw new HttpError(409,hold.reason,'This allocation is reserved. Reconcile the existing operation.');
               accountLabel=typeof account.details?.name==='string'?account.details.name.slice(0,200):account.id;
               payload.expires_at??=account.expires_at;
-              if(Date.parse(payload.expires_at)>Date.parse(account.expires_at)||Date.parse(payload.expires_at)<=Date.now())throw new HttpError(400,'invalid_expiry','Customer expiry must be in the future and within the account expiry.');
+              if(!payload.expires_at||!Number.isFinite(Date.parse(payload.expires_at))||account.expires_at!==null&&Date.parse(payload.expires_at)>Date.parse(account.expires_at)||Date.parse(payload.expires_at)<=Date.now())throw new HttpError(400,'invalid_expiry','Customer expiry must be in the future and within the account expiry.');
               if(account.revision!==payload.expected_account_revision && !(account.revision===payload.expected_account_revision+1&&account.assigned&&account.customer_id===target.core_customer_id))throw new HttpError(409,'account_changed','The account changed. Refresh before assigning it.');
               if(account.assigned&&account.customer_id!==target.core_customer_id)throw new HttpError(409,'account_assigned','Reclaim the current assignment before choosing another customer.');
               if(!['available','limited'].includes(account.details?.state))throw new HttpError(409,'account_unavailable','This account is currently unavailable.');
@@ -74,7 +74,7 @@ export class Inventory {
    const accounts=await this.read(id);authorize();const byID=new Map(accounts.map(a=>[a.id,a]));
    const items=intent.map(item=>{const account=byID.get(item.account_lease_id),user=this.store.db.prepare('SELECT * FROM users WHERE id=?').get(item.user_id);let error=null;
     if(!user||user.status!=='active'||user.core_pending)error='customer_not_ready';
-    else if(!account||account.status!=='active'||!Number.isFinite(Date.parse(account.expires_at))||Date.parse(account.expires_at)<=Date.now()||account.resource_id!==item.resource_id||!['available','limited'].includes(account.details?.state)||account.assigned||account.revision!==item.expected_account_revision)error='account_changed';
+    else if(!account||account.status!=='active'||!(account.source==='owned'&&account.expires_at===null||Number.isFinite(Date.parse(account.expires_at))&&Date.parse(account.expires_at)>Date.now())||account.resource_id!==item.resource_id||!['available','limited'].includes(account.details?.state)||account.assigned||account.revision!==item.expected_account_revision)error='account_changed';
     else if(account.allow_delegation!==true)error='delegation_forbidden';else if(account.hold_reason)error=account.hold_reason;
     else if(Date.parse(item.expires_at)<=Date.now()||Date.parse(item.expires_at)>Date.parse(account.expires_at))error='invalid_expiry';
     return {intent:item,account_code:account?.account_code||null,customer_name:user?.display_name||null,status:error?'failed':'ready',error};
@@ -100,7 +100,7 @@ export class Inventory {
     if(body.action==='cancel'){if(item.status==='pending'){item.status='cancelled';save();}continue;}
     if(item.status==='review'){
      try{authorize();const a=snapshot.find(a=>a.id===item.intent.account_lease_id);const user=this.store.db.prepare('SELECT * FROM users WHERE id=?').get(item.intent.user_id);
-      if(a?.assigned&&a.status==='active'&&Date.parse(a.expires_at)>Date.now()&&Date.parse(a.customer_expires_at)>Date.now()&&a.user_id===user?.id&&a.revision===item.intent.expected_account_revision+1&&Date.parse(a.customer_expires_at)===Date.parse(item.intent.expires_at)){
+      if(a?.assigned&&a.status==='active'&&(a.source==='owned'&&a.expires_at===null||Date.parse(a.expires_at)>Date.now())&&Date.parse(a.customer_expires_at)>Date.now()&&a.user_id===user?.id&&a.revision===item.intent.expected_account_revision+1&&Date.parse(a.customer_expires_at)===Date.parse(item.intent.expires_at)){
        item.status='succeeded';item.error=null;item.account_code=a.account_code;item.grant_id=a.grant_id;save();
        this.store.audit(actorId,'grant.reconciled',a.grant_id,'ok',{customer_id:user.id,subject_label:a.account_code,details:{batch_id:id}});
       }
