@@ -107,7 +107,7 @@ export function renderAuth(path) {
           try {
             const data = await api('/api/auth/register',{method:'POST',body:{email:form.querySelector('input[name=email]').value.trim(),password,display_name:form.querySelector('input[name=display_name]').value.trim()}});
             if (!['created','verification_required'].includes(data.status) || (data.delivery && !['sent','unconfirmed','not_required'].includes(data.delivery))) throw new Error('注册结果无法识别，请联系管理员确认。');
-            message.replaceChildren(notice(data.status === 'verification_required' ? '验证码已发送' : '请求已完成',registerResultCopy(data),data.delivery === 'unconfirmed' ? 'warn' : 'success'));
+            message.replaceChildren();
             if (data.status === 'verification_required') send.textContent = '重新发送验证码';
           } catch (error) {
             message.replaceChildren(notice(error.message || '暂时无法发送验证码。','','error'));
