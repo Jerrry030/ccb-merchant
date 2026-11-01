@@ -62,3 +62,13 @@ export function formatCost(value) {
   if (n === null) return null;
   return (n < 0 ? '-' : '') + '$' + Math.abs(n).toFixed(6);
 }
+export function resetRemaining(value, now = Date.now()) {
+  const end = new Date(value);
+  if (!value || Number.isNaN(end.getTime())) return '—';
+  const ms = end.getTime() - now;
+  if (ms <= 0) return '已重置';
+  const totalMinutes = Math.floor(ms / 60000);
+  if (totalMinutes < 24 * 60) return `${Math.floor(totalMinutes / 60)}h ${totalMinutes % 60}min后重置`;
+  const totalHours = Math.floor(ms / 3600000);
+  return `${Math.floor(totalHours / 24)}d ${totalHours % 24}h后重置`;
+}

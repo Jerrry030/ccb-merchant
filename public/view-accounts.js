@@ -1,6 +1,6 @@
 import { el } from './dom.js';
 import { api, collection } from './api.js';
-import { date } from './format.js';
+import { date, resetRemaining } from './format.js';
 import { emptyState, panel, supportContact } from './ui.js';
 export async function accountsView() {
   const accounts = collection(await api('/api/me/accounts'),'accounts');
@@ -31,6 +31,6 @@ export function quotaSummary(quota) {
    if(track)track.firstElementChild.style.width=percent+'%';
    return el('div',{class:'quota-summary-window'+(tone?' '+tone:'')},
     el('div',{class:'quota-summary-label'},el('span',{text:label}),el('strong',{text:used})),track,
-    window.resets_at?el('span',{class:'table-sub',text:'重置：'+date(window.resets_at)}):null);
+    window.resets_at?el('span',{class:'table-sub',title:'重置时刻：'+date(window.resets_at),text:resetRemaining(window.resets_at)}):null);
   }):el('span',{class:'muted',text:'额度未知'}));
 }
