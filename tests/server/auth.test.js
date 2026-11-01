@@ -4,6 +4,7 @@ import { readFile, access, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { loadConfig } from '../../src/config.js';
 import { fixture, password } from './fixtures.js';
+import { passwordHash } from '../../src/security.js';
 
 const credentials={email:'admin@example.test',password,display_name:'Administrator'};
 
@@ -212,4 +213,12 @@ test('app shell title uses the saved site name and leaves other HTML unchanged',
   assert.match(checkout.raw, /<title>Airwallex 收银台<\/title>/);
   await writeFile(join(f.root, 'public', 'index.html'), '<!doctype html><title>real static test shell</title>');
   assert.match((await f.request('GET', '/connect')).raw, /real static test shell/);
+});
+
+test('new passwords accept 6 characters and reject fewer', async () => {
+  await assert.rejects(() => passwordHash('12345'), /at least 6 characters/);
+  const encoded = await passwordHash('123456');
+  assert.match(encoded, /^scrypt-v1\$/);
+  assert.equal(await passwordHash('123456', encoded), true);
+  assert.equal(await passwordHash('12345', encoded), false);
 });

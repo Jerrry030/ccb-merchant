@@ -11,7 +11,7 @@ import { render } from './app.js';
 function customerEditor(user) {
   const create=!user,full=state.user.management_profile==='owner'||!state.user.management_profile;
   const form=el('form',{},field('电子邮箱','email',{type:'email',required:true,maxlength:254,value:user?.email||'',autocomplete:'off'}));
-  if(create)form.append(field('初始密码','password',{type:'password',required:true,minlength:7,maxlength:256,autocomplete:'new-password',hint:'请通过安全渠道交付；保存后不会显示。'}));
+  if(create)form.append(field('初始密码','password',{type:'password',required:true,minlength:6,maxlength:256,autocomplete:'new-password',hint:'至少 6 个字符。请通过安全渠道交付；保存后不会显示。'}));
   form.append(field('显示名称','display_name',{required:true,maxlength:100,value:user?.display_name||''}));
   if(full)form.append(field('账户角色','role',{type:'select',choices:[{value:'member',label:'成员'},{value:'admin',label:'管理员'}],value:user?.role||'member'}),field('管理权限','management_profile',{type:'select',choices:Object.entries(managementProfiles).map(([value,label])=>({value,label})),value:user?.management_profile||'owner',hint:'仅管理员角色生效；客服、运营和财务不能修改站点设置。'}));
   if(!create)form.append(field('账户状态','status',{type:'select',choices:[{value:'active',label:'正常'},{value:'disabled',label:'停用'},...(user.status==='pending_verification'?[{value:'pending_verification',label:'待验证'}]:[])],value:user.status,disabled:user.id===state.user.id}),field('备注','notes',{type:'textarea',maxlength:4000,value:user.notes||'',hint:'仅本站管理人员可见，不向提供方发送。'}),field('标签','tags',{value:(user.tags||[]).join(', '),hint:'逗号分隔，最多 20 个标签。'}),field('变更原因','reason',{maxlength:500}),field('管理员密码（修改邮箱时必填）','admin_password',{type:'password',autocomplete:'current-password'}),user.pending_email?notice('邮箱验证待完成',user.pending_email+'；验证前仍使用原邮箱登录。','warn'):null);
@@ -28,7 +28,7 @@ function customerEditor(user) {
 }
 function credentialEditor(user) {
  const action=field('操作','action',{type:'select',choices:[{value:'reset_password',label:'设置临时密码（首次登录必须更改）'},{value:'email_reset',label:'发送密码重置邮件'},{value:'revoke_sessions',label:'退出所有网页登录会话'}]});
- const fresh=field('临时密码','new_password',{type:'password',required:true,minlength:7,autocomplete:'new-password'});
+ const fresh=field('临时密码','new_password',{type:'password',required:true,minlength:6,autocomplete:'new-password',placeholder:'至少 6 个字符'});
  const form=el('form',{},notice('仅管理本站登录','不会读取旧密码，也不会修改提供方账号凭据或自动撤销运行设备。'),action,fresh,field('管理员当前密码','admin_password',{type:'password',required:true,autocomplete:'current-password'}),field('处理原因','reason',{required:true,maxlength:500}),el('button',{class:'btn primary',type:'submit',text:'确认安全操作'}));
  action.querySelector('select').addEventListener('change',event=>{fresh.hidden=event.target.value!=='reset_password';fresh.querySelector('input').disabled=fresh.hidden;});
  const dialog=editorDialog('客户登录安全',form);

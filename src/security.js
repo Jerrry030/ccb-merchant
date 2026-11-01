@@ -12,7 +12,7 @@ export function equalSecret(left, right) {
   return typeof left === 'string' && typeof right === 'string' && timingSafeEqual(Buffer.from(digest(left), 'hex'), Buffer.from(digest(right), 'hex'));
 }
 export async function passwordHash(password, encoded) {
-  if (typeof password !== 'string' || Buffer.byteLength(password) > 1024 || (!encoded && [...password].length <= 6)) throw new HttpError(400, 'invalid_password', 'Password must be longer than 6 characters and at most 1024 bytes.');
+  if (typeof password !== 'string' || Buffer.byteLength(password) > 1024 || (!encoded && [...password].length < 6)) throw new HttpError(400, 'invalid_password', 'Password must be at least 6 characters and at most 1024 bytes.');
   if (passwordJobs >= 4) throw new HttpError(429, 'busy', 'Authentication busy; try again later.');
   const parts = encoded?.split('$');
   const salt = parts ? parts[1] : randomBytes(16).toString('hex');

@@ -6,7 +6,7 @@ import { toast, badge, notice, panel, supportContact } from './ui.js';
 import { CANCEL, field, confirmAction, bindForm } from './ui-form.js';
 export async function profileView() {
   const user = state.user;
-  const form = el('form',{class:'form-narrow'},field('当前密码','current_password',{type:'password',required:true,autocomplete:'current-password',maxlength:256}),field('新密码','new_password',{type:'password',required:true,minlength:7,maxlength:256,autocomplete:'new-password',hint:'至少 7 个字符，建议使用未在其他站点用过的密码。'}),field('确认新密码','confirmation',{type:'password',required:true,minlength:7,maxlength:256,autocomplete:'new-password'}),el('button',{class:'btn primary',type:'submit',text:'更新密码'}));
+  const form = el('form',{class:'form-narrow'},field('当前密码','current_password',{type:'password',required:true,autocomplete:'current-password',maxlength:256}),field('新密码','new_password',{type:'password',required:true,minlength:6,maxlength:256,autocomplete:'new-password',hint:'至少 6 个字符，建议使用未在其他站点用过的密码。'}),field('确认新密码','confirmation',{type:'password',required:true,minlength:6,maxlength:256,autocomplete:'new-password'}),el('button',{class:'btn primary',type:'submit',text:'更新密码'}));
   bindForm(form,async values => {
     if (values.get('new_password') !== values.get('confirmation')) throw new Error('两次输入的新密码不一致。');
     if (!await confirmAction('更新登录密码','确认修改当前账户的密码？更新后请使用新密码重新登录。','更新密码')) return CANCEL;

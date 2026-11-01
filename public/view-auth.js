@@ -79,8 +79,8 @@ export function renderAuth(path) {
     if (path === '/register') { const note = registrationPolicyNote(); if (note) form.append(note); }
     if (path === '/verify') form.append(field('验证码','code',{required:true,inputmode:'numeric',autocomplete:'one-time-code',minlength:6,maxlength:6,pattern:'[0-9]{6}',placeholder:'6 位数字',spellcheck:'false',hint:'验证码 15 分钟内有效，连续输错 5 次后需要重新发送。'}));
     if (path === '/reset') form.append(field('重置令牌','token',{type:'password',required:true,autocomplete:'off',value:state.token,spellcheck:'false',hint:'重置链接 30 分钟内有效。令牌已从地址栏移除，请勿分享。'}));
-    if (['/login','/setup','/register','/reset'].includes(path)) form.append(field(path === '/reset' ? '新密码' : '密码','password',{type:'password',required:true,autocomplete:path === '/login' ? 'current-password' : 'new-password',...(path === '/login' ? {} : {minlength:7}),maxlength:256,placeholder:path === '/login' ? '请输入您的密码' : '至少 7 个字符'}));
-    if (['/setup','/register','/reset'].includes(path)) form.append(field('确认密码','confirmation',{type:'password',required:true,autocomplete:'new-password',minlength:7,maxlength:256}));
+    if (['/login','/setup','/register','/reset'].includes(path)) form.append(field(path === '/reset' ? '新密码' : '密码','password',{type:'password',required:true,autocomplete:path === '/login' ? 'current-password' : 'new-password',...(path === '/login' ? {} : {minlength:6}),maxlength:256,placeholder:path === '/login' ? '请输入您的密码' : '至少 6 个字符'}));
+    if (['/setup','/register','/reset'].includes(path)) form.append(field('确认密码','confirmation',{type:'password',required:true,autocomplete:'new-password',minlength:6,maxlength:256}));
     form.append(el('button',{class:'btn primary',type:'submit',text:submitLabel}));
     bindForm(form,async values => {
       if (values.has('confirmation') && values.get('password') !== values.get('confirmation')) throw new Error('两次输入的密码不一致。');
