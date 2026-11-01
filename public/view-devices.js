@@ -11,12 +11,12 @@ import { render } from './app.js';
 export async function devicesView() {
  const query=new URLSearchParams(location.search),accountId=query.get('account_id'),staff=location.pathname==='/admin/devices',userId=query.get('user_id'),global=staff&&!userId;
  const base=staff?(global?'/api/admin/devices':`/api/admin/users/${encodeURIComponent(userId)}/devices`):'/api/me/devices';
- const filters=new URLSearchParams();if(global)for(const key of ['q','status','limit','offset'])if(query.has(key))filters.set(key,query.get(key));
- const data=await api(base+(global?'?'+filters:'')),devices=collection(data,'devices').filter(d=>!accountId||d.current_grant_id===accountId),accounts=global?null:collection(data,'accounts');
+ const filters=new URLSearchParams();if(global){for(const key of ['q','status','limit','offset'])if(query.has(key))filters.set(key,query.get(key));if(!filters.has('status'))filters.set('status','approved');}
+ const data=await api(base+(global?'?'+filters:'')),devices=collection(data,'devices').filter(d=>(!accountId||d.current_grant_id===accountId)&&(staff||!['revoked','cancelled'].includes(d.state))),accounts=global?null:collection(data,'accounts');
  const root=el('div',{class:'page-content devices-page'}),feedback=el('div',{'aria-live':'polite'});
  if(accountId)root.append(el('div',{class:'device-scope-heading'},el('h2',{text:'更换设备'}),el('p',{class:'muted',text:'仅显示当前账号绑定的设备。先撤销旧设备连接，再在新电脑登录并确认。'})));
  if(global){
-  const form=el('form',{class:'admin-filters'},field('搜索设备或客户','q',{value:query.get('q')||'',maxlength:100,placeholder:'设备名称、账号编号、客户姓名或邮箱'}),field('设备授权状态','status',{type:'select',value:query.get('status')||'',choices:[['','全部状态'],['approved','已授权'],['pending','待确认'],['expired','已到期'],['revoked','已撤销'],['cancelled','已取消'],['unknown','状态未知']].map(([value,label])=>({value,label}))}),el('button',{class:'btn',type:'submit',text:'筛选设备'}),el('a',{class:'btn',href:'/admin/devices',text:'清除筛选'}));
+  const form=el('form',{class:'admin-filters'},field('搜索设备或客户','q',{value:query.get('q')||'',maxlength:100,placeholder:'设备名称、账号编号、客户姓名或邮箱'}),field('设备授权状态','status',{type:'select',value:query.get('status')||'approved',choices:[['approved','已授权'],['all','全部状态'],['pending','待确认'],['expired','已到期'],['revoked','已撤销'],['cancelled','已取消'],['unknown','状态未知']].map(([value,label])=>({value,label}))}),el('button',{class:'btn',type:'submit',text:'筛选设备'}),el('a',{class:'btn',href:'/admin/devices',text:'清除筛选'}));
   form.addEventListener('submit',event=>{event.preventDefault();const next=new URLSearchParams();for(const [key,value] of new FormData(form))if(value)next.set(key,value);navigate('/admin/devices?'+next);});root.append(form);
   if(data.incomplete){
    const unavailable=collection(data,'unavailable_customers');
@@ -52,7 +52,7 @@ export async function devicesView() {
   root.append(entries.length?el('div',{class:'device-grid'},entries.map(({device,status,badge,actions,accountName})=>el('article',{class:'card device-card','data-device-id':device.id,'aria-label':device.name||'未命名设备'},
    el('div',{class:'device-card-head'},el('span',{class:'device-icon'},icon('monitor')),el('div',{class:'device-card-title'},el('h2',{text:device.name||'未命名设备'}),el('p',{text:device.platform||'未知平台'})),badge),
    el('dl',{class:'device-card-facts'},el('dt',{text:'Claude Code'}),el('dd',{text:accountName}),el('dt',{text:'最近活动'}),el('dd',{text:device.last_seen?date(device.last_seen):'暂无记录'}),el('dt',{text:'授权到期'}),el('dd',{text:device.expires_at?date(device.expires_at):'期限未提供'})),
-   status.state==='expired'?el('p',{class:'device-card-hint',text:'授权已到期，请在这台电脑重新登录后确认设备。'}):status.state==='revoked'?el('p',{class:'device-card-hint',text:'此设备连接已撤销，不能继续发起新的执行请求。'}):null,
+   status.state==='expired'?el('p',{class:'device-card-hint',text:'授权已到期，请在这台电脑重新登录后确认设备。'}):null,
    el('div',{class:'device-card-actions'},actions)
   ))):emptyState(accountId?'此账号没有绑定设备':'还没有连接设备',accountId?'可返回全部设备核对，或从开始使用页连接设备。':'请在需要使用的电脑运行登录命令，再到开始使用页确认。','monitor'));
  }

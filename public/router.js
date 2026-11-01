@@ -18,7 +18,7 @@ export const navigation = [
   { path:"/admin/customers", nav:"customers", title:"客户", icon:"users", admin:true, description:"管理站点客户。账号、设备、用量和订单在客户内部处理。" },
   { path:"/admin/access", nav:"customers", hidden:true, title:"API 接入", icon:"key", admin:true, description:'管理直接接入的客户、密钥和资源范围。' },
   { path:"/admin/inventory", nav:"inventory", title:"库存", icon:"layers", admin:true, description:'查看平台管理员分配的账号、有效期和客户分配状态。每个账号最多绑定 1 台设备。' },
-  { path:"/admin/devices", nav:"admin-devices", title:"设备", icon:"monitor", admin:true, description:'汇总本站客户的设备、账号选择和授权状态。操作始终归属于对应客户。' },
+  { path:"/admin/devices", nav:"admin-devices", title:"设备", icon:"monitor", admin:true, description:'默认只显示已授权、仍在使用的设备。需要查看已撤销或其他状态时，使用授权状态筛选。操作始终归属于对应客户。' },
   { path:"/admin/rentals", nav:"commerce", title:"订单", icon:"receipt", admin:true, description:"核对套餐、交付和支付。支付结果以服务端记录为准。" },
   { path:"/admin/plans", nav:"commerce", hidden:true, title:"套餐", icon:"layers", admin:true, description:'只为订阅分组设置有效期和金额。普通分组不在这里出售。' },
   { path:"/admin/orders", nav:"commerce", hidden:true, title:"支付", icon:"receipt", admin:true, description:'核对服务端记录的支付状态，不以回跳参数判定到账。' },

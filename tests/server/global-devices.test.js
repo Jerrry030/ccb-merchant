@@ -24,7 +24,7 @@ test('global devices aggregate only local customer mappings, filter before pagin
  const second=await f.request('GET','/api/admin/devices?limit=2&offset=2',undefined,admin);assert.equal(second.status,200,second.raw);
  const rows=[...all.data.devices,...second.data.devices];assert.equal(new Set(rows.map(d=>d.user_id+':'+d.id)).size,4);assert.equal(rows.filter(d=>d.id==='same-id').length,2);
  assert.ok(rows.every(d=>users.some(u=>u.id===d.user_id&&u.display_name===d.customer_name&&u.email===d.customer_email)));assert.equal('accounts' in all.data,false);
- for(const [query,count] of [['q=Alice',2],['q=BOB%40EXAMPLE.TEST',2],['q=Office',1],['status=approved',1],['status=expired',1],['status=revoked',1],['status=pending',1],['q=Alice&status=revoked',0]]){
+ for(const [query,count] of [['q=Alice',2],['q=BOB%40EXAMPLE.TEST',2],['q=Office',1],['status=approved',1],['status=all',4],['status=expired',1],['status=revoked',1],['status=pending',1],['q=Alice&status=revoked',0]]){
   const result=await f.request('GET','/api/admin/devices?'+query+'&limit=1',undefined,admin);assert.equal(result.status,200,result.raw);assert.equal(result.data.total,count,query);assert.ok(result.data.devices.length<=1);
  }
  for(const query of ['status=online','limit=0','offset=-1','q=x&q=y','core_customer_id=unmapped-customer'])assert.equal((await f.request('GET','/api/admin/devices?'+query,undefined,admin)).status,400,query);

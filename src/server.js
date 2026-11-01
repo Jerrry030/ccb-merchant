@@ -232,8 +232,8 @@ export function createMerchant(config, options={}) {
           const params=url.searchParams;
           for(const key of params.keys())if(!['q','status','limit','offset'].includes(key)||params.getAll(key).length!==1)throw new HttpError(400,'invalid_query','Invalid device filter.');
           const q=params.get('q')||'',status=params.get('status')||'',limit=Number(params.get('limit')||50),offset=Number(params.get('offset')||0);
-          if(q.length>100||status&&!['approved','pending','expired','revoked','cancelled','unknown'].includes(status)||!Number.isSafeInteger(limit)||limit<1||limit>200||!Number.isSafeInteger(offset)||offset<0||offset>1000000)throw new HttpError(400,'invalid_query','Invalid device filter or pagination.');
-          respond(res,200,await devices.read({q,status,limit,offset},()=>auth.require(req,true)));return;
+          if(q.length>100||status&&!['approved','pending','expired','revoked','cancelled','unknown','all'].includes(status)||!Number.isSafeInteger(limit)||limit<1||limit>200||!Number.isSafeInteger(offset)||offset<0||offset>1000000)throw new HttpError(400,'invalid_query','Invalid device filter or pagination.');
+          respond(res,200,await devices.read({q,status:status==='all'?'':status,limit,offset},()=>auth.require(req,true)));return;
         }
         case 'GET /api/me/overview': {
           const state=await connection(), pending=[];
