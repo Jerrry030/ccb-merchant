@@ -17,22 +17,23 @@ for(const scenario of ['5h','7d','7d_oi','overage','rate','grant','concurrency']
  const f=await fixture(t,{env:{UPSTREAM_TIMEOUT_MS:'10000'},onCore:async({req,res,url,body})=>{
   if(url.pathname!=='/bridge/v1/messages')return;
   coreAttempts++;
-  const response=await fetch(core+'/bridge/v1/messages',{method:'POST',headers:{'Content-Type':'application/json','Authorization':'Bearer fixture-device','X-CCB-Access-Key':'fixture','X-Test-Limit-Scenario':scenario},body:JSON.stringify(body),signal:AbortSignal.timeout(15000)});
-  res.writeHead(response.status,Object.fromEntries(response.headers));res.end(Buffer.from(await response.arrayBuffer()));return true;
+  const response=await fetch(core+'/bridge/v1/messages',{method:'POST',headers:{'Connection':'close','Content-Type':'application/json','Authorization':'Bearer fixture-device','X-CCB-Access-Key':'fixture','X-Test-Limit-Scenario':scenario},body:JSON.stringify(body),signal:AbortSignal.timeout(15000)});
+  res.writeHead(response.status,{...Object.fromEntries(response.headers),Connection:'close'});res.end(Buffer.from(await response.arrayBuffer()));return true;
  }});
  const adapter=createServer(async(req,res)=>{
   try{
    if(!req.url.startsWith('/v1/messages')){req.resume();res.writeHead(200,{'Content-Type':'application/json'});res.end('{}');return;}
    const chunks=[];for await(const chunk of req)chunks.push(chunk);
-   const response=await fetch(f.config.publicOrigin+'/bridge/v1/messages',{method:'POST',headers:{Authorization:'Bearer original-device-bearer-fixture','Content-Type':'application/json'},body:Buffer.concat(chunks),signal:AbortSignal.timeout(15000)});
+   const response=await fetch(f.config.publicOrigin+'/bridge/v1/messages',{method:'POST',headers:{Connection:'close',Authorization:'Bearer original-device-bearer-fixture','Content-Type':'application/json'},body:Buffer.concat(chunks),signal:AbortSignal.timeout(15000)});
    assert.equal(response.status,429);assert.equal(response.headers.get('x-should-retry'),'false');
    assert.equal(response.headers.get('anthropic-ratelimit-unified-secret'),null);
-   res.writeHead(response.status,Object.fromEntries(response.headers));res.end(Buffer.from(await response.arrayBuffer()));
+   res.writeHead(response.status,{...Object.fromEntries(response.headers),Connection:'close'});res.end(Buffer.from(await response.arrayBuffer()));
   }catch(error){res.writeHead(500);res.end(String(error));}
  });
  adapter.listen(0,'127.0.0.1');await once(adapter,'listening');
  t.after(async()=>{adapter.closeAllConnections();await new Promise(resolve=>adapter.close(resolve));});
  const config=join(f.root,'native');await mkdir(config);
+ t.diagnostic('isolated native fixture: '+f.root);
  const env={};for(const [key,value]of Object.entries(process.env))if(/^(PATH|SYSTEMROOT|WINDIR|COMSPEC|TEMP|TMP|PATHEXT|PROGRAMFILES|PROGRAMFILES\(X86\)|SYSTEMDRIVE|CLAUDE_CODE_GIT_BASH_PATH)$/i.test(key))env[key]=value;
  Object.assign(env,{HOME:config,USERPROFILE:config,APPDATA:config,LOCALAPPDATA:config,CLAUDE_CONFIG_DIR:config,CLAUDE_CODE_OAUTH_TOKEN:'fixture-local-token-no-real-account',CLAUDE_CODE_OAUTH_SCOPES:'user:inference user:profile',CLAUDE_CODE_SUBSCRIPTION_TYPE:'max',CLAUDE_CODE_RATE_LIMIT_TIER:'default_claude_max_20x',ANTHROPIC_BASE_URL:'http://127.0.0.1:'+adapter.address().port,_CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL:'1',CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC:'1',DISABLE_AUTOUPDATER:'1',HTTP_PROXY:'http://127.0.0.1:9',HTTPS_PROXY:'http://127.0.0.1:9',ALL_PROXY:'http://127.0.0.1:9',NO_PROXY:'127.0.0.1,localhost',DISABLE_TELEMETRY:'1',DISABLE_ERROR_REPORTING:'1'});
  const child=spawn(runtime,['-p','Say ok.','--model','claude-sonnet-4-6','--tools','','--setting-sources','','--no-session-persistence'],{env,cwd:config,windowsHide:true,stdio:['ignore','pipe','pipe']});

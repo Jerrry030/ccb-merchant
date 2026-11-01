@@ -96,6 +96,41 @@ test('real Nodemailer performs unsaved SMTP verification and sends a message to 
   assert.equal(JSON.parse(f.store.db.prepare("SELECT value FROM settings WHERE key='mail'").get().value).config,null);
 });
 
+test('Resend delivery uses the HTTPS API and never opens an SMTP connection', async t => {
+  const calls = [];
+  let status = 200;
+  const resendFetch = async (url, options) => {
+    calls.push({ url, method: options.method, authorization: options.headers.Authorization, body: options.body ? JSON.parse(options.body) : null });
+    return new Response(JSON.stringify(status === 200 ? { id: 'email_fixture' } : { message: 'PRIVATE_RESEND_BODY' }), { status, headers: { 'content-type': 'application/json' } });
+  };
+  const f = await fixture(t, { withoutCore: true, resendFetch, mailTransportFactory() { throw new Error('SMTP transport must not be used for Resend'); } });
+  const admin = await f.request('POST', '/api/setup', { ...owner, setup_token: f.setupToken });
+  const resend = { enabled: true, host: 'smtp.resend.com', port: 465, username: 'resend', password: 're_fixture_secret', from: 'noreply@example.test', from_name: 'Fixture', use_tls: true };
+  assert.equal((await f.request('PATCH', '/api/admin/mail', { expected_revision: 1, mail: resend }, admin)).status, 200);
+  assert.equal((await f.request('PATCH', '/api/admin/settings', { registration_enabled: true }, admin)).data.features.email_verification, true);
+  assert.equal((await f.request('POST', '/api/admin/mail/test', { mail: { ...resend, password: '' } }, admin)).data.mode, 'connection');
+  assert.equal(calls[0].url, 'https://api.resend.com/domains');
+  assert.equal(calls[0].method, 'GET');
+  assert.equal(calls[0].authorization, 'Bearer re_fixture_secret');
+  const sent = await f.request('POST', '/api/admin/mail/test', { mail: { ...resend, password: '' }, recipient: 'inbox@example.test' }, admin);
+  assert.equal(sent.status, 200);
+  assert.equal(sent.raw.includes('re_fixture_secret'), false);
+  assert.equal(calls[1].url, 'https://api.resend.com/emails');
+  assert.equal(calls[1].body.from, '"Fixture" <noreply@example.test>');
+  assert.deepEqual(calls[1].body.to, ['inbox@example.test']);
+  const registered = await f.request('POST', '/api/auth/register', { email: 'person@example.test', password, display_name: 'Person' });
+  assert.deepEqual(registered.data, { status: 'verification_required', delivery: 'sent' });
+  assert.equal(calls[2].url, 'https://api.resend.com/emails');
+  assert.match(calls[2].body.text, /验证码：\d{6}/);
+  assert.equal(registered.raw.includes('re_fixture_secret'), false);
+  status = 401;
+  const denied = await f.request('POST', '/api/admin/mail/test', { mail: resend }, admin);
+  assert.equal(denied.data.error.code, 'mail_auth_failed');
+  assert.equal(denied.raw.includes('PRIVATE_RESEND_BODY'), false);
+  assert.equal(denied.raw.includes('re_fixture_secret'), false);
+});
+
+
 test('payment rules govern admission, pending reservations and UTC daily limits while paused payments still settle',async t=>{
   const stripe=stripeFixture(),f=await fixture(t,{withoutCore:true,env:stripeEnv,paymentTransport:stripe.transport});
   const admin=await f.request('POST','/api/setup',{...owner,setup_token:f.setupToken});

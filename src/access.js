@@ -488,10 +488,20 @@ export class Access {
  }
  runtimeGrant(g){const r=this.object('access_resources',g.resource_id,g.account_id);return Boolean(g.upstream_id&&!g.pending&&g.status==='active'&&live(g.expires_at)&&r.status==='active'&&live(r.expires_at));}
  runtimeControl(context,value,url,method){
-  if(!context.peer)return value;
+  if(!context.peer){
+   // Terminal names use the same durable allocation numbers as the member UI.
+   // Missing mappings remain explicit; provider names are never a fallback.
+   const options=[...(value.accounts||[]),...(value.account?[value.account]:[])];
+   const named=this.store.labelAccounts(options);
+   for(let i=0;i<options.length;i++){options[i].name=named[i].name;delete options[i].account_lease_id;}
+   for(const target of [value,value.device].filter(Boolean))if(Object.hasOwn(target,'current_grant_id')){
+    target.account_name=target.current_grant_id?this.store.labelAccounts([{id:target.current_grant_id}])[0].name:null;
+   }
+   return value;
+  }
   const {peer,device}=context,accountId=peer.account.id;
   const grant=remote=>this.db.prepare('SELECT * FROM access_grants WHERE upstream_id=? AND account_id=? AND customer_id=?').get(remote||'',accountId,device.customer_id);
-  const mapOption=option=>{const g=grant(option.id||option.grant_id);if(!g||!this.runtimeGrant(g))return null;const own=this.grantView(g),ends=[own.expires_at,option.expires_at].filter(Boolean).map(Date.parse);return {...option,id:g.id,...(option.grant_id?{grant_id:g.id}:{}),name:own.name,expires_at:ends.length?new Date(Math.min(...ends)).toISOString():null};};
+  const mapOption=option=>{const g=grant(option.id||option.grant_id);if(!g||!this.runtimeGrant(g))return null;const own=this.grantView(g),ends=[own.expires_at,option.expires_at].filter(Boolean).map(Date.parse);return {...option,id:g.id,...(option.grant_id?{grant_id:g.id}:{}),account_lease_id:g.account_lease_id||undefined,name:own.name,expires_at:ends.length?new Date(Math.min(...ends)).toISOString():null};};
   if(Array.isArray(value.accounts))value.accounts=value.accounts.map(mapOption).filter(Boolean);
   if(value.account)value.account=mapOption(value.account);
   const isDevice=url.pathname.startsWith('/bridge/v1/device');
@@ -508,7 +518,7 @@ export class Access {
   for(const target of [value,value.device].filter(Boolean))if(Object.hasOwn(target,'current_grant_id')){
    const g=grant(target.current_grant_id);target.current_grant_id=g?.id||null;
    if(Number.isSafeInteger(target.selection_version)&&target.selection_version>=device.selection_version)this.db.prepare('UPDATE access_devices SET current_grant_id=?,selection_version=? WHERE id=? AND selection_version<=?').run(g?.id||null,target.selection_version,device.id,target.selection_version);
-   if(target.account_name)target.account_name=g?this.grantView(g).name:null;
+   target.account_name=g?this.grantView(g).name:null;
   }
   if(context.selected&&url.pathname==='/bridge/v1/device/account'&&value.selection_version>=device.selection_version)this.db.prepare('UPDATE access_devices SET current_grant_id=?,selection_version=? WHERE id=? AND selection_version<=?').run(context.selected.id,value.selection_version,device.id,value.selection_version);
   if(method==='DELETE'&&url.pathname==='/bridge/v1/device')this.db.prepare('UPDATE access_devices SET disabled=1 WHERE id=?').run(device.id);

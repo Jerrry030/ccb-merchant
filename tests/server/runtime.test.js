@@ -199,3 +199,82 @@ for(const code of ['rate_limit_error','grant_usage_limit_exceeded','rate_limited
   assert.equal(f.state.requests.filter(row=>row.path===route).length,1);
  }
 });
+
+test('runtime preserves validated quota feedback on success, not arbitrary prefix metadata',async t=>{
+ const f=await fixture(t,{onCore:async({url,res,json})=>{
+  if(url.pathname!=='/bridge/v1/messages')return;
+  const headers={
+   'Anthropic-Ratelimit-Unified-Status':'allowed_warning','Anthropic-Ratelimit-Unified-Representative-Claim':'seven_day',
+   'Anthropic-Ratelimit-Unified-Reset':'1793548800','Anthropic-Ratelimit-Unified-5h-Utilization':'0.7','Anthropic-Ratelimit-Unified-7d-Utilization':'0.9',
+   'Anthropic-Ratelimit-Unified-7d_oi-Reset':'1793548800','Anthropic-Ratelimit-Unified-Overage-Status':'allowed','Anthropic-Ratelimit-Unified-Overage-Reset':'1793548800',
+   'Anthropic-Ratelimit-Unified-Overage-Period-Monthly-Utilization':'0.4','Anthropic-Ratelimit-Unified-5h-Surpassed-Threshold':'0.7',
+   'Anthropic-Ratelimit-Unified-Secret':'PRIVATE','Anthropic-Ratelimit-Unified-7d_oi-Utilization':'Infinity','Anthropic-Ratelimit-Unified-7d-Reset':'PRIVATE','X-Should-Retry':'PRIVATE',
+  };
+  for(const [key,value]of Object.entries(headers))res.setHeader(key,value);
+  json({type:'message',content:[]});return true;
+ }});
+ const r=await f.request('POST','/bridge/v1/messages',{},native);
+ assert.equal(r.status,200);assert.equal(r.data.type,'message');
+ for(const [suffix,value]of Object.entries({'status':'allowed_warning','representative-claim':'seven_day','reset':'1793548800','5h-utilization':'0.7','7d-utilization':'0.9','7d_oi-reset':'1793548800','overage-status':'allowed','overage-reset':'1793548800','overage-period-monthly-utilization':'0.4','5h-surpassed-threshold':'0.7'}))assert.equal(r.headers.get('anthropic-ratelimit-unified-'+suffix),value,suffix);
+ for(const name of ['anthropic-ratelimit-unified-secret','anthropic-ratelimit-unified-7d_oi-utilization','anthropic-ratelimit-unified-7d-reset','x-should-retry'])assert.equal(r.headers.get(name),null,name);
+});
+
+for(const shape of ['fragmented','invalid','oversized','stalled','wrong-status'])test('runtime error body is bounded and classified safely: '+shape,async t=>{
+ const f=await fixture(t,{env:{UPSTREAM_TIMEOUT_MS:'100'},onCore:async({url,res})=>{
+  if(url.pathname!=='/bridge/v1/messages')return;
+  res.writeHead(shape==='wrong-status'?503:429,{'Content-Type':'application/json','Retry-After':'60','X-Should-Retry':'false'});
+  if(shape==='fragmented'){
+   res.write('{"error":{"type":"rate_');const timer=setTimeout(()=>res.end('limit_error","message":"PRIVATE"}}'),10);res.once('close',()=>clearTimeout(timer));
+  }else if(shape==='invalid')res.end('{"error":');
+  else if(shape==='oversized')res.end(JSON.stringify({error:{type:'rate_limit_error',message:'x'.repeat(65536)}}));
+  else if(shape==='wrong-status')res.end('{"error":{"type":"rate_limit_error","message":"PRIVATE"}}');
+  else{res.write('{"error":');res.once('close',()=>{f.state.runtimeCancelled++;});}
+  return true;
+ }});
+ const start=Date.now(),r=await f.request('POST','/bridge/v1/messages',{},native);
+ assert.equal(r.status,shape==='wrong-status'?503:429);assert.equal(r.data.type,'error');
+ assert.equal(r.data.error.type,shape==='fragmented'?'rate_limit_error':'gateway_error');assert.equal(r.raw.includes('PRIVATE'),false);
+ assert.equal(r.headers.get('retry-after'),'60');assert.equal(r.headers.get('x-should-retry'),'false');
+ assert.equal(f.state.requests.filter(row=>row.path==='/bridge/v1/messages').length,1);
+ if(shape==='stalled'){assert.ok(Date.now()-start<2000);for(let i=0;i<30&&f.state.runtimeCancelled===0;i++)await delay(20);assert.equal(f.state.runtimeCancelled,1);}
+});
+
+test('runtime account list, refresh and selection use the same stable private-safe account numbers',async t=>{
+ let selected='grant-a',reversed=false;
+ const rows=[{id:'grant-a',account_lease_id:'owned-1',name:'',plan:'Claude Pro',state:'limited',quota:{status:'known',windows:[{key:'five_hour',label:'5 小时',used_percent:101}]}},{id:'grant-b',account_lease_id:'owned-2',name:'PRIVATE_PROVIDER_EMAIL',plan:'Claude Pro',state:'limited',quota:{status:'known',windows:[{key:'five_hour',label:'5 小时',used_percent:100}]}}];
+ const f=await fixture(t,{onCore:({url,body,json})=>{
+  if(url.pathname==='/bridge/v1/accounts'){json({accounts:reversed?[...rows].reverse():rows,current_grant_id:selected,selection_version:1});return true;}
+  if(url.pathname==='/bridge/v1/accounts/grant-a/refresh'){json({account:rows[0]});return true;}
+  if(url.pathname==='/bridge/v1/device/account'){selected=body.grant_id;json({device:{id:'device-1',state:'approved',current_grant_id:selected,account_name:'PRIVATE_PROVIDER_EMAIL',selection_version:2}});return true;}
+  if(url.pathname==='/bridge/v1/device/status'){json({id:'device-1',state:'approved',current_grant_id:selected,account_name:'',selection_version:1});return true;}
+ }});
+ const listed=await f.request('GET','/bridge/v1/accounts?surface=code',undefined,native);
+ assert.equal(listed.status,200);assert.deepEqual(listed.data.accounts.map(a=>a.name),['账号#1','账号#2']);
+ assert.deepEqual(listed.data.accounts.map(a=>a.state),['limited','limited']);assert.deepEqual(listed.data.accounts.map(a=>a.quota.windows[0].used_percent),[101,100]);
+ assert.equal(listed.data.current_grant_id,'grant-a');assert.equal(listed.data.account_name,'账号#1');
+ for(const text of ['PRIVATE','owned-1','owned-2','account_lease_id'])assert.equal(listed.raw.includes(text),false,text);
+ const refreshed=await f.request('POST','/bridge/v1/accounts/grant-a/refresh',{},native);assert.equal(refreshed.data.account.name,'账号#1');assert.equal(refreshed.raw.includes('owned-1'),false);
+ const chosen=await f.request('POST','/bridge/v1/device/account',{grant_id:'grant-b'},native);assert.equal(chosen.data.device.account_name,'账号#2');assert.equal(chosen.raw.includes('PRIVATE'),false);
+ const status=await f.request('GET','/bridge/v1/device/status',undefined,native);assert.equal(status.data.account_name,'账号#2');
+ reversed=true;await f.restart();
+ const again=await f.request('GET','/bridge/v1/accounts',undefined,native);assert.deepEqual(again.data.accounts.map(a=>a.name),['账号#2','账号#1']);assert.equal(again.data.account_name,'账号#2');
+ assert.equal(f.store.labelAccounts([{id:'grant-a'}])[0].name,'账号#1');assert.equal(f.store.labelAccounts([{id:'grant-b'}])[0].name,'账号#2');
+ assert.equal(f.store.db.prepare('SELECT COUNT(*) AS n FROM account_codes').get().n,2);
+});
+
+test('runtime names use recorded grant mappings and never infer a provider name for unmapped accounts',async t=>{
+ const f=await fixture(t,{onCore:({url,json})=>{if(url.pathname!=='/bridge/v1/accounts')return;json({accounts:[{id:'known',name:''},{id:'unknown',name:'PRIVATE_EMAIL'}]});return true;}});
+ f.store.labelAccounts([{id:'known',account_lease_id:'owned-1'}]);
+ const result=await f.request('GET','/bridge/v1/accounts',undefined,native);
+ assert.deepEqual(result.data.accounts.map(a=>a.name),['账号#1','账号（编号待核对）']);assert.equal(result.raw.includes('PRIVATE'),false);
+ assert.equal(f.store.db.prepare('SELECT COUNT(*) AS n FROM account_codes').get().n,1);
+});
+
+test('runtime allocation identity conflicts cannot silently rename or remap an existing account number',async t=>{
+ const f=await fixture(t,{onCore:({url,json})=>{if(url.pathname!=='/bridge/v1/accounts')return;json({accounts:[{id:'known',account_lease_id:'changed-lease',name:'PRIVATE_PROVIDER'}]});return true;}});
+ f.store.labelAccounts([{id:'known',account_lease_id:'owned-1'}]);
+ const result=await f.request('GET','/bridge/v1/accounts',undefined,native);
+ assert.equal(result.status,503);assert.equal(result.data.error.code,'invalid_core_response');assert.equal(result.raw.includes('PRIVATE'),false);
+ assert.equal(f.store.labelAccounts([{id:'known'}])[0].name,'账号#1');
+ assert.equal(f.store.db.prepare('SELECT COUNT(*) AS n FROM account_codes').get().n,1);
+});

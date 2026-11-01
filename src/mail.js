@@ -25,20 +25,65 @@ export function mailMessage(kind, secret) {
   throw new HttpError(400, "invalid_input", "Unknown mail kind.");
 }
 
-export function createMailer(config) {
+function resendHost(mail) {
+  return mail?.host === "smtp.resend.com";
+}
+
+async function resendRequest(mail, path, body, fetchImpl) {
+  const key = mail.auth?.pass;
+  if (!key) throw new HttpError(503, "mail_auth_failed", "Resend API key is missing.");
+  let response;
+  try {
+    response = await fetchImpl(`https://api.resend.com${path}`, {
+      method: body === undefined ? "GET" : "POST",
+      headers: { Authorization: `Bearer ${key}`, Accept: "application/json", ...(body === undefined ? {} : { "Content-Type": "application/json" }) },
+      body: body === undefined ? undefined : JSON.stringify(body),
+      signal: AbortSignal.timeout(10000),
+    });
+  } catch (error) {
+    const timedOut = error?.name === "TimeoutError" || error?.name === "AbortError";
+    throw new HttpError(503, timedOut ? "mail_timeout" : "mail_unavailable", "Resend API request failed.");
+  }
+  if (response.ok) return;
+  const code = response.status === 401 || response.status === 403 ? "mail_auth_failed" : response.status === 422 ? "mail_recipient_rejected" : "mail_unavailable";
+  throw new HttpError(503, code, "Resend API rejected the request.");
+}
+
+export function createMailer(config, fetchImpl = globalThis.fetch) {
   if (!config.mail) return null;
   const from = config.mail.from;
+  const compose = (email, kind, token) => {
+    const link = token && kind !== "verify" ? `${config.publicOrigin}/reset?token=${encodeURIComponent(token)}` : "";
+    const message = mailMessage(kind, kind === "verify" ? token : link);
+    return { from, to: email, subject: message.subject, text: message.text };
+  };
+  if (resendHost(config.mail)) return {
+    async send(email, kind, token) {
+      const message = compose(email, kind, token);
+      await resendRequest(config.mail, "/emails", { from: message.from, to: [message.to], subject: message.subject, text: message.text }, fetchImpl);
+    },
+  };
   const transport = nodemailer.createTransport(transportOptions(config.mail));
   return {
     async send(email, kind, token) {
-      const link = token && kind !== "verify" ? `${config.publicOrigin}/reset?token=${encodeURIComponent(token)}` : "";
-      const message = mailMessage(kind, kind === "verify" ? token : link);
-      await transport.sendMail({ from, to:email, subject:message.subject, text:message.text, disableFileAccess:true, disableUrlAccess:true });
+      const message = compose(email, kind, token);
+      await transport.sendMail({ ...message, disableFileAccess: true, disableUrlAccess: true });
     },
   };
 }
 
-export async function testMail(mail, recipient, transportFactory = nodemailer.createTransport) {
+export async function testMail(mail, recipient, transportFactory = nodemailer.createTransport, fetchImpl = globalThis.fetch) {
+  if (resendHost(mail)) {
+    if (recipient) {
+      await resendRequest(mail, "/emails", {
+        from: mail.from, to: [recipient], subject: "SMTP 测试邮件",
+        text: "这是一封用于验证当前 SMTP 配置的测试邮件。收到邮件说明本次投递成功。此测试不会保存配置或修改注册设置。",
+      }, fetchImpl);
+      return { ok: true, mode: "send", recipient };
+    }
+    await resendRequest(mail, "/domains", undefined, fetchImpl);
+    return { ok: true, mode: "connection" };
+  }
   const transport = transportFactory(transportOptions(mail));
   try {
     if (recipient) {

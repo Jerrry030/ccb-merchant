@@ -115,7 +115,7 @@ export async function fixture(t,options={}) {
   const config=loadConfig({UPSTREAM_URL:`http://127.0.0.1:${fakeCore.address().port}`,UPSTREAM_API_KEY:upstreamKey,UPSTREAM_TIMEOUT_MS:'500',...options.env},root);
   if(options.publicDir)config.publicDir=options.publicDir;
   if(options.withoutCore) {config.upstreamUrl=null;config.upstreamKey='';config.upstreamEnvironment=false;}
-  let app=createMerchant(config,{reconcileIntervalMs:0,mailer:options.mailer??null,mailTransportFactory:options.mailTransportFactory,paymentTransport:options.paymentTransport,onError:options.onError});
+  let app=createMerchant(config,{reconcileIntervalMs:0,mailer:options.mailer??null,mailTransportFactory:options.mailTransportFactory,resendFetch:options.resendFetch,paymentTransport:options.paymentTransport,onError:options.onError});
   app.server.listen(0,'127.0.0.1'); await once(app.server,'listening');
   config.port=app.server.address().port; config.publicOrigin=`http://127.0.0.1:${config.port}`;config.publicHost=`127.0.0.1:${config.port}`;
   const request=async(method,path,body,actor={})=>{
@@ -137,10 +137,10 @@ export async function fixture(t,options={}) {
   const setupToken=(await readFile(app.store.setupFile,'utf8')).trim();
   const f={root,config,state,fakeCore,request,setupToken,get store(){return app.store;},get server(){return app.server;},get reconciler(){return app.reconciler;},async restart(){
     app.server.closeAllConnections(); await new Promise(resolve=>app.server.close(resolve));app.store.db.close();
-    app=createMerchant(config,{reconcileIntervalMs:0,mailer:options.mailer??null,mailTransportFactory:options.mailTransportFactory,paymentTransport:options.paymentTransport});
+    app=createMerchant(config,{reconcileIntervalMs:0,mailer:options.mailer??null,mailTransportFactory:options.mailTransportFactory,resendFetch:options.resendFetch,paymentTransport:options.paymentTransport});
     app.server.listen(config.port,'127.0.0.1');await once(app.server,'listening');
   }};
-  t.after(async()=>{app.server.closeAllConnections();fakeCore.closeAllConnections();await Promise.all([new Promise(resolve=>app.server.close(resolve)),new Promise(resolve=>fakeCore.close(resolve))]);app.store.db.close();const actual=await realpath(root), inside=relative(await realpath(tmpdir()),actual);if(inside.startsWith('..')||isAbsolute(inside)||!basename(actual).startsWith('ccb-merchant-test-')) throw new Error('Refusing cleanup outside isolated test root');await rm(actual,{recursive:true,force:true});});
+  t.after(async()=>{app.server.closeAllConnections();fakeCore.closeAllConnections();await Promise.all([new Promise(resolve=>app.server.close(resolve)),new Promise(resolve=>fakeCore.close(resolve))]);app.store.db.close();const actual=await realpath(root), inside=relative(await realpath(tmpdir()),actual);if(inside.startsWith('..')||isAbsolute(inside)||!basename(actual).startsWith('ccb-merchant-test-')) throw new Error('Refusing cleanup outside isolated test root');await rm(actual,{recursive:true,force:true,maxRetries:10,retryDelay:100});});
   return f;
 }
 

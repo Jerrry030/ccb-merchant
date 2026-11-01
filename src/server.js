@@ -59,7 +59,8 @@ function collection(value,schema) {
 
 export function createMerchant(config, options={}) {
   const store=new Store(config), core=new Upstream(config,store);
-  const mailerNow=()=>options.mailer || (effectiveMail(config,store) ? createMailer({...config, mail:effectiveMail(config,store)}) : null);
+  const mailFetch=options.resendFetch || globalThis.fetch;
+  const mailerNow=()=>options.mailer || (effectiveMail(config,store) ? createMailer({...config, mail:effectiveMail(config,store)}, mailFetch) : null);
   const auth=new Auth(config,store,mailerNow), payments=new Payments(config,store,options.paymentTransport);
   const custody=new Custody(store,core);
   const access=new Access(store,core,custody),devices=new Devices(store,core);
@@ -360,7 +361,7 @@ export function createMerchant(config, options={}) {
           }
           if(!mail) throw new HttpError(400,'mail_disabled','Fill in SMTP settings before testing.');
           const recipient=body.recipient!==undefined?email(body.recipient):undefined;
-          const result=await testMail(mail,recipient,options.mailTransportFactory);
+          const result=await testMail(mail,recipient,options.mailTransportFactory,mailFetch);
           store.audit(user.id,recipient?'site.mail_test_send':'site.mail_test_connection',null);
           respond(res,200,result); return;
         }

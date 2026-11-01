@@ -8,7 +8,7 @@ import { accessScopes } from '../../src/access.js';
 // These are three real Merchant HTTP servers and SQLite stores. Only the final
 // provider is synthetic: this exercises the existing runtime path, not account
 // custody, recursive inventory allocation, or a real Core / upstream login.
-async function multiHop(t, { streaming = false } = {}) {
+async function multiHop(t, { streaming = false, limits = false } = {}) {
   const nodes = [];
   let rootClosed;
   const streamClosed = new Promise(resolve => { rootClosed = resolve; });
@@ -28,8 +28,13 @@ async function multiHop(t, { streaming = false } = {}) {
       } else if (url.pathname === '/bridge/v1/device/status') {
         json({ id: 'provider-device', state: 'approved', current_grant_id: selected, selection_version: 1, expires_at: expiry });
       } else if (url.pathname === '/bridge/v1/accounts') {
-        json({ accounts: state.grants.map(grant => ({ id: grant.id, grant_id: grant.id, name: 'Provider account', state: 'available', expires_at: expiry })), current_grant_id: selected, selection_version: 1 });
+        json({ accounts: state.grants.map(grant => ({ id: grant.id, grant_id: grant.id, name: 'PRIVATE_PROVIDER_ACCOUNT', account_lease_id: 'PRIVATE_PROVIDER_LEASE', state: 'available', expires_at: expiry })), current_grant_id: selected, selection_version: 1 });
       } else if (url.pathname === '/bridge/v1/messages') {
+        if(limits){
+          const code=body.limit_code,headers={'Content-Type':'application/json','Retry-After':'60','X-Should-Retry':'false','Anthropic-Ratelimit-Unified-Secret':'PRIVATE'};
+          if(code==='rate_limit_error')Object.assign(headers,{'Anthropic-Ratelimit-Unified-Status':'rejected','Anthropic-Ratelimit-Unified-Representative-Claim':'seven_day','Anthropic-Ratelimit-Unified-Reset':'1793548800'});
+          res.writeHead(429,headers);res.end(JSON.stringify({type:'error',error:{type:'rate_limit_error',code,message:'PRIVATE_PROVIDER_DIAGNOSTIC'}}));return true;
+        }
         res.writeHead(200, { 'Content-Type': 'text/event-stream' });
         res.write('event: message_start\ndata: {"id":"synthetic-message"}\n\n');
         if (streaming) res.once('close', rootClosed);
@@ -95,6 +100,10 @@ test('runtime traverses C, B and A with per-hop keys and mapped identities, with
   assert.equal(list.status, 200, list.raw);
   assert.deepEqual(list.data.accounts.map(account => account.id), [grant.id]);
   assert.equal(list.data.current_grant_id, grant.id);
+  assert.equal(list.data.accounts[0].name, leaf.resource.name);
+  assert.equal(list.data.account_name, leaf.resource.name);
+  assert.equal(list.raw.includes('PRIVATE_PROVIDER'), false);
+  assert.equal(Object.hasOwn(list.data.accounts[0], 'account_lease_id'), false);
 
   const customerIds = new Set([first.state.customers[0].id]);
   const grantIds = new Set([first.state.grants[0].id]);
@@ -213,4 +222,20 @@ test('restarting a middle merchant preserves per-hop ownership mappings and does
   assert.equal(result.status, 200, result.raw);
   assert.equal(first.state.requests.filter(row => row.method === 'POST' && ['/access/v1/customers', '/access/v1/grants'].includes(row.path)).length, creates);
   assert.equal(first.state.requests.filter(row => row.path === '/bridge/v1/messages').length, 1);
+});
+
+test('quota errors and retry controls survive three Merchant privacy boundaries without replay', { timeout:20000 },async t=>{
+ const {first,leaf,nodes,native}=await multiHop(t,{limits:true});
+ let attempts=0;
+ for(const code of ['rate_limit_error','grant_usage_limit_exceeded','rate_limited','concurrency_limited']){
+  const result=await leaf.f.request('POST','/bridge/v1/messages',{model:'synthetic',limit_code:code},native);
+  assert.equal(result.status,429);assert.equal(result.data.type,'error');assert.equal(result.data.error.code,code);
+  assert.equal(result.data.error.type,code==='grant_usage_limit_exceeded'?'rate_limit_error':code);
+  assert.equal(result.headers.get('retry-after'),'60');assert.equal(result.headers.get('x-should-retry'),'false');
+  assert.equal(result.headers.get('anthropic-ratelimit-unified-status'),code==='rate_limit_error'?'rejected':null);
+  assert.equal(result.headers.get('anthropic-ratelimit-unified-secret'),null);assert.equal(result.raw.includes('PRIVATE'),false);
+  attempts++;
+  for(const node of nodes)assert.equal(node.received.filter(row=>row.path==='/bridge/v1/messages').length,attempts);
+  assert.equal(first.state.requests.filter(row=>row.path==='/bridge/v1/messages').length,attempts);
+ }
 });
