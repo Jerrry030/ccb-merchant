@@ -135,20 +135,26 @@ export class Auth {
       case 'POST /api/auth/register': {
         if(!features.registration) throw new HttpError(503,'registration_disabled','Registration requires administrator enablement.');
         if(features.email_verification && !this.mailer) throw new HttpError(503,'registration_disabled','Registration requires configured email verification and administrator enablement.');
-        fields(body,['email','password','display_name'],['email','password','display_name']);
-        const address=email(body.email), name=text(body.display_name,'display_name',100), hashed=await passwordHash(body.password);
+        const emailOnly=body.password===undefined && body.display_name===undefined;
+        if(emailOnly) {
+          if(!features.email_verification) throw new HttpError(400,'invalid_input','Unexpected or missing request fields.');
+          fields(body,['email'],['email']);
+        } else fields(body,['email','password','display_name'],['email','password','display_name']);
+        const address=email(body.email), name=emailOnly?null:text(body.display_name,'display_name',100), hashed=emailOnly?null:await passwordHash(body.password);
+        const placeholder=emailOnly?await passwordHash(randomToken()):null;
         this.store.throttle(`register:${digest(address)}`,3,3600000);
         const user=this.store.transaction(()=>{
           const existing=this.store.db.prepare('SELECT * FROM users WHERE email=?').get(address);
           if(!existing) {
             assertCanRegister(this.store, address);
             const status=features.email_verification?'pending_verification':'active';
-            const added=this.store.createUser({email:address,display_name:name,password_hash:hashed,role:'member',status});
+            const added=this.store.createUser({email:address,display_name:emailOnly?'未命名':name,password_hash:emailOnly?placeholder:hashed,role:'member',status});
+            if(emailOnly) this.store.db.prepare('UPDATE users SET must_change_password=1 WHERE id=?').run(added.id);
             this.store.audit(added.id,'auth.register',added.id);
-            return added;
+            return this.store.db.prepare('SELECT * FROM users WHERE id=?').get(added.id);
           }
-          if(existing.status==='pending_verification' && features.email_verification) {
-            const updated=this.store.db.prepare("UPDATE users SET password_hash=?,display_name=? WHERE id=? AND status='pending_verification'").run(hashed,name,existing.id);
+          if(existing.status==='pending_verification' && features.email_verification && !emailOnly) {
+            const updated=this.store.db.prepare("UPDATE users SET password_hash=?,display_name=?,must_change_password=0 WHERE id=? AND status='pending_verification'").run(hashed,name,existing.id);
             if(updated.changes===1) this.store.audit(existing.id,'auth.register_refresh',existing.id);
           }
           return this.store.db.prepare('SELECT * FROM users WHERE id=?').get(existing.id);
@@ -186,7 +192,7 @@ export class Auth {
       }
       case 'POST /api/auth/verify': {
         if(!this.mailer) throw new HttpError(503,'mail_disabled','Email verification and reset are not configured.');
-        fields(body,['email','code'],['email','code']);
+        fields(body,['email','code','password','display_name'],['email','code']);
         const address=email(body.email), code=text(body.code,'code',6);
         if(!/^\d{6}$/.test(code)) throw new HttpError(400,'invalid_code','Verification code is invalid, expired, or already used.');
         const matches=this.store.db.prepare('SELECT * FROM users WHERE email=? OR pending_email=?').all(address,address);
@@ -204,6 +210,10 @@ export class Auth {
           });
           throw new HttpError(400,'invalid_code','Verification code is invalid, expired, or already used.');
         }
+        const choosePassword=registration && (Boolean(user.must_change_password) || body.password!==undefined || body.display_name!==undefined);
+        if(choosePassword && (body.password===undefined || body.display_name===undefined)) throw new HttpError(400,'invalid_input','Password and display name are required to finish registration.');
+        const nextName=choosePassword?text(body.display_name,'display_name',100):null;
+        const nextHash=choosePassword?await passwordHash(body.password):null;
         this.store.transaction(()=>{
           const consumed=this.store.db.prepare("DELETE FROM auth_tokens WHERE token_hash=? AND kind='verify' AND expires_at>?").run(token.token_hash,Date.now());
           if(consumed.changes!==1) throw new HttpError(400,'invalid_code','Verification code is invalid, expired, or already used.');
@@ -211,7 +221,9 @@ export class Auth {
             const updated=this.store.db.prepare('UPDATE users SET email=?,pending_email=NULL,revision=revision+1 WHERE id=? AND pending_email=?').run(address,user.id,address);
             if(updated.changes!==1) throw new HttpError(409,'account_changed','Account changed; request a new code.');
           } else {
-            const updated=this.store.db.prepare("UPDATE users SET status='active',revision=revision+1 WHERE id=? AND status='pending_verification' AND pending_email IS NULL").run(user.id);
+            const updated=nextHash
+              ? this.store.db.prepare("UPDATE users SET status='active',password_hash=?,display_name=?,must_change_password=0,revision=revision+1 WHERE id=? AND status='pending_verification' AND pending_email IS NULL").run(nextHash,nextName,user.id)
+              : this.store.db.prepare("UPDATE users SET status='active',revision=revision+1 WHERE id=? AND status='pending_verification' AND pending_email IS NULL").run(user.id);
             if(updated.changes!==1) throw new HttpError(409,'account_changed','Account changed; request a new code.');
           }
           this.store.db.prepare('DELETE FROM sessions WHERE user_id=?').run(user.id);
