@@ -456,6 +456,12 @@ export class Access {
   let body=raw;
   let control;
   if(raw?.length&&['/bridge/v1/device/start','/bridge/v1/device/account'].includes(url.pathname)){try{control=JSON.parse(raw.toString('utf8'));}catch{throw new HttpError(400,'invalid_json','Invalid control message.');}}
+  if(req.method==='POST'&&url.pathname==='/bridge/v1/device/account'){
+   fields(control,['grant_id','expected_selection_version'],['grant_id','expected_selection_version']);
+   control.grant_id=text(control.grant_id,'grant_id',150);
+   if(!Number.isSafeInteger(control.expected_selection_version)||control.expected_selection_version<0)throw new HttpError(400,'invalid_selection','An observed nonnegative selection revision is required.');
+   body=Buffer.from(JSON.stringify(control));
+  }
   const hash=start?control?.token_hash:digest((req.headers.authorization||'').replace(/^Bearer /i,''));
   if(!/^[a-f0-9]{64}$/.test(hash||''))throw new HttpError(400,'invalid_device','Invalid device digest.');
   const owner=peer?.account.id||'local',binding=this.db.prepare('SELECT owner FROM runtime_owners WHERE token_hash=?').get(hash);
@@ -476,7 +482,7 @@ export class Access {
   if(path==='/bridge/v1/device/account'){
    selected=this.object('access_grants',control.grant_id,peer.account.id);
    if(selected.customer_id!==device.customer_id||!this.runtimeGrant(selected))throw new HttpError(403,'grant_unavailable','Grant is unavailable.');
-   body=Buffer.from(JSON.stringify({grant_id:selected.upstream_id}));
+   body=Buffer.from(JSON.stringify({grant_id:selected.upstream_id,expected_selection_version:control.expected_selection_version}));
   }
   const refresh=path.match(/^\/bridge\/v1\/accounts\/([A-Za-z0-9_-]+)\/refresh$/);
   if(refresh){selected=this.object('access_grants',refresh[1],peer.account.id);if(selected.customer_id!==device.customer_id||!this.runtimeGrant(selected))throw new HttpError(403,'grant_unavailable','Grant is unavailable.');path=`/bridge/v1/accounts/${opaqueId(selected.upstream_id)}/refresh`;}

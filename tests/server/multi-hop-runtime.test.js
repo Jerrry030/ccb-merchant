@@ -8,11 +8,13 @@ import { accessScopes } from '../../src/access.js';
 // These are three real Merchant HTTP servers and SQLite stores. Only the final
 // provider is synthetic: this exercises the existing runtime path, not account
 // custody, recursive inventory allocation, or a real Core / upstream login.
-async function multiHop(t, { streaming = false, limits = false } = {}) {
+async function multiHop(t, { streaming = false, limits = false, conditional = true } = {}) {
   const nodes = [];
   let rootClosed;
   const streamClosed = new Promise(resolve => { rootClosed = resolve; });
   let selected = null;
+  let revision = 0;
+  const provider = { conditional, selectionError: null };
   const expiry = new Date(Date.now() + 3600000).toISOString();
   const first = await fixture(t, {
     env: { UPSTREAM_TIMEOUT_MS: '5000', RUNTIME_HEADER_TIMEOUT_MS: '5000' },
@@ -22,13 +24,17 @@ async function multiHop(t, { streaming = false, limits = false } = {}) {
       if (url.pathname === '/bridge/v1/device/start') {
         json({ code: 'MULTIHOP123', verification_path: '/connect', expires_at: expiry, interval: 3 }, 201);
       } else if (url.pathname === '/bridge/v1/device/account') {
-        assert.ok(state.grants.some(grant => grant.id === body.grant_id));
-        selected = body.grant_id;
-        json({ current_grant_id: selected, selection_version: 1 });
+        assert.deepEqual(Object.keys(body).sort(),['expected_selection_version','grant_id']);
+        if(body.expected_selection_version!==revision){json({code:'device_stale',error:'PRIVATE_REVISION_DIAGNOSTIC'},409);return true;}
+        if(provider.selectionError){json({code:provider.selectionError,error:'PRIVATE_ACCOUNT_DIAGNOSTIC'},409);return true;}
+        assert.ok(state.grants.some(grant=>grant.id===body.grant_id));
+        if(selected!==body.grant_id)revision++;
+        selected=body.grant_id;
+        json({current_grant_id:selected,selection_version:revision});
       } else if (url.pathname === '/bridge/v1/device/status') {
-        json({ id: 'provider-device', state: 'approved', current_grant_id: selected, selection_version: 1, expires_at: expiry });
+        json({id:'provider-device',state:'approved',current_grant_id:selected,selection_version:revision,expires_at:expiry});
       } else if (url.pathname === '/bridge/v1/accounts') {
-        json({ accounts: state.grants.map(grant => ({ id: grant.id, grant_id: grant.id, name: 'PRIVATE_PROVIDER_ACCOUNT', account_lease_id: 'PRIVATE_PROVIDER_LEASE', state: 'available', expires_at: expiry })), current_grant_id: selected, selection_version: 1 });
+        json({accounts:state.grants.map(grant=>({id:grant.id,grant_id:grant.id,name:'PRIVATE_PROVIDER_ACCOUNT',account_lease_id:'PRIVATE_PROVIDER_LEASE',state:'available',expires_at:expiry})),current_grant_id:selected,selection_version:revision,...(provider.conditional===undefined?{}:{conditional_selection:provider.conditional})});
       } else if (url.pathname === '/bridge/v1/messages') {
         if(limits){
           const code=body.limit_code,headers={'Content-Type':'application/json','Retry-After':'60','X-Should-Retry':'false','Anthropic-Ratelimit-Unified-Secret':'PRIVATE'};
@@ -85,10 +91,10 @@ async function multiHop(t, { streaming = false, limits = false } = {}) {
   assert.equal(started.status, 201, started.raw);
   const approved = await leaf.f.request('POST', `/access/v1/customers/${made.data.customer.id}/devices/approve`, { code: started.data.code }, actor);
   assert.equal(approved.status, 200, approved.raw);
-  const chosen = await leaf.f.request('POST', '/bridge/v1/device/account', { grant_id: granted.data.grant.id }, native);
+  const chosen = await leaf.f.request('POST', '/bridge/v1/device/account', { grant_id: granted.data.grant.id, expected_selection_version:0 }, native);
   assert.equal(chosen.status, 200, chosen.raw);
   assert.equal(chosen.data.current_grant_id, granted.data.grant.id);
-  return { nodes, first, leaf, native, token, grant: granted.data.grant, customer: made.data.customer, streamClosed };
+  return { nodes, first, leaf, native, token, grant: granted.data.grant, customer: made.data.customer, streamClosed, provider };
 }
 
 test('runtime traverses C, B and A with per-hop keys and mapped identities, without a direct-provider bypass', { timeout: 20000 }, async t => {
@@ -98,6 +104,7 @@ test('runtime traverses C, B and A with per-hop keys and mapped identities, with
   assert.equal(status.status, 200, status.raw);
   const list = await leaf.f.request('GET', '/bridge/v1/accounts', undefined, native);
   assert.equal(list.status, 200, list.raw);
+  assert.equal(list.data.conditional_selection,true);
   assert.deepEqual(list.data.accounts.map(account => account.id), [grant.id]);
   assert.equal(list.data.current_grant_id, grant.id);
   assert.equal(list.data.accounts[0].name, leaf.resource.name);
@@ -238,4 +245,55 @@ test('quota errors and retry controls survive three Merchant privacy boundaries 
   for(const node of nodes)assert.equal(node.received.filter(row=>row.path==='/bridge/v1/messages').length,attempts);
   assert.equal(first.state.requests.filter(row=>row.path==='/bridge/v1/messages').length,attempts);
  }
+});
+
+test('conditional selection capability, revisions and safe errors survive every Merchant hop without replay', { timeout:20000 }, async t => {
+  const {first,leaf,nodes,native,grant,provider}=await multiHop(t);
+  // Seed a second authorized mapping with no selection/binding history at any hop.
+  let remoteB='provider-unused-b',remoteResource='provider-unused-resource';
+  first.state.grants.push({...first.state.grants[0],id:remoteB,resource_id:remoteResource});
+  for(const [index,node] of nodes.entries()){
+    const resource=node.f.store.db.prepare('SELECT * FROM access_resources').get();
+    const localResource='unused-resource-'+index;const resourceCopy={...resource,id:localResource,upstream_id:remoteResource};
+    const resourceColumns=Object.keys(resourceCopy);
+    node.f.store.db.prepare('INSERT INTO access_resources('+resourceColumns.join(',')+') VALUES('+resourceColumns.map(()=>'?').join(',')+')').run(...Object.values(resourceCopy));
+    remoteResource=localResource;
+    const row=node.f.store.db.prepare('SELECT * FROM access_grants').get();
+    const localB='unused-b-'+index;const copy={...row,id:localB,upstream_id:remoteB,resource_id:localResource};
+    const columns=Object.keys(copy);
+    node.f.store.db.prepare('INSERT INTO access_grants('+columns.join(',')+') VALUES('+columns.map(()=>'?').join(',')+')').run(...Object.values(copy));
+    remoteB=localB;
+  }
+  const unusedB=remoteB;
+  const firstSelection=first.state.requests.find(row=>row.path==='/bridge/v1/device/account');
+  assert.equal(firstSelection.body.expected_selection_version,0);
+  const before=await leaf.f.request('GET','/bridge/v1/accounts',undefined,native);
+  assert.equal(before.data.conditional_selection,true);
+  assert.deepEqual(before.data.accounts.map(row=>row.id).sort(),[grant.id,unusedB].sort());
+  assert.equal(before.data.accounts.find(row=>row.id===unusedB).quota,undefined,'unknown quota does not remove unused B');
+  const revision=before.data.selection_version;
+  const count=first.state.requests.filter(row=>row.path==='/bridge/v1/device/account').length;
+  for(const body of [{grant_id:grant.id},{grant_id:grant.id,expected_selection_version:null},{grant_id:grant.id,expected_selection_version:-1},{grant_id:grant.id,expected_selection_version:0.5},{grant_id:grant.id,expected_selection_version:'1'}]){
+    const invalid=await leaf.f.request('POST','/bridge/v1/device/account',body,native);assert.equal(invalid.status,400,invalid.raw);
+  }
+  assert.equal(first.state.requests.filter(row=>row.path==='/bridge/v1/device/account').length,count);
+  const stale=await leaf.f.request('POST','/bridge/v1/device/account',{grant_id:unusedB,expected_selection_version:revision-1},native);
+  assert.equal(stale.status,409);assert.equal(stale.data.error.code,'device_stale');assert.equal(stale.raw.includes('PRIVATE'),false);
+  assert.equal(first.state.requests.filter(row=>row.path==='/bridge/v1/device/account').length,count+1);
+  for(const code of ['account_unavailable','account_device_limit','grant_stale']){
+    provider.selectionError=code;
+    const rejected=await leaf.f.request('POST','/bridge/v1/device/account',{grant_id:unusedB,expected_selection_version:revision},native);
+    assert.equal(rejected.status,409);assert.equal(rejected.data.error.code,code);assert.equal(rejected.raw.includes('PRIVATE'),false);
+  }
+  for(const node of nodes)assert.equal(node.received.filter(row=>row.path==='/bridge/v1/device/account').length,node===leaf?10:5);
+  assert.equal(first.state.requests.filter(row=>row.path==='/bridge/v1/device/account').length,count+4);
+  const after=await leaf.f.request('GET','/bridge/v1/accounts',undefined,native);assert.equal(after.data.selection_version,revision);assert.equal(after.data.current_grant_id,grant.id);
+  provider.selectionError=null;
+  const selected=await leaf.f.request('POST','/bridge/v1/device/account',{grant_id:unusedB,expected_selection_version:revision},native);
+  assert.equal(selected.status,200,selected.raw);assert.equal(selected.data.current_grant_id,unusedB);assert.equal(selected.data.selection_version,revision+1);
+  const written=first.state.requests.filter(row=>row.path==='/bridge/v1/device/account');assert.equal(written.length,count+5);assert.equal(written.at(-1).body.grant_id,'provider-unused-b');assert.equal(written.at(-1).body.expected_selection_version,revision);
+  for(const unsupported of [false,undefined,'true']){
+    provider.conditional=unsupported;
+    const list=await leaf.f.request('GET','/bridge/v1/accounts',undefined,native);assert.notEqual(list.data.conditional_selection,true);
+  }
 });

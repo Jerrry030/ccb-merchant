@@ -254,7 +254,7 @@ test('runtime account list, refresh and selection use the same stable private-sa
  assert.equal(listed.data.current_grant_id,'grant-a');assert.equal(listed.data.account_name,'账号#1');
  for(const text of ['PRIVATE','owned-1','owned-2','account_lease_id'])assert.equal(listed.raw.includes(text),false,text);
  const refreshed=await f.request('POST','/bridge/v1/accounts/grant-a/refresh',{},native);assert.equal(refreshed.data.account.name,'账号#1');assert.equal(refreshed.raw.includes('owned-1'),false);
- const chosen=await f.request('POST','/bridge/v1/device/account',{grant_id:'grant-b'},native);assert.equal(chosen.data.device.account_name,'账号#2');assert.equal(chosen.raw.includes('PRIVATE'),false);
+ const chosen=await f.request('POST','/bridge/v1/device/account',{grant_id:'grant-b',expected_selection_version:0},native);assert.equal(chosen.data.device.account_name,'账号#2');assert.equal(chosen.raw.includes('PRIVATE'),false);
  const status=await f.request('GET','/bridge/v1/device/status',undefined,native);assert.equal(status.data.account_name,'账号#2');
  reversed=true;await f.restart();
  const again=await f.request('GET','/bridge/v1/accounts',undefined,native);assert.deepEqual(again.data.accounts.map(a=>a.name),['账号#2','账号#1']);assert.equal(again.data.account_name,'账号#2');
@@ -277,4 +277,24 @@ test('runtime allocation identity conflicts cannot silently rename or remap an e
  assert.equal(result.status,503);assert.equal(result.data.error.code,'invalid_core_response');assert.equal(result.raw.includes('PRIVATE'),false);
  assert.equal(f.store.labelAccounts([{id:'known'}])[0].name,'账号#1');
  assert.equal(f.store.db.prepare('SELECT COUNT(*) AS n FROM account_codes').get().n,1);
+});
+
+test('native client receives only real conditional-selection capability and cannot omit the revision',async t=>{
+ let capability=true;
+ const f=await fixture(t,{onCore:({url,body,json})=>{
+  if(url.pathname==='/bridge/v1/accounts'){json({accounts:[{id:'new-unbound',state:'available',quota:{status:'unknown',windows:[]}}],current_grant_id:null,selection_version:0,...(capability===undefined?{}:{conditional_selection:capability})});return true;}
+  if(url.pathname==='/bridge/v1/device/account'){assert.equal(body.expected_selection_version,0);json({device:{current_grant_id:body.grant_id,selection_version:1}});return true;}
+ }});
+ const list=await f.request('GET','/bridge/v1/accounts',undefined,native);assert.equal(list.data.conditional_selection,true);assert.equal(list.data.accounts[0].id,'new-unbound');assert.equal(list.data.accounts[0].quota.status,'unknown');
+ for(const value of [false,undefined,'true']){capability=value;const r=await f.request('GET','/bridge/v1/accounts',undefined,native);assert.notEqual(r.data.conditional_selection,true);}
+ const before=f.state.requests.length;
+ for(const body of [{grant_id:'new-unbound'}, {grant_id:'new-unbound',expected_selection_version:null}, {grant_id:'new-unbound',expected_selection_version:-1}]){assert.equal((await f.request('POST','/bridge/v1/device/account',body,native)).status,400);}
+ assert.equal(f.state.requests.length,before);
+ assert.equal((await f.request('POST','/bridge/v1/device/account',{grant_id:'new-unbound',expected_selection_version:0},native)).status,200);
+});
+for(const status of [409,503])test('conditional selection failures keep authoritative status '+status,async t=>{
+ const f=await fixture(t,{onCore:({url,json})=>{if(url.pathname==='/bridge/v1/device/account'){json({code:'device_stale',error:'PRIVATE_PROVIDER_REASON'},status);return true;}}});
+ const r=await f.request('POST','/bridge/v1/device/account',{grant_id:'candidate',expected_selection_version:1},native);
+ assert.equal(r.status,status);assert.equal(r.data.error.code,status===409?'device_stale':'runtime_rejected');assert.equal(r.raw.includes('PRIVATE'),false);
+ assert.equal(f.state.requests.filter(row=>row.path==='/bridge/v1/device/account').length,1);
 });

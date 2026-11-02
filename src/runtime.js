@@ -22,7 +22,7 @@ const runtimeHeaders = [
 ];
 const deviceSchema = { id:'string', name:'string', platform:'string', state:'string', expires_at:'string', owner_user_id:'string', service_name:'string', current_grant_id:'string', account_name:'string', selection_version:'number', pairing_pending:'boolean' };
 const accountSchema = { account_lease_id:'string', plan:'string', state:'string', shared:'boolean', quota:{status:'string',updated_at:'string',windows:[{key:'string',label:'string',used_percent:'number',resets_at:'string',reset:'boolean'}]}, id:'string', grant_id:'string', name:'string', status:'string', expires_at:'string', available:'boolean', reason:'string', revision:'number', surfaces:['string'], selected:'boolean', usage:{ five_hour:{ utilization:'number', resets_at:'string' }, seven_day:{ utilization:'number', resets_at:'string' } } };
-const controlSchema = { ...deviceSchema, ok:'boolean', code:'string', interval:'number', verification_path:'string', device:deviceSchema, account:accountSchema, accounts:[accountSchema], binding:'string', device_id:'string', os:'string', arch:'string', subscription_type:'string', rate_limit_tier:'string', traffic:{ version:'number', timezone:'string', region:'string', domains:['string'] } };
+const controlSchema = { ...deviceSchema, conditional_selection:'boolean', ok:'boolean', code:'string', interval:'number', verification_path:'string', device:deviceSchema, account:accountSchema, accounts:[accountSchema], binding:'string', device_id:'string', os:'string', arch:'string', subscription_type:'string', rate_limit_tier:'string', traffic:{ version:'number', timezone:'string', region:'string', domains:['string'] } };
 
 export async function proxyRuntime(req, res, integration, store, url, access) {
   const config={...integration.config};
@@ -81,6 +81,9 @@ export async function proxyRuntime(req, res, integration, store, url, access) {
       const safe={
         account_device_limit:[409,'每个账号最多绑定 1 台设备，请先撤销旧设备。'],
         account_selection_changed:[409,'账号已变化，请重新启动客户端。'],
+        device_stale:[409,'设备选择已变化，请刷新后再选择。'],
+        account_unavailable:[409,'此账号暂时无法用于当前设备。'],
+        grant_stale:[409,'授权已变化，请刷新后再选择。'],
         rate_limited:[429,'请求过于频繁，请按返回的重试信息稍后重试。'],
         concurrency_limited:[429,'当前并发请求过多，请稍后重试。'],
         rate_limit_error:[429,'Upstream request rate or usage limit reached; follow the returned limit and retry information.'],

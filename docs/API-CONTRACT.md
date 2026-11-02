@@ -254,3 +254,9 @@ Accept: application/json
 - PATCH managed-accounts 提交 `{expected_revision,status:"paused"|"active"}`，DELETE 带 `{expected_revision}`。暂停保留客户合同，恢复后需重新选择设备；退出停止托管并保留历史，不声称供应商侧远程授权已撤销。
 
 运行仍经过全部直接提供方。技术预算、真实占用、设备限制和权限保持；没有商业托管名额。更换直接提供方、跨来源转让以及真实供应商验收另行安排。
+
+## 条件切号能力与逐级转发
+
+`GET /bridge/v1/accounts` 只保留直接上级实际返回的布尔 `conditional_selection`，不由本站强制设为 true；中间任一层未实现该合同，客户端不能据此开启自动切号。`POST /bridge/v1/device/account` 仅接受非空 `grant_id` 和必填非负安全整数 `expected_selection_version`。本站及每级 Merchant 只映射相邻授权 ID，必须原样传递观察到的修订号，不读取新版本替换旧请求、不去掉前置条件，也不自动重放。
+
+Core 的 409 `device_stale`、`account_unavailable`、`account_device_limit`、`grant_stale` 以固定安全说明转发；内部诊断和上级账号身份不透传。401、其他状态或未确认响应不应伪装为已确认的账号不可用。该能力只表示服务端条件写入合同，不能代替客户端进程树和连接清理证明。

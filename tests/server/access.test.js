@@ -95,7 +95,7 @@ test('API device ownership and grant IDs are translated while model bodies remai
  assert.equal((await f.request('POST',`/access/v1/customers/${customer.id}/devices/approve`,{code:paired.data.code},c.actor)).status,200);
  assert.equal((await f.request('GET','/bridge/v1/device/status',undefined,{native:true,headers:{Authorization:`Bearer ${token}`,'X-CCB-Access-Key':d.key.token}})).status,401);
  assert.equal((await f.request('GET','/bridge/v1/device/status',undefined,{native:true,headers:{Authorization:`Bearer ${token}`}})).status,401);
- const selected=await f.request('POST','/bridge/v1/device/account',{grant_id:grant.id},native);assert.equal(selected.status,200,selected.raw);assert.equal(selected.data.current_grant_id,grant.id);
+ const selected=await f.request('POST','/bridge/v1/device/account',{grant_id:grant.id,expected_selection_version:0},native);assert.equal(selected.status,200,selected.raw);assert.equal(selected.data.current_grant_id,grant.id);
  const listed=await f.request('GET','/bridge/v1/accounts',undefined,native);assert.equal(listed.data.accounts[0].id,grant.id);
  const status=await f.request('GET','/bridge/v1/device/status',undefined,native);assert.notEqual(status.data.id,'upstream-device-id');
  const payload={model:'fixture',messages:[{role:'user',content:'private request body'}]};
@@ -177,7 +177,7 @@ test('API key revocation terminates an active streamed response without retrying
  const native={native:true,headers:{Authorization:`Bearer ${token}`,'X-CCB-Access-Key':c.key.token}};
  await f.request('POST','/bridge/v1/device/start',{name:'Stream',platform:'windows',token_hash:hash},{native:true,headers:{'X-CCB-Access-Key':c.key.token}});
  await f.request('POST',`/access/v1/customers/${customer.id}/devices/approve`,{code:'STREAM123456'},c.actor);
- await f.request('POST','/bridge/v1/device/account',{grant_id:grant.id},native);
+ await f.request('POST','/bridge/v1/device/account',{grant_id:grant.id,expected_selection_version:0},native);
  let call,response,received='';
  await new Promise((resolve,reject)=>{
   const body=JSON.stringify({stream:true,messages:[]});call=httpRequest(f.config.publicOrigin+'/bridge/v1/messages',{method:'POST',headers:{...native.headers,'Content-Type':'application/json','Content-Length':Buffer.byteLength(body)}},res=>{response=res;res.once('data',chunk=>{received+=chunk.toString();resolve();});res.on('error',()=>{});});call.on('error',reject);call.end(body);
@@ -224,7 +224,7 @@ test('nested selection replies persist the owned device mapping before a status 
  const native={native:true,headers:{Authorization:`Bearer ${token}`,'X-CCB-Access-Key':c.key.token}};
  await f.request('POST','/bridge/v1/device/start',{name:'Owned laptop',platform:'Windows/x64',token_hash:hash},{native:true,headers:{'X-CCB-Access-Key':c.key.token}});
  await f.request('POST',`/access/v1/customers/${customer.id}/devices/approve`,{code:'NESTED123456'},c.actor);
- const selected=await f.request('POST','/bridge/v1/device/account',{grant_id:grant.id},native);assert.equal(selected.status,200,selected.raw);
+ const selected=await f.request('POST','/bridge/v1/device/account',{grant_id:grant.id,expected_selection_version:0},native);assert.equal(selected.status,200,selected.raw);
  const list=await f.request('GET',`/access/v1/customers/${customer.id}/devices`,undefined,c.actor);assert.equal(list.status,200,list.raw);assert.equal(list.data.devices.length,1);assert.equal(list.data.devices[0].id,selected.data.device.id);assert.equal(list.data.devices[0].name,'Owned laptop');assert.equal(list.raw.includes('remote-nested-device'),false);
 });
 
