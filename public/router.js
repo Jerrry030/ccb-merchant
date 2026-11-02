@@ -2,7 +2,7 @@ import { closeMetricPopover } from './ui-popover.js';
 import { render } from './app.js';
 export const authRoutes = new Set(['/login', '/setup', '/register', '/verify', '/forgot', '/reset']);
 export const connectGuides = {
-  idle: '安装 CCB、登录并确认设备，然后开始你的项目。',
+  idle: '安装客户端、登录并确认设备，然后开始你的项目。',
   pairing: '核对设备信息并确认，然后回到终端继续。',
 };
 export const navigation = [

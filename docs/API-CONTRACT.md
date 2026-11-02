@@ -255,6 +255,10 @@ Accept: application/json
 
 运行仍经过全部直接提供方。技术预算、真实占用、设备限制和权限保持；没有商业托管名额。更换直接提供方、跨来源转让以及真实供应商验收另行安排。
 
+## ACCB 公共下载清单
+
+同源静态 `GET /accb-releases.json` 返回 `product: "ACCB"`、版本、来源提交和文件列表；每项只包含固定 target、精确文件名、字节大小和 SHA-256。前端只构造 `/downloads/accb/{version}/{name}` 同源地址，不接受远端 URL。空清单不产生下载链接；坏版本、非法文件名、重复 target 和无效校验值整份拒绝。此分发没有账号/API Key 副作用，不属于 `/bridge/v1/*` 运行时协议；包文件由 Caddy 提供，不经过模型代理。
+
 ## 条件切号能力与逐级转发
 
 `GET /bridge/v1/accounts` 只保留直接上级实际返回的布尔 `conditional_selection`，不由本站强制设为 true；中间任一层未实现该合同，客户端不能据此开启自动切号。`POST /bridge/v1/device/account` 仅接受非空 `grant_id` 和必填非负安全整数 `expected_selection_version`。本站及每级 Merchant 只映射相邻授权 ID，必须原样传递观察到的修订号，不读取新版本替换旧请求、不去掉前置条件，也不自动重放。

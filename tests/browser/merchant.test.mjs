@@ -103,7 +103,8 @@ test('enabled registration, verification and password reset are explicit and scr
   await page.getByRole('heading',{name:'创建一个账户',exact:true}).waitFor();
   await page.getByLabel('显示名称',{exact:true}).fill('新测试成员'); await page.getByLabel('电子邮箱（验证必需）',{exact:true}).fill('new@example.test');
   await page.getByLabel('密码',{exact:true}).fill('fixture-new-password-123'); await page.getByLabel('确认密码',{exact:true}).fill('fixture-new-password-123');
-  await page.getByRole('button',{name:'发送验证码',exact:true}).click(); await page.getByText('请查看邮箱。新注册或尚未验证的账户会收到 15 分钟内有效的 6 位验证码，并使用你刚刚填写的密码。已经可以登录的账户不会被修改，请用原密码登录或找回密码。',{exact:true}).waitFor();
+  await page.getByRole('button',{name:'发送验证码',exact:true}).click(); await page.getByRole('button',{name:'重新发送验证码',exact:true}).waitFor();
+  assert.equal(await page.getByText('请查看邮箱。新注册或尚未验证的账户会收到 15 分钟内有效的 6 位验证码，并使用你刚刚填写的密码。已经可以登录的账户不会被修改，请用原密码登录或找回密码。',{exact:true}).count(),0,'sending a code must not restore the removed notice');
   assert.equal(fixture.state.requests.filter(r => r.path === '/api/auth/register').length,1);
   assert.equal(fixture.state.requests.filter(r => r.path === '/api/auth/verify').length,0);
   await page.getByLabel('验证码',{exact:true}).fill('123456');
@@ -140,8 +141,9 @@ test('connect query survives login without auto-approval; writes use cookie and 
   assert.equal(await h.page.getByLabel('连接码',{exact:true}).inputValue(),'TEST-CONNECT');
   assert.equal(await h.page.getByText('核对设备信息并确认，然后回到终端继续。',{exact:true}).count(),1);
   assert.equal(await h.page.getByLabel('网关地址',{exact:true}).count(),0);
-  assert.equal(await h.page.getByText(`ccb login --gateway ${h.fixture.origin}`,{exact:true}).count(),1);
-  assert.equal(await h.page.getByText('npm install -g @rimuruchan/ccb',{exact:true}).count(),1);
+  await h.page.getByLabel('电脑系统',{exact:true}).selectOption('linux');
+  assert.equal(await h.page.getByText(`./resources/bin/ccb login --gateway ${h.fixture.origin}`,{exact:true}).count(),1);
+  assert.equal(await h.page.locator('.connection-steps').getByText('./resources/bin/ccb update',{exact:true}).count(),1);
   assert.equal(h.fixture.state.requests.filter(r => r.path.includes('/devices')).length,0);
   await h.page.getByRole('button',{name:'核对设备',exact:true}).click(); await h.page.getByText('我的测试笔记本',{exact:true}).waitFor();
   assert.equal(h.fixture.state.requests.filter(r => r.path.includes('/devices/approve')).length,0);
@@ -274,11 +276,12 @@ test('connection instructions align headings, command panels and notes without m
  for(const selected of [false,true]){
   h.fixture.state.public.site.public_origin=selected?'https://gateway-for-long-command-layout.example.test':h.fixture.origin;
   await h.page.goto(h.fixture.origin+'/connect'+(selected?'?account_id='+accountId:''));
-  const steps=h.page.locator('.connection-steps');await steps.getByRole('heading',{name:'安装 ccb',exact:true}).waitFor();
-  assert.equal(await steps.getByRole('button',{name:/^复制(安装|登录|启动)命令$/}).count(),3);
-  assert.equal(await steps.locator('.command-line pre').nth(0).innerText(),'npm install -g @rimuruchan/ccb');
-  assert.equal(await steps.locator('.command-line pre').nth(1).innerText(),'ccb login --gateway '+h.fixture.state.public.site.public_origin+(selected?' --account '+accountId+' --surface code':''));
-  assert.equal(await steps.locator('.command-line pre').nth(2).innerText(),'ccb');
+  const steps=h.page.locator('.connection-steps');await steps.getByRole('heading',{name:'安装客户端',exact:true}).waitFor();
+  await h.page.getByLabel('电脑系统',{exact:true}).selectOption('linux');
+  assert.equal(await steps.getByRole('button',{name:/^复制(初始化|登录|选择账号)命令$/}).count(),3);
+  assert.equal(await steps.locator('.command-line pre').nth(0).innerText(),'./resources/bin/ccb update');
+  assert.equal(await steps.locator('.command-line pre').nth(1).innerText(),'./resources/bin/ccb login --gateway '+h.fixture.state.public.site.public_origin+(selected?' --account '+accountId+' --surface code':''));
+  assert.equal(await steps.locator('.command-line pre').nth(2).innerText(),'./resources/bin/ccb account');
   for(const [width,theme] of [[1920,'light'],[1440,'light'],[1101,'dark'],[1100,'light'],[768,'dark'],[390,'light'],[320,'dark']]){
    await h.page.setViewportSize({width,height:1050});await h.page.evaluate(theme=>document.documentElement.dataset.theme=theme,theme);await h.page.evaluate(()=>document.fonts.ready);
    const rows=await steps.locator(':scope > li').evaluateAll(items=>items.map(item=>{

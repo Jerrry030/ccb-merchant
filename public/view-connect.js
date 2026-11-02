@@ -2,6 +2,7 @@ import { el, icon } from './dom.js';
 import { state } from './state.js';
 import { api, collection } from './api.js';
 import { connectGuides } from './router.js';
+import { desktopTargets, parseDesktopRelease } from './desktop-releases.js';
 import { notice, emptyState, panel, errorNotice, supportContact } from './ui.js';
 import { field, bindForm } from './ui-form.js';
 export async function connectView() {
@@ -9,18 +10,27 @@ export async function connectView() {
   if (query.has('code')) { state.code = query.get('code').slice(0,128); history.replaceState({},'','/connect'); }
   const ticket = state.view;
   const accountId = query.get('account_id');
-  const accounts = collection(await api('/api/me/accounts'),'accounts');
+  const downloads = await desktopDownloadPanel();
+  let accounts;
+  try { accounts = collection(await api('/api/me/accounts'),'accounts'); }
+  catch (error) { if (ticket !== state.view) return; return el('div',{class:'connect-page'},downloads,errorNotice(error)); }
   if (ticket !== state.view) return;
   if (!accounts.length) {
     const lead = document.getElementById('connect-lead');
     if (lead) lead.textContent = '分配到账号之后，再安装并确认设备。';
-    return panel('等待分配账号','没有账号时不能连接设备。',emptyState('请先等待账号分配','管理员分配账号后，再回到这里安装 ccb 并确认设备。在此之前不需要运行安装命令。'+supportContact(),'layers',el('a',{class:'btn',href:'/accounts',text:'返回我的账号'})));
+    return el('div',{class:'connect-page'},downloads,panel('等待分配账号','没有账号时不能连接设备。',emptyState('请先等待账号分配','管理员分配账号后，再回到这里安装客户端并确认设备。在此之前不需要运行安装命令。'+supportContact(),'layers',el('a',{class:'btn',href:'/accounts',text:'返回我的账号'}))));
   }
   let selected = null;
   if (accountId) {
     selected = accounts.find(account => account.id === accountId);
     if (!selected || !['available','limited'].includes(selected.state) || !/^[A-Za-z0-9_.-]+$/.test(accountId)) return panel('账号暂不可用','请返回我的账号重新选择。',el('a',{href:'/accounts',class:'btn',text:'返回我的账号'}));
   }
+  const executables = { windows: '& "$env:LOCALAPPDATA\\Programs\\Anthropic-ccb\\resources\\bin\\ccb.exe"', mac: '"/Applications/Anthropic-ccb.app/Contents/Resources/bin/ccb"', linux: './resources/bin/ccb' };
+  const operatingSystem = /Win/i.test(navigator.platform) ? 'windows' : /Mac/i.test(navigator.platform) ? 'mac' : 'linux';
+  let executable = executables[operatingSystem];
+  const platformSelect = el('select',{id:'client-command-system','aria-label':'电脑系统',value:operatingSystem},el('option',{value:'windows',text:'Windows · PowerShell'}),el('option',{value:'mac',text:'macOS · 终端'}),el('option',{value:'linux',text:'Linux · 终端'}));
+  platformSelect.value=operatingSystem;
+  const platformControl=el('div',{class:'client-command-controls'},el('label',{for:'client-command-system',text:'电脑系统'}),platformSelect,el('span',{text:'使用客户端内置 CCB。Windows 按默认安装目录；macOS 请先移到“应用程序”；Linux 请先进入解压目录。自定义路径需相应替换。'}));
   const approver = state.user?.display_name || state.user?.email || '—';
   const approval = el('section',{class:'card approval-card','aria-label':'设备登录确认'});
   const layout = el('div',{class:'connect-layout'});
@@ -115,27 +125,36 @@ export async function connectView() {
       el('h2',{text:renewal ? '设备已续期' : '设备已登录'}),
       el('p',{class:'lead',text:renewal ? '回到终端等待续期完成。项目历史会保留；设备已过期时需要重新选择账号。' : (selected ? '回到终端等待登录完成。终端会选择当前账号，然后就可以开始项目。' : '回到终端等待登录完成，再查看并选择可用账号，开始你的项目。')}),
       el('div',{class:'approved-device'},el('small',{text:approver}),el('strong',{text:device.name || '未命名设备'})),
-      commandBlock('回到项目终端','ccb'),
+      commandBlock('检查连接',executable+' status'),
       el('a',{class:'btn completion-action',href:'/devices',text:'查看我的设备'})
     );
     place(true);
   }
+  const commands=[commandBlock('初始化命令',executable+' update'),commandBlock('登录命令',loginCommand(selected?.id,executable)),commandBlock('选择账号命令',executable+' account')];
   const steps = el('ol',{class:'connection-steps'},
-    el('li',{},el('h2',{text:'安装 ccb'}),el('p',{text:'需要 Node.js 18 或更新版本。Windows、macOS 和 Linux 使用同一条命令。'}),commandBlock('安装命令','npm install -g @rimuruchan/ccb'),el('p',{class:'instruction-note'},'首次启动时 ccb 会下载官方 Claude Code；电脑上已有 ',el('code',{text:'claude'}),' 时直接使用。以后用同一条命令更新。')),
-    el('li',{},el('h2',{text:'登录这台电脑'}),el('p',{text:'在需要接入的电脑上运行登录命令，浏览器会打开本页让你确认设备。'}),commandBlock('登录命令',loginCommand(selected?.id)),el('p',{class:'instruction-note',text:'浏览器没有自动打开时，在本页「确认终端连接码」中输入终端显示的连接码。登录命令使用本站公开地址；其他电脑需要能访问它。'})),
-    el('li',{},el('h2',{text:'选择账号，开始项目'}),el('p',{text:'回到项目目录，运行启动命令，开始你的项目。'}),commandBlock('启动命令','ccb'),el('p',{class:'instruction-note'},'指定账号的登录命令会在确认设备后完成选择；未指定时会列出可用账号。之后用 ',el('code',{text:'ccb account'}),' 切换。')));
+    el('li',{},el('h2',{text:'安装客户端'}),el('p',{text:'下载上方对应系统的客户端并安装或解压，然后用内置 CCB 准备运行时，无需安装旧版 npm CLI。'}),commands[0],el('p',{class:'instruction-note',text:'该命令下载并校验 Claude Code 运行时，不发起模型请求。客户端内置 CCB 随客户端一起更新，不覆盖系统中其他 CLI。'})),
+    el('li',{},el('h2',{text:'登录这台电脑'}),el('p',{text:'在需要接入的电脑上运行登录命令，浏览器会打开本页让你确认设备。'}),commands[1],el('p',{class:'instruction-note',text:'浏览器没有自动打开时，在本页“确认终端连接码”中输入终端显示的连接码。登录命令使用本站公开地址。'})),
+    el('li',{},el('h2',{text:'选择账号，开始项目'}),el('p',{text:'首次选择可用账号后，打开客户端并选择项目文件夹；不需要另外保持一个终端会话运行。'}),commands[2],el('p',{class:'instruction-note',text:'指定账号的登录命令会在确认设备后完成选择。后续请使用客户端账号菜单切号；存在其他活动会话或未知进程时，会保守暂停。'})));
   const reference = el('dl',{class:'connection-reference','aria-label':'常用命令'});
-  for (const [name, command] of [['继续上次会话','ccb -c'],['切换账号','ccb account'],['检查连接','ccb status'],['设备续期','ccb login --renew'],['更新 Claude Code','ccb update']]) reference.append(el('div',{},el('dt',{text:name}),el('dd',{},el('code',{text:command}))));
+  const references=[['检查连接','status'],['设备续期','login --renew'],['更新 Claude Code','update']];
+  for (const [name,args] of references)reference.append(el('div',{},el('dt',{text:name}),el('dd',{},el('code',{text:executable+' '+args}))));
+  platformSelect.addEventListener('change',()=>{
+    executable=executables[platformSelect.value];
+    if(!executable)return;
+    const values=[executable+' update',loginCommand(selected?.id,executable),executable+' account'];
+    commands.forEach((block,index)=>{block.querySelector('code').textContent=values[index];block.querySelector('.command-copy').textContent='复制';});
+    reference.querySelectorAll('code').forEach((code,index)=>{code.textContent=executable+' '+references[index][1];});
+  });
   const guide = el('section',{class:'connection-instructions','aria-label':'安装与登录指南'},steps,reference);
   renderIdle();
   const account = selected ? el('section',{class:'card account-context'},el('div',{class:'card-body'},el('h2',{text:selected.name || '当前账号'}),el('p',{text:'设备确认后，终端将选择此账号；这不会抢占其他设备。本站当前提供 Code。'}),el('a',{href:'/accounts',text:'返回我的账号'}))) : null;
-  return el('div',{class:'connect-page'},account,layout);
+  return el('div',{class:'connect-page'},downloads,platformControl,account,layout);
 }
-export function loginCommand(accountId) {
+export function loginCommand(accountId, executable) {
   try {
     const address = new URL(String(state.public?.site?.public_origin || ''));
-    if (!['http:','https:'].includes(address.protocol) || address.username || address.password || address.search || address.hash || address.pathname !== '/') return 'ccb login --gateway';
-    return `ccb login --gateway ${address.origin}${accountId?' --account '+accountId+' --surface code':''}`;
+    if (!/^https?:\/\/(?:[A-Za-z0-9.-]+|\[[0-9a-f:]+\])(?::\d+)?$/i.test(address.origin) || (accountId && !/^[A-Za-z0-9_.-]+$/.test(accountId)) || !['http:','https:'].includes(address.protocol) || address.username || address.password || address.search || address.hash || address.pathname !== '/') return executable+' login --gateway';
+    return `${executable} login --gateway ${address.origin}${accountId?' --account '+accountId+' --surface code':''}`;
   } catch { return 'ccb login --gateway'; }
 }
 export function commandBlock(label, command) {
@@ -164,4 +183,27 @@ export function commandBlock(label, command) {
     timer = setTimeout(() => { button.textContent = '复制'; status.textContent = ''; }, 1800);
   });
   return block;
+}
+
+async function desktopDownloadPanel() {
+  const status = el('p',{class:'accb-download-status',role:'status'});
+  const actions = el('div',{class:'accb-download-actions'});
+  const content = el('section',{class:'card accb-download-bar','aria-label':'ACCB 客户端下载'},
+    el('div',{class:'accb-download-heading'},icon('monitor'),el('div',{},el('h2',{text:'客户端'}),el('p',{text:'选择适合你电脑的版本，下载安装后按下方步骤完成登录。'}))),actions,status);
+  try {
+    const response = await fetch('/accb-releases.json',{cache:'no-cache',signal:AbortSignal.timeout(8000)});
+    if (!response.ok || !(response.headers.get('content-type') || '').includes('application/json')) throw new Error('Catalog unavailable');
+    const catalog = parseDesktopRelease(await response.json());
+    for (const target of desktopTargets) {
+      const file = catalog.files.find(file => file.id === target.id);
+      if (!file) { actions.append(el('span',{class:'accb-download-unavailable','aria-disabled':'true',text:target.label + ' · 暂未发布'})); continue; }
+      const size = (file.size / 1048576).toFixed(1) + ' MB';
+      actions.append(el('a',{class:'btn accb-download-link',href:file.href,download:file.name,'aria-label':'下载 ACCB ' + target.label,title:'SHA-256: ' + file.sha256},el('strong',{text:target.label}),el('span',{text:target.detail + ' · ' + size})));
+    }
+    status.append(catalog.version ? '版本 ' + catalog.version + ' · ' : '安装包尚未发布。');
+    if (catalog.version) status.append('自动切号需要 Windows 配套客户端与新网关。Windows 包未做发行商签名；macOS 包仅 ad-hoc 签名、未公证。macOS / Linux 为未完成真机验收的预览包。 ',el('a',{href:'/accb-releases.json',text:'文件校验信息'}));
+  } catch {
+    status.textContent = '暂时无法读取安装包，请稍后刷新。下方命令行连接方式仍可使用。';
+  }
+  return content;
 }

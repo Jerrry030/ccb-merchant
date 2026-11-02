@@ -1861,3 +1861,24 @@
  .device-card { padding: 18px; }
  .device-card-facts { grid-template-columns: 82px minmax(0, 1fr); gap: 10px; }
 }
+
+/* ACCB distribution stays above the existing installation/approval flow. */
+.accb-download-bar { padding: 22px 26px; margin-bottom: 24px; }
+.accb-download-heading { display: flex; align-items: center; gap: 14px; }
+.accb-download-heading > svg { width: 28px; height: 28px; flex: 0 0 auto; }
+.accb-download-heading h2 { margin: 0 0 5px; font-size: 21px; }
+.accb-download-heading p { margin: 0; color: var(--muted); font-size: 13px; }
+.accb-download-actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 18px; }
+.accb-download-link { display: flex; flex: 1 1 175px; align-items: flex-start; flex-direction: column; gap: 5px; padding: 13px 16px; min-width: 0; text-decoration: none; }
+.accb-download-link strong { font-size: 14px; }
+.accb-download-link span { font-size: 12px; color: var(--muted); font-weight: 400; }
+.accb-download-unavailable { padding: 13px 16px; color: var(--muted); font-size: 13px; }
+.accb-download-status { margin: 14px 0 0; color: var(--muted); font-size: 12px; line-height: 1.7; }
+@media (max-width: 600px) {
+ .accb-download-bar { padding: 18px; }
+ .accb-download-link { flex-basis: calc(50% - 10px); }
+}
+
+.client-command-controls { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; margin: 0 0 20px; font-size: 13px; }
+.client-command-controls select { max-width: 100%; padding: 8px 12px; border: 1px solid var(--line); border-radius: 12px; background: var(--panel); color: inherit; }
+.client-command-controls span { flex: 1 1 320px; color: var(--muted); line-height: 1.6; }

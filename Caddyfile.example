@@ -3,7 +3,16 @@
 # SSE is flushed automatically. A negative flush_interval prevents prompt
 # cancellation of the provider request when the client disconnects.
 merchant.example.com {
-    @compressible not path /bridge/v1/*
+    @compressible not path /bridge/v1/* /downloads/accb/*
     encode @compressible gzip
-    reverse_proxy 127.0.0.1:8787
+    # Reviewed public ACCB files only; never application data.
+    handle_path /downloads/accb/* {
+        root * /srv/ccb-downloads/accb
+        header X-Content-Type-Options nosniff
+        header Content-Disposition attachment
+        file_server
+    }
+    handle {
+        reverse_proxy 127.0.0.1:8787
+    }
 }
