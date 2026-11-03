@@ -50,14 +50,11 @@ test('connect page exposes all ACCB downloads, keeps CLI guidance, and fails clo
   assert.equal(assigned.status, 201, assigned.raw);
   await page.reload(); await page.getByRole('heading', { name: '安装客户端', exact: true }).waitFor();
   assert.equal(await panel.locator('.accb-download-status').count(), 0);
-  assert.equal(await page.locator('.client-command-controls span').count(), 0);
+  assert.equal(await page.locator('.client-command-controls, #client-command-system').count(), 0);
+  assert.equal(await page.getByLabel('电脑系统', { exact: true }).count(), 0);
   assert.equal(await page.getByText(/使用客户端内置 CCB。Windows 按默认安装目录/).count(), 0);
-  await page.getByLabel('电脑系统',{exact:true}).selectOption('mac');
-  assert.equal(await page.getByText('"/Applications/Anthropic-ccb.app/Contents/Resources/bin/ccb" update',{exact:true}).count(),2);
-  await page.getByLabel('电脑系统',{exact:true}).selectOption('linux');
-  assert.equal(await page.getByText('./resources/bin/ccb update',{exact:true}).count(),2);
-  await page.getByLabel('电脑系统',{exact:true}).selectOption('windows');
-  assert.match(await page.locator('.connection-steps .command-block').nth(1).locator('code').innerText(),/^& "\$env:LOCALAPPDATA/);
+  assert.deepEqual(await page.locator('.connection-steps .command-line code').allTextContents(), ['ccb update', 'ccb login --gateway ' + f.config.publicOrigin, 'ccb account']);
+  assert.deepEqual(await page.locator('.connection-reference code').allTextContents(), ['ccb status', 'ccb login --renew', 'ccb update']);
   const artifacts = resolve(root, 'tests/browser/artifacts'); await mkdir(artifacts, { recursive: true });
   await page.screenshot({ path: resolve(artifacts, 'accb-downloads-desktop.png'), fullPage: true });
   await page.setViewportSize({ width: 390, height: 844 });

@@ -1878,6 +1878,3 @@
  .accb-download-bar { padding: 18px; }
  .accb-download-link { flex-basis: calc(50% - 10px); }
 }
-
-.client-command-controls { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; margin: 0 0 20px; font-size: 13px; }
-.client-command-controls select { max-width: 100%; padding: 8px 12px; border: 1px solid var(--line); border-radius: 12px; background: var(--panel); color: inherit; }

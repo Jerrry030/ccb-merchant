@@ -172,4 +172,4 @@ Invoke-RestMethod -Uri 'https://merchant.example.com/api/public'
 
 文件下载支持 HEAD/Range，上线验证包括实际响应字节、Content-Length、范围响应及最终 SHA-256，不只检查链接颜色或状态码。包的签名与真机测试状态必须如实显示；安装包可下载不代表已经替用户安装或完成真实模型调用验收。
 
-条件切号要求配套的客户端与 CLI。开始使用页直接给出包内 CCB 的初始化、登录和账号选择命令，不将旧 npm CLI 当成本次升级入口；Windows 自定义安装路径、macOS 应用位置和 Linux 解压目录需按页面提示核对。自动切号目前要求 Windows 进程树证明；其他平台不静默降级。
+条件切号要求配套的客户端与 CLI。开始使用页统一显示 `ccb update`、`ccb login --gateway <本站地址>`、`ccb account` 等简短命令，不再提供电脑系统/终端选择器或生成平台安装路径。运行这些命令前，终端中的 `ccb` 必须已正确安装、可由 PATH 解析且为与客户端配套的版本；页面显示简写不代表自动设置了 PATH，也不将旧 npm CLI 当成本次升级入口。自动切号目前要求 Windows 进程树证明；其他平台不静默降级。

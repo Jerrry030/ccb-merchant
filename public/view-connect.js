@@ -25,12 +25,6 @@ export async function connectView() {
     selected = accounts.find(account => account.id === accountId);
     if (!selected || !['available','limited'].includes(selected.state) || !/^[A-Za-z0-9_.-]+$/.test(accountId)) return panel('账号暂不可用','请返回我的账号重新选择。',el('a',{href:'/accounts',class:'btn',text:'返回我的账号'}));
   }
-  const executables = { windows: '& "$env:LOCALAPPDATA\\Programs\\Anthropic-ccb\\resources\\bin\\ccb.exe"', mac: '"/Applications/Anthropic-ccb.app/Contents/Resources/bin/ccb"', linux: './resources/bin/ccb' };
-  const operatingSystem = /Win/i.test(navigator.platform) ? 'windows' : /Mac/i.test(navigator.platform) ? 'mac' : 'linux';
-  let executable = executables[operatingSystem];
-  const platformSelect = el('select',{id:'client-command-system','aria-label':'电脑系统',value:operatingSystem},el('option',{value:'windows',text:'Windows · PowerShell'}),el('option',{value:'mac',text:'macOS · 终端'}),el('option',{value:'linux',text:'Linux · 终端'}));
-  platformSelect.value=operatingSystem;
-  const platformControl=el('div',{class:'client-command-controls'},el('label',{for:'client-command-system',text:'电脑系统'}),platformSelect);
   const approver = state.user?.display_name || state.user?.email || '—';
   const approval = el('section',{class:'card approval-card','aria-label':'设备登录确认'});
   const layout = el('div',{class:'connect-layout'});
@@ -125,36 +119,28 @@ export async function connectView() {
       el('h2',{text:renewal ? '设备已续期' : '设备已登录'}),
       el('p',{class:'lead',text:renewal ? '回到终端等待续期完成。项目历史会保留；设备已过期时需要重新选择账号。' : (selected ? '回到终端等待登录完成。终端会选择当前账号，然后就可以开始项目。' : '回到终端等待登录完成，再查看并选择可用账号，开始你的项目。')}),
       el('div',{class:'approved-device'},el('small',{text:approver}),el('strong',{text:device.name || '未命名设备'})),
-      commandBlock('检查连接',executable+' status'),
+      commandBlock('检查连接','ccb status'),
       el('a',{class:'btn completion-action',href:'/devices',text:'查看我的设备'})
     );
     place(true);
   }
-  const commands=[commandBlock('初始化命令',executable+' update'),commandBlock('登录命令',loginCommand(selected?.id,executable)),commandBlock('选择账号命令',executable+' account')];
   const steps = el('ol',{class:'connection-steps'},
-    el('li',{},el('h2',{text:'安装客户端'}),el('p',{text:'下载上方对应系统的客户端并安装或解压，然后用内置 CCB 准备运行时，无需安装旧版 npm CLI。'}),commands[0],el('p',{class:'instruction-note',text:'该命令下载并校验 Claude Code 运行时，不发起模型请求。客户端内置 CCB 随客户端一起更新，不覆盖系统中其他 CLI。'})),
-    el('li',{},el('h2',{text:'登录这台电脑'}),el('p',{text:'在需要接入的电脑上运行登录命令，浏览器会打开本页让你确认设备。'}),commands[1],el('p',{class:'instruction-note',text:'浏览器没有自动打开时，在本页“确认终端连接码”中输入终端显示的连接码。登录命令使用本站公开地址。'})),
-    el('li',{},el('h2',{text:'选择账号，开始项目'}),el('p',{text:'首次选择可用账号后，打开客户端并选择项目文件夹；不需要另外保持一个终端会话运行。'}),commands[2],el('p',{class:'instruction-note',text:'指定账号的登录命令会在确认设备后完成选择。后续请使用客户端账号菜单切号；存在其他活动会话或未知进程时，会保守暂停。'})));
+    el('li',{},el('h2',{text:'安装客户端'}),el('p',{text:'下载上方对应系统的客户端并安装或解压，然后用内置 CCB 准备运行时，无需安装旧版 npm CLI。'}),commandBlock('初始化命令','ccb update'),el('p',{class:'instruction-note',text:'该命令下载并校验 Claude Code 运行时，不发起模型请求。客户端内置 CCB 随客户端一起更新，不覆盖系统中其他 CLI。'})),
+    el('li',{},el('h2',{text:'登录这台电脑'}),el('p',{text:'在需要接入的电脑上运行登录命令，浏览器会打开本页让你确认设备。'}),commandBlock('登录命令',loginCommand(selected?.id)),el('p',{class:'instruction-note',text:'浏览器没有自动打开时，在本页“确认终端连接码”中输入终端显示的连接码。登录命令使用本站公开地址。'})),
+    el('li',{},el('h2',{text:'选择账号，开始项目'}),el('p',{text:'首次选择可用账号后，打开客户端并选择项目文件夹；不需要另外保持一个终端会话运行。'}),commandBlock('选择账号命令','ccb account'),el('p',{class:'instruction-note',text:'指定账号的登录命令会在确认设备后完成选择。后续请使用客户端账号菜单切号；存在其他活动会话或未知进程时，会保守暂停。'})));
   const reference = el('dl',{class:'connection-reference','aria-label':'常用命令'});
   const references=[['检查连接','status'],['设备续期','login --renew'],['更新 Claude Code','update']];
-  for (const [name,args] of references)reference.append(el('div',{},el('dt',{text:name}),el('dd',{},el('code',{text:executable+' '+args}))));
-  platformSelect.addEventListener('change',()=>{
-    executable=executables[platformSelect.value];
-    if(!executable)return;
-    const values=[executable+' update',loginCommand(selected?.id,executable),executable+' account'];
-    commands.forEach((block,index)=>{block.querySelector('code').textContent=values[index];block.querySelector('.command-copy').textContent='复制';});
-    reference.querySelectorAll('code').forEach((code,index)=>{code.textContent=executable+' '+references[index][1];});
-  });
+  for (const [name,args] of references)reference.append(el('div',{},el('dt',{text:name}),el('dd',{},el('code',{text:'ccb '+args}))));
   const guide = el('section',{class:'connection-instructions','aria-label':'安装与登录指南'},steps,reference);
   renderIdle();
   const account = selected ? el('section',{class:'card account-context'},el('div',{class:'card-body'},el('h2',{text:selected.name || '当前账号'}),el('p',{text:'设备确认后，终端将选择此账号；这不会抢占其他设备。本站当前提供 Code。'}),el('a',{href:'/accounts',text:'返回我的账号'}))) : null;
-  return el('div',{class:'connect-page'},downloads,platformControl,account,layout);
+  return el('div',{class:'connect-page'},downloads,account,layout);
 }
-export function loginCommand(accountId, executable) {
+export function loginCommand(accountId) {
   try {
     const address = new URL(String(state.public?.site?.public_origin || ''));
-    if (!/^https?:\/\/(?:[A-Za-z0-9.-]+|\[[0-9a-f:]+\])(?::\d+)?$/i.test(address.origin) || (accountId && !/^[A-Za-z0-9_.-]+$/.test(accountId)) || !['http:','https:'].includes(address.protocol) || address.username || address.password || address.search || address.hash || address.pathname !== '/') return executable+' login --gateway';
-    return `${executable} login --gateway ${address.origin}${accountId?' --account '+accountId+' --surface code':''}`;
+    if (!/^https?:\/\/(?:[A-Za-z0-9.-]+|\[[0-9a-f:]+\])(?::\d+)?$/i.test(address.origin) || (accountId && !/^[A-Za-z0-9_.-]+$/.test(accountId)) || !['http:','https:'].includes(address.protocol) || address.username || address.password || address.search || address.hash || address.pathname !== '/') return 'ccb login --gateway';
+    return `ccb login --gateway ${address.origin}${accountId?' --account '+accountId+' --surface code':''}`;
   } catch { return 'ccb login --gateway'; }
 }
 export function commandBlock(label, command) {

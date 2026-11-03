@@ -141,13 +141,14 @@ test('connect query survives login without auto-approval; writes use cookie and 
   assert.equal(await h.page.getByLabel('连接码',{exact:true}).inputValue(),'TEST-CONNECT');
   assert.equal(await h.page.getByText('核对设备信息并确认，然后回到终端继续。',{exact:true}).count(),1);
   assert.equal(await h.page.getByLabel('网关地址',{exact:true}).count(),0);
-  await h.page.getByLabel('电脑系统',{exact:true}).selectOption('linux');
-  assert.equal(await h.page.getByText(`./resources/bin/ccb login --gateway ${h.fixture.origin}`,{exact:true}).count(),1);
-  assert.equal(await h.page.locator('.connection-steps').getByText('./resources/bin/ccb update',{exact:true}).count(),1);
+  assert.equal(await h.page.getByLabel('电脑系统',{exact:true}).count(),0);
+  assert.equal(await h.page.getByText(`ccb login --gateway ${h.fixture.origin}`,{exact:true}).count(),1);
+  assert.equal(await h.page.locator('.connection-steps').getByText('ccb update',{exact:true}).count(),1);
   assert.equal(h.fixture.state.requests.filter(r => r.path.includes('/devices')).length,0);
   await h.page.getByRole('button',{name:'核对设备',exact:true}).click(); await h.page.getByText('我的测试笔记本',{exact:true}).waitFor();
   assert.equal(h.fixture.state.requests.filter(r => r.path.includes('/devices/approve')).length,0);
   await h.page.getByRole('button',{name:'确认设备登录',exact:true}).click(); await h.page.getByRole('heading',{name:'设备已登录',exact:true}).waitFor();
+  assert.equal(await h.page.locator('.approval-card').getByText('ccb status',{exact:true}).count(),1);
   await h.page.getByRole('link',{name:'查看我的设备',exact:true}).click(); await h.page.getByRole('heading',{name:'我的设备',exact:true}).waitFor();
   const writes = h.fixture.state.requests.filter(r => ['/api/me/devices/preview','/api/me/devices/approve'].includes(r.path));
   assert.equal(writes.length,2); for (const req of writes) { assert.equal(req.authenticated,true); assert.match(req.csrf,/^fixture-csrf-/); assert.equal(req.origin,h.fixture.origin); assert.equal(req.body.code,'TEST-CONNECT'); }
@@ -277,11 +278,11 @@ test('connection instructions align headings, command panels and notes without m
   h.fixture.state.public.site.public_origin=selected?'https://gateway-for-long-command-layout.example.test':h.fixture.origin;
   await h.page.goto(h.fixture.origin+'/connect'+(selected?'?account_id='+accountId:''));
   const steps=h.page.locator('.connection-steps');await steps.getByRole('heading',{name:'安装客户端',exact:true}).waitFor();
-  await h.page.getByLabel('电脑系统',{exact:true}).selectOption('linux');
+  assert.equal(await h.page.getByLabel('电脑系统',{exact:true}).count(),0);
   assert.equal(await steps.getByRole('button',{name:/^复制(初始化|登录|选择账号)命令$/}).count(),3);
-  assert.equal(await steps.locator('.command-line pre').nth(0).innerText(),'./resources/bin/ccb update');
-  assert.equal(await steps.locator('.command-line pre').nth(1).innerText(),'./resources/bin/ccb login --gateway '+h.fixture.state.public.site.public_origin+(selected?' --account '+accountId+' --surface code':''));
-  assert.equal(await steps.locator('.command-line pre').nth(2).innerText(),'./resources/bin/ccb account');
+  assert.equal(await steps.locator('.command-line pre').nth(0).innerText(),'ccb update');
+  assert.equal(await steps.locator('.command-line pre').nth(1).innerText(),'ccb login --gateway '+h.fixture.state.public.site.public_origin+(selected?' --account '+accountId+' --surface code':''));
+  assert.equal(await steps.locator('.command-line pre').nth(2).innerText(),'ccb account');
   for(const [width,theme] of [[1920,'light'],[1440,'light'],[1101,'dark'],[1100,'light'],[768,'dark'],[390,'light'],[320,'dark']]){
    await h.page.setViewportSize({width,height:1050});await h.page.evaluate(theme=>document.documentElement.dataset.theme=theme,theme);await h.page.evaluate(()=>document.fonts.ready);
    const rows=await steps.locator(':scope > li').evaluateAll(items=>items.map(item=>{
@@ -307,4 +308,13 @@ test('connection instructions align headings, command panels and notes without m
  await h.page.setViewportSize({width:1440,height:1050});await h.page.goto(h.fixture.origin+'/connect?code=LAYOUT-TEST');await h.page.getByLabel('连接码',{exact:true}).waitFor();
  const order=await h.page.locator('.connect-layout').evaluate(layout=>{const approval=layout.querySelector('.approval-card').getBoundingClientRect(),steps=layout.querySelector('.connection-steps').getBoundingClientRect();return approval.bottom<=steps.top;});assert.equal(order,true,'device confirmation still takes priority over the guide');
  assert.equal(h.fixture.state.requests.filter(request=>request.path.endsWith('/devices/approve')).length,0,'layout changes never auto-approve a device');
+});
+
+test('home login tip uses the same plain ccb command and safe gateway fallback',async t=>{
+ const h=await harness(t,{connected:true,grants:[{id:'grant-home-login',name:'命令测试账号',status:'active'}]});
+ await login(h);await h.page.getByRole('heading',{name:'在另一台电脑上使用？',exact:true}).waitFor();
+ assert.equal(await h.page.locator('.tip-card .command-line code').innerText(),'ccb login --gateway '+h.fixture.origin);
+ h.fixture.state.public.site.public_origin='https://gateway.example.test/?unexpected=1';
+ await h.page.reload();await h.page.getByRole('heading',{name:'在另一台电脑上使用？',exact:true}).waitFor();
+ assert.equal(await h.page.locator('.tip-card .command-line code').innerText(),'ccb login --gateway');
 });
