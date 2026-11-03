@@ -28,12 +28,14 @@ test('non-delegable allocations fail closed, no customer is provisioned and unkn
  assert.equal(inventoryStatus({...f.state.inventory[1],hold_reason:'purchase_pending'}).assignable,false);
 });
 
-test('staff reset requires password and revision, revokes sessions, gates temporary login and keeps secrets out of audit',async t=>{
+test('staff reset needs no administrator password but requires session, CSRF and revision, revokes sessions, gates temporary login and keeps secrets out of audit',async t=>{
  const f=await fixture(t),admin=await f.request('POST','/api/setup',{...adminInput,setup_token:f.setupToken});
  const member=await f.request('POST','/api/admin/users',{email:'buyer@example.test',display_name:'Buyer',password,role:'member'},admin),id=member.data.user.id;
  const old=await f.request('POST','/api/auth/login',{email:'buyer@example.test',password});
- const body={action:'reset_password',admin_password:password,expected_revision:1,new_password:'Temporary-test-password-984',reason:'Support verification complete'};
- assert.equal((await f.request('POST',`/api/admin/users/${id}/credentials`,{...body,admin_password:'wrong'},admin)).status,403);
+ const body={action:'reset_password',expected_revision:1,new_password:'Temporary-test-password-984',reason:'Support verification complete'};
+ assert.equal((await f.request('POST',`/api/admin/users/${id}/credentials`,body)).status,401);
+ assert.equal((await f.request('POST',`/api/admin/users/${id}/credentials`,body,{cookie:admin.cookie,csrf:'invalid'})).status,403);
+ assert.equal((await f.request('POST',`/api/admin/users/${id}/credentials`,body,old)).status,403);
  const reset=await f.request('POST',`/api/admin/users/${id}/credentials`,body,admin);assert.equal(reset.status,200,reset.raw);assert.equal(reset.data.user.must_change_password,true);
  assert.equal((await f.request('GET','/api/auth/session',null,old)).status,401);
  const temporary=await f.request('POST','/api/auth/login',{email:'buyer@example.test',password:body.new_password});assert.equal(temporary.status,200);assert.equal(temporary.data.user.must_change_password,true);
@@ -57,11 +59,11 @@ test('customer revisions reject stale editors and notes stay out of member sessi
  const event=f.store.db.prepare("SELECT details FROM audit WHERE action='user.update' ORDER BY id DESC LIMIT 1").get();assert.equal(JSON.parse(event.details).before.display_name,'Buyer');
 });
 
-test('email correction without verification requires administrator confirmation and invalidates the old session',async t=>{
+test('email correction needs no administrator password and invalidates the old session',async t=>{
  const f=await fixture(t),admin=await f.request('POST','/api/setup',{...adminInput,setup_token:f.setupToken});
  const member=await f.request('POST','/api/admin/users',{email:'buyer@example.test',display_name:'Buyer',password,role:'member'},admin),id=member.data.user.id;
  const old=await f.request('POST','/api/auth/login',{email:'buyer@example.test',password});
- const changed=await f.request('PATCH',`/api/admin/users/${id}`,{expected_revision:1,email:'corrected@example.test',admin_password:password,reason:'Verified correction'},admin);assert.equal(changed.status,200,changed.raw);
+ const changed=await f.request('PATCH',`/api/admin/users/${id}`,{expected_revision:1,email:'corrected@example.test'},admin);assert.equal(changed.status,200,changed.raw);
  assert.equal((await f.request('GET','/api/auth/session',null,old)).status,401);assert.equal((await f.request('POST','/api/auth/login',{email:'corrected@example.test',password})).status,200);
 });
 
@@ -100,18 +102,22 @@ test('batch failures are per-item and unexecuted cancellation does not revoke a 
 });
 
 
-test('verified email change retains the old address until the new mailbox confirms and logs no token',async t=>{
+test('administrator email correction takes effect immediately even with verification enabled, clearing old tokens and pending email',async t=>{
  const sent=[];const f=await fixture(t,{env:{SMTP_HOST:'smtp.example.test',SMTP_FROM:'sender@example.test'},mailer:{send:async(...args)=>sent.push(args)}});
  const admin=await f.request('POST','/api/setup',{...adminInput,setup_token:f.setupToken});
  await f.request('PATCH','/api/admin/settings',{email_verification_enabled:true},admin);
- const created=await f.request('POST','/api/admin/users',{email:'before@example.test',display_name:'Mailbox verification',password,role:'member'},admin),id=created.data.user.id;
- const update=await f.request('PATCH',`/api/admin/users/${id}`,{expected_revision:1,email:'after@example.test',reason:'Verified request',admin_password:password},admin);
- assert.equal(update.status,200,update.raw);assert.equal(update.data.user.email,'before@example.test');assert.equal(update.data.user.pending_email,'after@example.test');
- const [destination,kind,token]=sent.at(-1);assert.equal(destination,'after@example.test');assert.equal(kind,'verify');assert.match(token,/^\d{6}$/);
- const result=await f.request('POST','/api/auth/verify',{email:destination,code:token});assert.equal(result.status,200,result.raw);
- assert.equal(f.store.db.prepare('SELECT email,pending_email FROM users WHERE id=?').get(id).email,'after@example.test');
- assert.equal(JSON.stringify(f.store.db.prepare('SELECT * FROM audit').all()).includes(token),false);
- assert.equal((await f.request('POST','/api/auth/verify',{email:destination,code:token})).status,400);
+ const created=await f.request('POST','/api/admin/users',{email:'before@example.test',display_name:'Mailbox correction',password,role:'member'},admin),id=created.data.user.id;
+ const previous=await f.request('POST','/api/auth/login',{email:'before@example.test',password});
+ f.store.db.prepare("UPDATE users SET pending_email='pending@example.test' WHERE id=?").run(id);
+ f.store.db.prepare("INSERT INTO auth_tokens(token_hash,user_id,kind,expires_at) VALUES('old-verification',?,'verify',?)").run(id,Date.now()+60000);
+ const update=await f.request('PATCH',`/api/admin/users/${id}`,{expected_revision:1,email:'after@example.test'},admin);
+ assert.equal(update.status,200,update.raw);assert.equal(update.data.user.email,'after@example.test');assert.equal(update.data.user.pending_email,null);
+ assert.equal(sent.length,0);assert.equal(f.store.db.prepare('SELECT count(*) n FROM auth_tokens WHERE user_id=?').get(id).n,0);
+ assert.equal((await f.request('GET','/api/auth/session',null,previous)).status,401);
+ assert.equal((await f.request('POST','/api/auth/login',{email:'before@example.test',password})).status,401);
+ assert.equal((await f.request('POST','/api/auth/login',{email:'after@example.test',password})).status,200);
+ const duplicate=await f.request('PATCH',`/api/admin/users/${id}`,{expected_revision:2,email:adminInput.email},admin);
+ assert.equal(duplicate.status,409);assert.equal(duplicate.data.error.code,'email_exists');
 });
 
 test('a saved running batch becomes review on restart and does not release or replay its unknown allocation',async t=>{
@@ -135,4 +141,63 @@ test('revocation after a committed Core write remains unknown until another auth
  const response=await f.request('POST','/api/admin/allocation-batches',{id,action:'execute',items},admin);assert.equal(response.status,503,response.raw);assert.equal(f.state.grants.length,1);
  assert.equal(JSON.parse(f.store.db.prepare('SELECT items FROM allocation_batches WHERE id=?').get(id).items)[0].status,'review');
  const checked=await f.request('POST','/api/admin/allocation-batches',{id,action:'reconcile'},other);assert.equal(checked.status,200,checked.raw);assert.equal(checked.data.batch.items[0].status,'succeeded');assert.equal(f.state.grants.length,1);
+});
+
+test('site administrator sets balances up, down and to zero using immutable adjustments, with no password or duplicate application',async t=>{
+ const f=await fixture(t),admin=await f.request('POST','/api/setup',{...adminInput,setup_token:f.setupToken});
+ const made=await f.request('POST','/api/admin/users',{email:'balance@example.test',display_name:'Balance customer',password,role:'member'},admin),id=made.data.user.id;
+ const member=await f.request('POST','/api/auth/login',{email:'balance@example.test',password});
+ for(const [revision,before,after] of [[1,0,12345],[2,12345,2345],[3,2345,0]]){
+  const body={expected_revision:revision,balance_minor:after,expected_balance_minor:before};
+  const saved=await f.request('PATCH',`/api/admin/users/${id}`,body,admin);
+  assert.equal(saved.status,200,saved.raw);assert.deepEqual(saved.data.user.wallet,{balance_minor:after,currency:'CNY'});
+  assert.equal((await f.request('PATCH',`/api/admin/users/${id}`,body,admin)).status,409);
+ }
+ const rows=f.store.db.prepare('SELECT * FROM ledger WHERE user_id=? ORDER BY rowid').all(id);
+ assert.deepEqual(rows.map(row=>[row.kind,row.amount_minor]),[['admin_adjustment',12345],['admin_adjustment',-10000],['admin_adjustment',-2345]]);
+ assert.ok(rows.every(row=>row.order_id===null&&row.rental_id===null));
+ assert.throws(()=>f.store.db.prepare('DELETE FROM ledger WHERE user_id=?').run(id),/immutable_ledger/);
+ assert.throws(()=>f.store.db.prepare('UPDATE ledger SET amount_minor=1 WHERE user_id=?').run(id),/immutable_ledger/);
+ const events=f.store.db.prepare("SELECT details FROM audit WHERE action='user.balance_adjust' AND customer_id=? ORDER BY id").all(id).map(row=>JSON.parse(row.details));
+ assert.deepEqual(events.map(row=>[row.before_minor,row.after_minor]),[[0,12345],[12345,2345],[2345,0]]);
+ assert.ok(events.every(row=>rows.some(entry=>entry.id===row.ledger_id)));
+ const detail=await f.request('GET',`/api/admin/users/${id}`,null,admin);assert.equal(detail.data.user.wallet.balance_minor,0);
+ const list=await f.request('GET','/api/admin/users?q=balance@example.test',null,admin);assert.equal(list.data.users[0].wallet.balance_minor,0);
+ const wallet=await f.request('GET','/api/me/wallet',null,member);assert.equal(wallet.data.wallet.balance_minor,0);assert.equal(wallet.data.ledger.length,3);
+ assert.equal((await f.request('PATCH',`/api/admin/users/${id}`,{expected_revision:4,balance_minor:100,expected_balance_minor:0},member)).status,403);
+ await f.restart();assert.equal(f.store.wallet(id).balance_minor,0);assert.equal(f.store.db.prepare('SELECT count(*) n FROM ledger WHERE user_id=?').get(id).n,3);
+});
+
+test('balance corrections reject malformed values and staff escalation, and do not overwrite an intervening credit or profile change',async t=>{
+ const f=await fixture(t),admin=await f.request('POST','/api/setup',{...adminInput,setup_token:f.setupToken});
+ const made=await f.request('POST','/api/admin/users',{email:'race@example.test',display_name:'Unchanged',password,role:'member'},admin),id=made.data.user.id;
+ const body={expected_revision:1,balance_minor:200,expected_balance_minor:0};
+ for(const value of [-1,1.5,'100',null,100000001,Number.MAX_SAFE_INTEGER])assert.equal((await f.request('PATCH',`/api/admin/users/${id}`,{...body,balance_minor:value},admin)).status,400);
+ assert.equal((await f.request('PATCH',`/api/admin/users/${id}`,{expected_revision:1,balance_minor:100},admin)).status,400);
+ assert.equal((await f.request('PATCH',`/api/admin/users/${id}`,{expected_revision:1,expected_balance_minor:0},admin)).status,400);
+ const staff=await f.request('POST','/api/admin/users',{email:'support-balance@example.test',display_name:'Support',password,role:'admin',management_profile:'support'},admin);
+ const support=await f.request('POST','/api/auth/login',{email:'support-balance@example.test',password});
+ assert.equal((await f.request('PATCH',`/api/admin/users/${id}`,body,support)).status,403);
+ assert.equal(staff.status,201);
+ const now=new Date().toISOString();
+ f.store.db.prepare("INSERT INTO orders(id,user_id,amount_minor,currency,status,created_at,updated_at) VALUES('concurrent-topup',?,500,'CNY','paid',?,?)").run(id,now,now);
+ f.store.db.prepare("INSERT INTO ledger(id,user_id,order_id,amount_minor,currency,kind,reference,created_at) VALUES('concurrent-credit',?,'concurrent-topup',500,'CNY','payment_credit','credit-concurrent',?)").run(id,now);
+ const conflict=await f.request('PATCH',`/api/admin/users/${id}`,{...body,email:'overwritten@example.test',display_name:'Must not change'},admin);
+ assert.equal(conflict.status,409);assert.equal(conflict.data.error.code,'balance_changed');
+ const current=f.store.db.prepare('SELECT * FROM users WHERE id=?').get(id);assert.equal(current.email,'race@example.test');assert.equal(current.display_name,'Unchanged');assert.equal(current.revision,1);
+ assert.equal(f.store.wallet(id).balance_minor,500);assert.equal(f.store.db.prepare("SELECT count(*) n FROM audit WHERE action='user.balance_adjust'").get().n,0);
+ const saved=await f.request('PATCH',`/api/admin/users/${id}`,{...body,expected_balance_minor:500},admin);assert.equal(saved.status,200,saved.raw);assert.equal(f.store.wallet(id).balance_minor,200);
+ const unchanged=await f.request('PATCH',`/api/admin/users/${id}`,{expected_revision:2,balance_minor:200,expected_balance_minor:200},admin);assert.equal(unchanged.status,200);
+ assert.equal(f.store.db.prepare("SELECT count(*) n FROM ledger WHERE kind='admin_adjustment'").get().n,1);
+});
+
+test('administrator email and profile edits acknowledge their local commit even when they intentionally revoke the actor session',async t=>{
+ const f=await fixture(t),admin=await f.request('POST','/api/setup',{...adminInput,setup_token:f.setupToken}),id=admin.data.user.id;
+ const provisioned=await f.request('POST',`/api/admin/users/${id}/provision`,{},admin);assert.equal(provisioned.status,200,provisioned.raw);
+ const revision=provisioned.data.user.revision;
+ const saved=await f.request('PATCH',`/api/admin/users/${id}`,{expected_revision:revision,email:'owner-corrected@example.test',display_name:'Updated owner'},admin);
+ assert.equal(saved.status,200,saved.raw);assert.equal(saved.data.user.email,'owner-corrected@example.test');assert.equal(saved.data.user.sync_pending,true);
+ assert.equal((await f.request('GET','/api/auth/session',null,admin)).status,401);
+ const login=await f.request('POST','/api/auth/login',{email:'owner-corrected@example.test',password});assert.equal(login.status,200);
+ const reconciled=await f.request('PATCH',`/api/admin/users/${id}`,{},login);assert.equal(reconciled.status,200,reconciled.raw);assert.equal(reconciled.data.user.sync_pending,false);
 });

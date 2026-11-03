@@ -5,7 +5,7 @@ export const auditActions = {
   'setup.complete':'初始化站点', 'auth.login':'登录', 'auth.logout':'退出登录',
   'auth.register':'注册账户', 'auth.register_refresh':'重发注册验证', 'auth.verify':'验证邮箱',
   'auth.reset':'重置密码', 'auth.password':'修改密码', 'mail.verify':'发送验证邮件', 'mail.reset':'发送重置邮件',
-  'user.create':'创建客户', 'user.update':'修改客户资料或权限', 'customer.provision':'同步客户到上游',
+  'user.create':'创建客户', 'user.balance_adjust':'调整客户余额', 'user.update':'修改客户资料或权限', 'customer.provision':'同步客户到上游',
   'customer.reconciled':'核对客户同步', 'grant.create':'分配账号', 'grant.update':'修改账号授权',
   'grant.extend':'延长客户有效期', 'grant.revoke':'收回账号', 'device.approve':'确认设备连接',
   'device.rename':'修改设备名称', 'device.select':'更换设备账号', 'device.revoke':'撤销设备连接',

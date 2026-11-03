@@ -31,7 +31,9 @@ test('wallet purchase is immutable, idempotent and renews exactly once; member c
  const b=await f.request('POST','/api/me/rentals',{...body,renew_grant_id:a.data.rental.grant_id,request_id:randomUUID()},member);assert.equal(b.status,201,b.raw);
  assert.equal(Date.parse(b.data.rental.expires_at)-Date.parse(end),7*86400000);
  assert.equal(f.store.wallet(user.id).balance_minor,600);
- const edit=await f.request('PATCH',`/api/admin/plans/${plan.id}`,{...planBody,amount_minor:500,duration_days:10,expected_revision:1},admin);assert.equal(edit.status,200);
+ const edit=await f.request('PATCH',`/api/admin/plans/${plan.id}`,{...planBody,name:'Renamed premium package',amount_minor:500,duration_days:10,expected_revision:1},admin);assert.equal(edit.status,200);assert.equal(edit.data.plan.name,'Renamed premium package');
+ const renamed=await f.request('GET','/api/plans',null,member);assert.equal(renamed.data.plans.find(p=>p.id===plan.id).name,'Renamed premium package');
+ assert.ok(f.store.db.prepare('SELECT name FROM rentals WHERE user_id=?').all(user.id).every(row=>row.name===plan.name));
  assert.equal((await f.request('POST','/api/me/rentals',{...body,request_id:randomUUID()},member)).status,409);
  assert.equal((await f.request('POST','/api/me/rentals',{...body,payment_method:'stripe'},member)).status,409);
  const orders=await f.request('GET','/api/me/rentals?limit=1',undefined,member);assert.equal(orders.data.total,2);assert.equal(orders.data.rentals[0].duration_days,7);

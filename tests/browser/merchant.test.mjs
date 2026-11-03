@@ -171,8 +171,11 @@ test('grant revoke carries exact revision, rejects 409, then requires fresh expl
 test('last-admin error is actionable and never locally changes the current role',async t => {
   const h = await harness(t); await login(h,'admin'); await h.page.getByRole('link',{name:'客户',exact:true}).click();
   await h.page.getByRole('row').filter({hasText:'admin@example.test'}).getByRole('button',{name:'编辑',exact:true}).click();
+  assert.equal(await h.page.getByLabel('账户余额（人民币元）',{exact:true}).isDisabled(),true);
+  assert.equal(await h.page.getByLabel('账户余额（人民币元）',{exact:true}).inputValue(),'');
   await h.page.getByLabel('账户角色',{exact:true}).selectOption('member'); await h.page.getByRole('button',{name:'保存客户信息',exact:true}).click(); await h.page.getByRole('dialog').filter({hasText:'确认权限变更'}).getByRole('button',{name:'确认变更',exact:true}).click();
   await h.page.getByText('需要保留可用的管理员',{exact:true}).waitFor(); assert.equal(h.fixture.state.users[0].role,'admin'); assert.equal(await h.page.getByRole('link',{name:'设置',exact:true}).count(),1);
+  const write=h.fixture.state.requests.find(r=>r.method==='PATCH'&&r.path==='/api/admin/users/admin-1');assert.ok(write);assert.equal(Object.hasOwn(write.body,'balance_minor'),false);
 });
 
 

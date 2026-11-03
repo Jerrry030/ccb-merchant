@@ -1,3 +1,4 @@
+import { migrateWalletSchema } from './wallet-migration.js';
 import { migrateCustody } from './custody-migration.js';
 import { DatabaseSync } from 'node:sqlite';
 import { mkdirSync, chmodSync, existsSync, readFileSync, writeFileSync, unlinkSync } from 'node:fs';
@@ -16,7 +17,7 @@ export class Store {
     chmodSync(path, 0o600);
     try {
       const tables=this.db.prepare("SELECT count(*) AS n FROM sqlite_schema WHERE type='table' AND name NOT LIKE 'sqlite_%'").get().n;
-      if(tables && (this.db.prepare('PRAGMA application_id').get().application_id!==1128481357 || ![2,3,4,5,6].includes(this.db.prepare('PRAGMA user_version').get().user_version))) throw new Error('Database schema does not match this build; use a matching or empty data directory');
+      if(tables && (this.db.prepare('PRAGMA application_id').get().application_id!==1128481357 || ![2,3,4,5,6,7].includes(this.db.prepare('PRAGMA user_version').get().user_version))) throw new Error('Database schema does not match this build; use a matching or empty data directory');
       this.db.exec('PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000;');
       if(!tables) {
         this.db.exec('BEGIN IMMEDIATE');
@@ -69,7 +70,8 @@ export class Store {
       this.paymentKey=readFileSync(paymentKey);
       if(this.paymentKey.length!==32)throw new Error('Invalid payment encryption key');
       migratePaymentSchema(config,this);
-      this.db.exec('PRAGMA user_version=6');
+      migrateWalletSchema(this);
+      this.db.exec('PRAGMA user_version=7');
     }catch(error){this.db.close();throw error;}
     this.setupFile = join(config.dataDir, 'setup.secret');
     if (!this.db.prepare("SELECT 1 FROM settings WHERE key='setup_complete'").get() && !this.db.prepare('SELECT 1 FROM users LIMIT 1').get()) {
@@ -157,8 +159,8 @@ export class Store {
   }
 
 }
-export function publicUser(user, admin = false) {
-  return { id: user.id, email: user.email, display_name: user.display_name, role: user.role, status: user.status, ...(user.core_customer_id ? { core_customer_id: user.core_customer_id } : {}), created_at: user.created_at, revision:user.revision || 1, must_change_password:Boolean(user.must_change_password), ...(admin?{notes:user.notes || '',tags:JSON.parse(user.tags || '[]'),pending_email:user.pending_email || null}:{}), last_login_at:user.last_login_at || null, management_profile:user.management_profile || 'owner', sync_pending:Boolean(user.core_pending || (!user.core_customer_id && user.provision_name)), sync_error:user.sync_error || null };
+export function publicUser(user, admin = false, wallet) {
+  return { id: user.id, email: user.email, display_name: user.display_name, role: user.role, status: user.status, ...(user.core_customer_id ? { core_customer_id: user.core_customer_id } : {}), created_at: user.created_at, revision:user.revision || 1, must_change_password:Boolean(user.must_change_password), ...(admin?{notes:user.notes || '',tags:JSON.parse(user.tags || '[]'),pending_email:user.pending_email || null,...(wallet?{wallet}:{})}:{}), last_login_at:user.last_login_at || null, management_profile:user.management_profile || 'owner', sync_pending:Boolean(user.core_pending || (!user.core_customer_id && user.provision_name)), sync_error:user.sync_error || null };
 }
 export function publicOrder(order) {
   return { id: order.id, status: order.status, amount_minor: order.amount_minor, currency: order.currency, created_at: order.created_at, updated_at: order.updated_at, rental_id:order.rental_id || null, payment_method:order.payment_method, provider:order.provider };

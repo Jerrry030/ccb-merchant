@@ -59,15 +59,14 @@ export class Auth {
     const route=`${req.method} ${path}`;
     const credentials=path.match(/^\/api\/admin\/users\/([A-Za-z0-9_-]+)\/credentials$/);
     if(req.method==='POST'&&credentials){
-      fields(body,['action','admin_password','new_password','expected_revision','reason'],['action','admin_password','expected_revision','reason']);
+      fields(body,['action','new_password','expected_revision','reason'],['action','expected_revision']);
       if(!['reset_password','email_reset','revoke_sessions'].includes(body.action))throw new HttpError(400,'invalid_input','Unknown credential operation.');
       const actor=this.require(req,true).user, target=this.store.db.prepare('SELECT * FROM users WHERE id=?').get(credentials[1]);
       if(!target)throw new HttpError(404,'user_not_found','Customer not found.');
       if(target.id===actor.id)throw new HttpError(409,'self_credentials','Use your own login-security page.');
       if(target.role==='admin'&&actor.management_profile!=='owner')throw new HttpError(403,'admin_required','Only the site administrator can manage staff credentials.');
-      const reason=text(body.reason,'reason',500);
+      const reason=text(body.reason??'','reason',500,0);
       this.store.throttle('admin-credentials:'+actor.id,10,600000);
-      if(!await passwordHash(body.admin_password,actor.password_hash)){this.store.audit(actor.id,'user.credentials_rejected',target.id,'denied',{customer_id:target.id,details:{action:body.action,reason:'administrator_reauthentication_failed'}});throw new HttpError(403,'invalid_password','Administrator password is incorrect.');}
       const hashed=body.action==='reset_password'?await passwordHash(body.new_password):null;
       const check=()=>{const current=this.require(req,true).user;if(current.id!==actor.id||current.password_hash!==actor.password_hash||current.management_profile!==actor.management_profile)throw new HttpError(409,'account_changed','Administrator credentials changed.');const fresh=this.store.db.prepare('SELECT * FROM users WHERE id=?').get(target.id);if(!fresh||!Number.isSafeInteger(body.expected_revision)||fresh.revision!==body.expected_revision)throw new HttpError(409,'customer_changed','Refresh the customer before changing credentials.');return fresh;};
       check();

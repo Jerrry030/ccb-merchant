@@ -8,6 +8,7 @@ import { Access } from './access.js';
 import { Customers } from './customers.js';
 import { Commerce, publicPlan } from './commerce.js';
 import { Reconciler } from './reconciler.js';
+import { randomUUID } from 'node:crypto';
 import { createServer } from 'node:http';
 import { readFile, realpath, stat } from 'node:fs/promises';
 import { resolve, relative, extname, isAbsolute, basename } from 'node:path';
@@ -432,14 +433,14 @@ export function createMerchant(config, options={}) {
           if(page.assignment==='sync_pending')conditions.push("(core_pending IS NOT NULL OR (provision_name IS NOT NULL AND core_customer_id IS NULL))");
           if(!['unassigned','assigned'].includes(page.assignment)&&!page.due){
             const where=conditions.join(' AND '),total=store.db.prepare('SELECT COUNT(*) n FROM users WHERE '+where).get(...args).n;
-            const users=store.db.prepare('SELECT * FROM users WHERE '+where+' ORDER BY created_at,id LIMIT ? OFFSET ?').all(...args,page.limit,page.offset).map(u=>publicUser(u,true));respond(res,200,{users,total,limit:page.limit,offset:page.offset});return;
+            const users=store.db.prepare('SELECT * FROM users WHERE '+where+' ORDER BY created_at,id LIMIT ? OFFSET ?').all(...args,page.limit,page.offset).map(u=>publicUser(u,true,store.wallet(u.id)));respond(res,200,{users,total,limit:page.limit,offset:page.offset});return;
           }
           let rows=store.db.prepare('SELECT * FROM users WHERE '+conditions.join(' AND ')+' ORDER BY created_at,id').all(...args);
           if(['unassigned','assigned'].includes(page.assignment)||page.due){
             const accounts=await inventory.read();auth.require(req,true);
             rows=rows.filter(u=>{const owned=accounts.filter(a=>a.user_id===u.id&&a.assigned&&a.status==='active'&&(a.source==='owned'&&a.expires_at===null||Date.parse(a.expires_at)>Date.now())&&Date.parse(a.customer_expires_at)>Date.now());return (!page.assignment||page.assignment==='sync_pending'||(page.assignment==='assigned'?owned.length>0:owned.length===0))&&(!page.due||owned.some(a=>Date.parse(a.customer_expires_at)<=Date.now()+Number(page.due)*86400000));});
           }
-          respond(res,200,{users:rows.slice(page.offset,page.offset+page.limit).map(u=>publicUser(u,true)),total:rows.length,limit:page.limit,offset:page.offset});return;
+          respond(res,200,{users:rows.slice(page.offset,page.offset+page.limit).map(u=>publicUser(u,true,store.wallet(u.id))),total:rows.length,limit:page.limit,offset:page.offset});return;
         }
         case 'POST /api/admin/users': {
           fields(body,['email','password','display_name','role','management_profile'],['email','password','display_name','role']);
@@ -449,7 +450,7 @@ export function createMerchant(config, options={}) {
           const address=email(body.email), name=text(body.display_name,'display_name',100), hash=await passwordHash(body.password);
           auth.require(req,true); // Recheck privileges after asynchronous password hashing.
           const created=store.transaction(()=>{ const added=store.createUser({email:address,display_name:name,password_hash:hash,role:body.role,status:'active'}); if(body.role==='admin'&&body.management_profile)store.db.prepare('UPDATE users SET management_profile=? WHERE id=?').run(body.management_profile,added.id);store.audit(user.id,'user.create',added.id);return store.db.prepare('SELECT * FROM users WHERE id=?').get(added.id); });
-          respond(res,201,{user:publicUser(created,true)}); return;
+          respond(res,201,{user:publicUser(created,true,store.wallet(created.id))}); return;
         }
         case 'GET /api/admin/account-intake': { const data=await custody.options();auth.require(req,true);respond(res,200,data);return; }
         case 'GET /api/admin/resources': { const data=await core.request('GET','/access/v1/resources'); respond(res,200,{resources:collection(data.resources,schemas.resource)}); return; }
@@ -534,9 +535,9 @@ export function createMerchant(config, options={}) {
             if(target.core_pending) throw new HttpError(409,'core_sync_pending','Reconcile the pending user change before provisioning.');
             const customer=await customers.synchronize(target.id,()=>auth.require(req,true));
             target=store.db.prepare('SELECT * FROM users WHERE id=?').get(target.id);
-            respond(res,200,{user:publicUser(target,true),customer}); return;
+            respond(res,200,{user:publicUser(target,true,store.wallet(target.id)),customer}); return;
           }
-          fields(body,['display_name','status','role','expected_revision','email','notes','tags','admin_password','reason','management_profile']);
+          fields(body,['display_name','status','role','expected_revision','email','notes','tags','reason','management_profile','balance_minor','expected_balance_minor']);
           const editing=Object.keys(body).some(key=>key!=='expected_revision');
           if(editing&&(!Number.isSafeInteger(body.expected_revision)||body.expected_revision!==target.revision))throw new HttpError(409,'customer_changed','Customer information changed. Refresh before saving.');
           if(user.management_profile!=='owner'&&(target.role==='admin'||body.role&&body.role!=='member'||body.management_profile))throw new HttpError(403,'admin_required','Only the site administrator can change staff roles.');
@@ -546,38 +547,44 @@ export function createMerchant(config, options={}) {
           const newEmail=body.email===undefined?target.email:email(body.email),emailChanged=newEmail!==target.email;
           const notes=body.notes===undefined?target.notes:text(body.notes,'notes',4000,0);
           let tags=JSON.parse(target.tags||'[]');if(body.tags!==undefined){if(!Array.isArray(body.tags)||body.tags.length>20)throw new HttpError(400,'invalid_input','At most 20 tags are allowed.');tags=[...new Set(body.tags.map(tag=>text(tag,'tag',40)))];}
-          let pendingEmail=target.pending_email;
-          if(emailChanged){
-            text(body.reason,'reason',500);store.throttle('email-change:'+user.id,10,600000);
-            if(!await passwordHash(body.admin_password,user.password_hash))throw new HttpError(403,'invalid_password','Administrator password is incorrect.');
-            const freshActor=auth.require(req,true).user;
-            if(freshActor.password_hash!==user.password_hash||freshActor.management_profile!==user.management_profile)throw new HttpError(409,'account_changed','Administrator credentials changed.');
-            if(store.db.prepare('SELECT id FROM users WHERE (email=? OR pending_email=?) AND id<>?').get(newEmail,newEmail,target.id))throw new HttpError(409,'email_exists','This address is already used or awaiting verification.');
-            if(settings().features.email_verification){if(!auth.mailer)throw new HttpError(409,'mail_disabled','Email verification must be available before changing this address.');pendingEmail=newEmail;}
-          }
+          const reason=text(body.reason??'','reason',500,0);
+          const balanceEdit=body.balance_minor!==undefined;
+          if(balanceEdit&&user.management_profile!=='owner')throw new HttpError(403,'admin_required','Only the site administrator can adjust balances.');
+          if(balanceEdit&&(!Number.isSafeInteger(body.balance_minor)||body.balance_minor<0||body.balance_minor>100000000||!Number.isSafeInteger(body.expected_balance_minor)))throw new HttpError(400,'invalid_balance','Balance must be between 0 and 100000000 minor units, with its previous balance.');
+          if(!balanceEdit&&body.expected_balance_minor!==undefined)throw new HttpError(400,'invalid_balance','A balance correction requires a target balance.');
+          const pendingEmail=emailChanged?null:target.pending_email;
           if(store.db.prepare('SELECT revision FROM users WHERE id=?').get(target.id)?.revision!==target.revision)throw new HttpError(409,'customer_changed','Customer changed while validating.');
 
           if(!Object.keys(body).length && !target.core_pending) throw new HttpError(400,'invalid_input','Provide a user change.');
           if(body.status!==undefined && !['active','disabled'].includes(body.status)) throw new HttpError(400,'invalid_status','Invalid user status.');
           if(body.role!==undefined && !['admin','member'].includes(body.role)) throw new HttpError(400,'invalid_role','Invalid role.');
 
-          if(target.status==='pending_verification' && body.status==='active') throw new HttpError(409,'verification_required','Email verification must be completed.');
-          const desired={display_name:body.display_name===undefined?target.display_name:text(body.display_name,'display_name',100),status:body.status || target.status};
-          const needsSync=Boolean(target.core_customer_id && (body.status!==undefined || body.display_name!==undefined || target.core_pending));
+          const desired={display_name:body.display_name===undefined?target.display_name:text(body.display_name,'display_name',100),status:body.status || (emailChanged&&target.status==='pending_verification'?'active':target.status)};
+          const needsSync=Boolean(target.core_customer_id && (desired.status!==target.status || desired.display_name!==target.display_name || target.core_pending));
+          const invalidatesActor=target.id===user.id&&(emailChanged||body.role&&body.role!==target.role||body.management_profile&&body.management_profile!==target.management_profile);
           store.transaction(()=>{
+            const beforeBalance=store.wallet(target.id).balance_minor;
+            if(balanceEdit&&beforeBalance!==body.expected_balance_minor)throw new HttpError(409,'balance_changed','Balance changed. Refresh before saving a correction.');
+            if(emailChanged&&store.db.prepare('SELECT id FROM users WHERE (email=? OR pending_email=?) AND id<>?').get(newEmail,newEmail,target.id))throw new HttpError(409,'email_exists','This address is already used or awaiting verification.');
             const localStatus=needsSync && desired.status==='active' && target.status==='disabled'?'disabled':desired.status;
-            store.db.prepare('UPDATE users SET display_name=?,role=?,status=?,core_pending=?,next_sync_at=0,sync_error=NULL,revision=revision+1,email=?,pending_email=?,notes=?,tags=?,management_profile=? WHERE id=? AND revision=?').run(desired.display_name,body.role || target.role,localStatus,needsSync?JSON.stringify(desired):target.core_pending,emailChanged&&!settings().features.email_verification?newEmail:target.email,pendingEmail,notes,JSON.stringify(tags),body.management_profile||target.management_profile,target.id,target.revision);
-            if(emailChanged&&!settings().features.email_verification){store.db.prepare('DELETE FROM sessions WHERE user_id=?').run(target.id);store.db.prepare('DELETE FROM auth_tokens WHERE user_id=?').run(target.id);}
+            const updated=store.db.prepare('UPDATE users SET display_name=?,role=?,status=?,core_pending=?,next_sync_at=0,sync_error=NULL,revision=revision+1,email=?,pending_email=?,notes=?,tags=?,management_profile=? WHERE id=? AND revision=?').run(desired.display_name,body.role || target.role,localStatus,needsSync?JSON.stringify(desired):target.core_pending,newEmail,pendingEmail,notes,JSON.stringify(tags),body.management_profile||target.management_profile,target.id,target.revision);
+            if(updated.changes!==1)throw new HttpError(409,'customer_changed','Customer changed before saving.');
+            if(emailChanged){store.db.prepare('DELETE FROM sessions WHERE user_id=?').run(target.id);store.db.prepare('DELETE FROM auth_tokens WHERE user_id=?').run(target.id);}
             if(localStatus!=='active' || (body.role && body.role!==target.role) || body.management_profile&&body.management_profile!==target.management_profile) store.db.prepare('DELETE FROM sessions WHERE user_id=?').run(target.id);
-            store.audit(user.id,'user.update',target.id,needsSync?'core_pending':'ok',{customer_id:target.id,details:{reason:body.reason||null,before:{display_name:target.display_name,role:target.role,status:target.status,email:target.email,notes:target.notes,tags:JSON.parse(target.tags||'[]'),management_profile:target.management_profile},after:{...desired,role:body.role||target.role,email:emailChanged?newEmail:target.email,notes,tags,management_profile:body.management_profile||target.management_profile},email_verification_pending:Boolean(pendingEmail)}});
+            if(balanceEdit&&body.balance_minor!==beforeBalance){
+              const entryId=randomUUID(),delta=body.balance_minor-beforeBalance;
+              if(!Number.isSafeInteger(delta))throw new HttpError(409,'balance_changed','The current balance cannot be safely adjusted.');
+              store.db.prepare("INSERT INTO ledger(id,user_id,amount_minor,currency,kind,reference,created_at) VALUES(?,?,?,'CNY','admin_adjustment',?,?)").run(entryId,target.id,delta,'admin:'+entryId,new Date().toISOString());
+              store.audit(user.id,'user.balance_adjust',target.id,'ok',{customer_id:target.id,details:{reason,before_minor:beforeBalance,after_minor:body.balance_minor,amount_minor:delta,ledger_id:entryId}});
+            }
+            store.audit(user.id,'user.update',target.id,needsSync?'core_pending':'ok',{customer_id:target.id,details:{reason:reason||null,before:{display_name:target.display_name,role:target.role,status:target.status,email:target.email,notes:target.notes,tags:JSON.parse(target.tags||'[]'),management_profile:target.management_profile},after:{...desired,role:body.role||target.role,email:emailChanged?newEmail:target.email,notes,tags,management_profile:body.management_profile||target.management_profile},email_verification_pending:Boolean(pendingEmail)}});
           });
-          if(emailChanged&&pendingEmail)await auth.sendMail({...target,email:pendingEmail},'verify');
-          if(needsSync) await customers.synchronize(target.id,()=>auth.require(req,true));
+          if(needsSync&&!invalidatesActor) await customers.synchronize(target.id,()=>auth.require(req,true));
           target=store.db.prepare('SELECT * FROM users WHERE id=?').get(target.id);
-          respond(res,200,{user:publicUser(target,true)}); return;
+          respond(res,200,{user:publicUser(target,true,store.wallet(target.id))}); return;
         } finally { lockedUsers.delete(targetId); }
       }
-      if(req.method==='GET'&&/^\/api\/admin\/users\/[A-Za-z0-9_-]+$/.test(path)){auth.require(req,true);const row=store.db.prepare('SELECT * FROM users WHERE id=?').get(path.split('/').at(-1));if(!row)throw new HttpError(404,'user_not_found','User not found.');respond(res,200,{user:publicUser(row,true)});return;}
+      if(req.method==='GET'&&/^\/api\/admin\/users\/[A-Za-z0-9_-]+$/.test(path)){auth.require(req,true);const row=store.db.prepare('SELECT * FROM users WHERE id=?').get(path.split('/').at(-1));if(!row)throw new HttpError(404,'user_not_found','User not found.');respond(res,200,{user:publicUser(row,true,store.wallet(row.id))});return;}
       throw new HttpError(404,'not_found','API route not found.');
     } catch(error) {
       if(res.headersSent) {res.destroy(); return;}

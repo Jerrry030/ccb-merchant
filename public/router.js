@@ -22,7 +22,7 @@ export const navigation = [
   { path:"/admin/inventory", nav:"inventory", title:"库存", icon:"layers", admin:true, description:'查看平台管理员分配的账号、有效期和客户分配状态。每个账号最多绑定 1 台设备。' },
   { path:"/admin/devices", nav:"admin-devices", title:"设备", icon:"monitor", admin:true, description:'默认只显示已授权、仍在使用的设备。需要查看已撤销或其他状态时，使用授权状态筛选。操作始终归属于对应客户。' },
   { path:"/admin/rentals", nav:"rentals-admin", title:"订单管理", icon:"receipt", admin:true, description:"核对套餐、交付和支付。支付结果以服务端记录为准。" },
-  { path:"/admin/plans", nav:"plans-admin", title:"套餐管理", icon:"layers", admin:true, description:'只为订阅分组设置有效期和金额。普通分组不在这里出售。' },
+  { path:"/admin/plans", nav:"plans-admin", title:"套餐管理", icon:"layers", admin:true, description:'为订阅分组设置套餐名称、有效期和销售价。普通分组不在这里出售。' },
   { path:"/admin/orders", nav:"payments-admin", title:"支付记录", icon:"receipt", admin:true, description:'核对服务端记录的支付状态，不以回跳参数判定到账。' },
   { path:"/admin/audit", nav:"audit", title:"审计", icon:"shield", admin:true, description:'查看管理操作记录，追溯变更与授权。' },
   { path:"/admin/settings", nav:"settings", title:"设置", icon:"settings", admin:true, description:'管理公开信息、注册策略、上游连接，以及邮件和支付服务。' },

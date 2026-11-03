@@ -72,7 +72,7 @@ test('a lost purchase response recovers the original request after reload withou
   const rental=f.store.db.prepare('SELECT * FROM rentals WHERE request_id=?').get(key);assert.equal(rental.status,'fulfilled');assert.equal(f.store.wallet(buyer.data.user.id).balance_minor,700);
   const changed=await f.request('PATCH','/api/admin/plans/'+plan.id,{name:'Changed price',description:'',duration_days:7,amount_minor:400,status:'active',expected_revision:plan.revision},admin);assert.equal(changed.status,200,changed.raw);
   await page.reload();await page.getByRole('heading',{name:'套餐订单详情',exact:true}).waitFor();
-  assert.equal(new URL(page.url()).searchParams.get('rental'),rental.id);assert.equal(await page.getByText('¥3.00 / 7 天 · 版本 1',{exact:true}).count(),1);
+  assert.equal(new URL(page.url()).searchParams.get('rental'),rental.id);assert.equal(await page.getByText('¥3.00 / 7 天',{exact:true}).count(),1);assert.equal((await page.locator('.rental-detail').innerText()).includes('版本'),false);assert.equal(rental.plan_revision,1);
   assert.equal(requests.filter(request=>request.path==='/api/me/rentals'&&request.method==='POST').length,1);
   assert.equal(f.store.db.prepare('SELECT count(*) n FROM rentals').get().n,1);assert.equal(f.store.db.prepare("SELECT count(*) n FROM ledger WHERE kind='rental_debit'").get().n,1);
   const id=rental.id;await page.goto(f.config.publicOrigin+'/orders?rental='+id);await page.getByRole('heading',{name:'套餐订单详情',exact:true}).waitFor();

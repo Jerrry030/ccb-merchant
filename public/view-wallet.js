@@ -15,7 +15,7 @@ export async function walletView() {
     enabled?el('a',{class:'btn primary',href:'/checkout?recharge=1',text:'充值'}):el('button',{class:'btn',type:'button',disabled:true,text:state.public.features.payment===true?'余额充值未启用':'在线支付未启用'}));
   const ledger=table([
     {label:'记录时间',render:r=>date(r.created_at)},
-    {label:'资金变动',render:r=>['stripe_credit','payment_credit'].includes(r.kind)?(r.payment_rental_id?'套餐在线支付入账':'充值入账'):({rental_debit:'套餐购买扣款',rental_refund:'未交付退回余额'}[r.kind]||r.kind||'未提供')},
+    {label:'资金变动',render:r=>['stripe_credit','payment_credit'].includes(r.kind)?(r.payment_rental_id?'套餐在线支付入账':'充值入账'):({admin_adjustment:'管理员调整余额',rental_debit:'套餐购买扣款',rental_refund:'未交付退回余额'}[r.kind]||r.kind||'未提供')},
     {label:'变动金额',render:r=>money(r.amount_minor,r.currency||data.wallet?.currency)},
     {label:'关联订单',render:r=>r.rental_id?el('a',{class:'mono',href:'/orders?rental='+encodeURIComponent(r.rental_id),text:r.rental_id}):r.order_id?el('a',{class:'mono',href:'/checkout?order='+encodeURIComponent(r.order_id),text:r.order_id}):'—'},
   ],collection(data,'ledger'),'暂无资金记录','余额变化经服务器确认后显示在这里。');

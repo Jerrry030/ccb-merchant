@@ -41,7 +41,7 @@ export async function rentalsView() {
     if(!rental)return emptyState('没有找到套餐订单','请核对订单编号及当前登录账户。','receipt',el('a',{class:'btn',href:'/orders',text:'返回套餐订单'}));
     const facts=el('dl',{class:'checkout-facts'},
       el('dt',{text:'订单编号'}),el('dd',{class:'mono',text:rental.id}),el('dt',{text:'套餐'}),el('dd',{text:rental.name}),
-      el('dt',{text:'购买快照'}),el('dd',{text:money(rental.amount_minor,rental.currency)+' / '+rental.duration_days+' 天 · 版本 '+rental.plan_revision}),
+      el('dt',{text:'购买快照'}),el('dd',{text:money(rental.amount_minor,rental.currency)+' / '+rental.duration_days+' 天'}),
       el('dt',{text:'登录平台'}),el('dd',{text:rental.platform||'未提供'}),el('dt',{text:'购买类型'}),el('dd',{text:rental.renew_grant_id?'原账号续期':'新购账号'}),
       el('dt',{text:'支付状态'}),el('dd',{},rental.payment_status?badge(rental.payment_status):'未确认'),el('dt',{text:'交付状态'}),el('dd',{},badge(rental.status)),
       el('dt',{text:'已交付期限'}),el('dd',{text:date(rental.expires_at)}));

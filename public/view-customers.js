@@ -9,27 +9,36 @@ import { toast, badge, statusBadge, notice, emptyState, panel, table, stat, expi
 import { CANCEL, field, confirmAction, bindForm, editorDialog } from './ui-form.js';
 import { render } from './app.js';
 function customerEditor(user) {
-  const create=!user,full=state.user.management_profile==='owner'||!state.user.management_profile;
+  const create=!user,full=state.user.management_profile==='owner'||!state.user.management_profile,walletKnown=Number.isSafeInteger(user?.wallet?.balance_minor)&&user.wallet.currency==='CNY';
   const form=el('form',{},field('电子邮箱','email',{type:'email',required:true,maxlength:254,value:user?.email||'',autocomplete:'off'}));
   if(create)form.append(field('初始密码','password',{type:'password',required:true,minlength:6,maxlength:256,autocomplete:'new-password',hint:'至少 6 个字符。请通过安全渠道交付；保存后不会显示。'}));
   form.append(field('显示名称','display_name',{required:true,maxlength:100,value:user?.display_name||''}));
+  if(!create&&full)form.append(field('账户余额（人民币元）','balance',{type:'number',required:true,min:0,max:1000000,step:0.01,value:walletKnown?String(user.wallet.balance_minor/100):'',disabled:!walletKnown,placeholder:walletKnown?'':'余额暂不可用',hint:walletKnown?'直接设置可用余额；增减金额会记入余额流水。':'仍可修改其他资料；请刷新后再调整余额。'}));
   if(full)form.append(field('账户角色','role',{type:'select',choices:[{value:'member',label:'成员'},{value:'admin',label:'管理员'}],value:user?.role||'member'}),field('管理权限','management_profile',{type:'select',choices:Object.entries(managementProfiles).map(([value,label])=>({value,label})),value:user?.management_profile||'owner',hint:'仅管理员角色生效；客服、运营和财务不能修改站点设置。'}));
-  if(!create)form.append(field('账户状态','status',{type:'select',choices:[{value:'active',label:'正常'},{value:'disabled',label:'停用'},...(user.status==='pending_verification'?[{value:'pending_verification',label:'待验证'}]:[])],value:user.status,disabled:user.id===state.user.id}),field('备注','notes',{type:'textarea',maxlength:4000,value:user.notes||'',hint:'仅本站管理人员可见，不向提供方发送。'}),field('标签','tags',{value:(user.tags||[]).join(', '),hint:'逗号分隔，最多 20 个标签。'}),field('变更原因','reason',{maxlength:500}),field('管理员密码（修改邮箱时必填）','admin_password',{type:'password',autocomplete:'current-password'}),user.pending_email?notice('邮箱验证待完成',user.pending_email+'；验证前仍使用原邮箱登录。','warn'):null);
+  if(!create)form.append(field('账户状态','status',{type:'select',choices:[{value:'active',label:'正常'},{value:'disabled',label:'停用'},...(user.status==='pending_verification'?[{value:'pending_verification',label:'待验证'}]:[])],value:user.status,disabled:user.id===state.user.id}),field('备注','notes',{type:'textarea',maxlength:4000,value:user.notes||'',hint:'仅本站管理人员可见，不向提供方发送。'}),field('标签','tags',{value:(user.tags||[]).join(', '),hint:'逗号分隔，最多 20 个标签。'}),field('变更备注（选填）','reason',{maxlength:500}),...(user.pending_email?[notice('邮箱验证待完成',user.pending_email+'；验证前仍使用原邮箱登录。','warn')]:[]));
   const roleControl=form.querySelector('[name=role]'),profileField=form.querySelector('[name=management_profile]')?.closest('.field');if(roleControl&&profileField){profileField.hidden=roleControl.value!=='admin';roleControl.addEventListener('change',()=>profileField.hidden=roleControl.value!=='admin');}
   form.append(el('button',{class:'btn primary',type:'submit',text:create?'创建客户账户':'保存客户信息'}));
   const dialog=editorDialog(create?'创建客户账户':'编辑 '+(user.display_name||user.email),form);
   bindForm(form,async values=>{
    const payload=Object.fromEntries(values);payload.role=payload.role||user?.role||'member';
    if(payload.role!=='admin')delete payload.management_profile;
-   if(!create){payload.expected_revision=user.revision;payload.tags=(payload.tags||'').split(/[,，]/).map(v=>v.trim()).filter(Boolean);if(payload.status===user.status)delete payload.status;if(payload.email===user.email){delete payload.admin_password;delete payload.email;}else if(!payload.reason||!payload.admin_password)throw new Error('修改邮箱需要管理员密码和变更原因。');}
+   if(!create){payload.expected_revision=user.revision;payload.tags=(payload.tags||'').split(/[,，]/).map(v=>v.trim()).filter(Boolean);if(payload.status===user.status)delete payload.status;if(payload.email===user.email)delete payload.email;
+    if(full&&values.has('balance')){
+     const amount=payload.balance;delete payload.balance;
+     if(!/^\d+(\.\d{1,2})?$/.test(amount))throw new Error('余额最多支持两位小数。');
+     const [whole,fraction='']=amount.split('.'),minor=Number(whole)*100+Number(fraction.padEnd(2,'0'));
+     if(!Number.isSafeInteger(user.wallet?.balance_minor))throw new Error('未读取到当前余额，请刷新后再修改。');
+     if(minor!==user.wallet.balance_minor){payload.balance_minor=minor;payload.expected_balance_minor=user.wallet.balance_minor;}
+    }
+   }
    if((create&&payload.role==='admin'||!create&&(payload.status==='disabled'||payload.role!==user.role||payload.management_profile&&payload.management_profile!==user.management_profile))&&!await confirmAction('确认权限变更','请核对目标客户与权限范围；现有会话可能失效。','确认变更',true))return CANCEL;
    return api(create?'/api/admin/users':'/api/admin/users/'+encodeURIComponent(user.id),{method:create?'POST':'PATCH',body:payload});
-  },async data=>{if(!data.user)throw Object.assign(new Error('未收到客户变更确认。'),{uncertain:true});dialog.close();toast(data.user.pending_email?'资料已保存，新邮箱等待验证':'客户信息已保存');if(user?.id===state.user.id){try{adoptSession(await api('/api/auth/session'));}catch{state.user=null;state.csrf=null;navigate('/login',true);return;}}render();});
+  },async data=>{if(!data.user)throw Object.assign(new Error('未收到客户变更确认。'),{uncertain:true});dialog.close();toast('客户信息已保存');if(user?.id===state.user.id){try{adoptSession(await api('/api/auth/session'));}catch{state.user=null;state.csrf=null;navigate('/login',true);return;}}render();});
 }
 function credentialEditor(user) {
  const action=field('操作','action',{type:'select',choices:[{value:'reset_password',label:'设置临时密码（首次登录必须更改）'},{value:'email_reset',label:'发送密码重置邮件'},{value:'revoke_sessions',label:'退出所有网页登录会话'}]});
  const fresh=field('临时密码','new_password',{type:'password',required:true,minlength:6,autocomplete:'new-password',placeholder:'至少 6 个字符'});
- const form=el('form',{},notice('仅管理本站登录','不会读取旧密码，也不会修改提供方账号凭据或自动撤销运行设备。'),action,fresh,field('管理员当前密码','admin_password',{type:'password',required:true,autocomplete:'current-password'}),field('处理原因','reason',{required:true,maxlength:500}),el('button',{class:'btn primary',type:'submit',text:'确认安全操作'}));
+ const form=el('form',{},notice('仅管理本站登录','不会读取旧密码，也不会修改提供方账号凭据或自动撤销运行设备。'),action,fresh,field('处理备注（选填）','reason',{maxlength:500}),el('button',{class:'btn primary',type:'submit',text:'确认安全操作'}));
  action.querySelector('select').addEventListener('change',event=>{fresh.hidden=event.target.value!=='reset_password';fresh.querySelector('input').disabled=fresh.hidden;});
  const dialog=editorDialog('客户登录安全',form);
  bindForm(form,async values=>{if(!await confirmAction('确认客户登录安全操作','目标：'+(user.display_name||user.email)+'。临时密码设置后将撤销旧网页登录会话。','确认执行',true))return CANCEL;return api('/api/admin/users/'+encodeURIComponent(user.id)+'/credentials',{method:'POST',body:{...Object.fromEntries(values),expected_revision:user.revision}});},data=>{dialog.close();toast(data.delivery==='unconfirmed'?'邮件发送结果待核对，请勿视为已送达':'安全操作已完成');render();});
@@ -45,7 +54,7 @@ async function customerDetailView(user) {
   const nextExpiry=accounts?.map(a=>Date.parse(a.customer_expires_at)).filter(Number.isFinite).sort((a,b)=>a-b)[0];
   const root=el('div',{class:'page-content customer-detail'},
     el('div',{class:'button-row'},(user.role!=='admin'||!state.user.management_profile||state.user.management_profile==='owner')&&managementAllows(state.user,'PATCH','/api/admin/users/'+user.id)?el('button',{class:'btn',text:'编辑客户资料',onclick:()=>customerEditor(user)}):null,user.id!==state.user.id&&(user.role!=='admin'||!state.user.management_profile||state.user.management_profile==='owner')&&managementAllows(state.user,'POST','/api/admin/users/'+user.id+'/credentials')?el('button',{class:'btn',text:'登录安全 / 重置密码',onclick:()=>credentialEditor(user)}):null),
-    panel('客户资料','仅本站管理人员可见',el('div',{class:'card-body'},el('p',{text:'最近登录：'+date(user.last_login_at)}),el('p',{text:'标签：'+((user.tags||[]).join(' · ')||'未设置')}),el('p',{text:'备注：'+(user.notes||'未填写')}))),
+    panel('客户资料','仅本站管理人员可见',el('div',{class:'card-body'},el('p',{text:'账户余额：'+money(user.wallet?.balance_minor,user.wallet?.currency)}),el('p',{text:'最近登录：'+date(user.last_login_at)}),el('p',{text:'标签：'+((user.tags||[]).join(' · ')||'未设置')}),el('p',{text:'备注：'+(user.notes||'未填写')}))),
     user.sync_pending?notice('客户同步待确认',user.sync_error||'新的交付或使用可能受限，请先到待办核对。','warn',el('a',{href:'/admin/operations',class:'btn small',text:'处理同步待办'})):null,
     el('div',{class:'stats-grid'},stat('当前账号',accounts?number(accounts.length):'未知','当前客户范围内的授权','layers'),stat('最近客户到期',nextExpiry?date(nextExpiry):accounts?'—':'未知','以客户期限为准，不是上游授权期限','receipt'),stat('已连接设备',devices?number(devices.filter(d=>d.state==='approved').length):'未知','仅统计已批准的连接','monitor')));
   const sections=[

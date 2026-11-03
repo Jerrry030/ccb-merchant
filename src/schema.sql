@@ -1,4 +1,4 @@
--- Standalone baseline schema. Store upgrades its CHECK constraints and payment snapshots to version 5 transactionally.
+-- Standalone baseline schema. Store upgrades its CHECK constraints and payment snapshots and wallet adjustments to version 7 transactionally.
 
 CREATE TABLE access_accounts(id TEXT PRIMARY KEY,slug TEXT NOT NULL UNIQUE,name TEXT NOT NULL,status TEXT NOT NULL CHECK(status IN ('active','disabled')),revision INTEGER NOT NULL DEFAULT 1,created_at TEXT NOT NULL) STRICT;
 

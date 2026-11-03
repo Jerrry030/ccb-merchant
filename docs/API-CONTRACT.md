@@ -91,8 +91,9 @@
 
 ### 管理员维护
 
-- `PATCH /api/admin/users/:id`：编辑必须带 `expected_revision`；允许名称、状态、角色、管理权限、备注、标签和受确认的邮箱纠错。未知字段拒绝。邮箱变更额外要求 `admin_password` 和 `reason`。同步核对的空 PATCH 不改变此编辑合同。
-- `POST /api/admin/users/:id/credentials`：`action` 为 `reset_password/email_reset/revoke_sessions`，必须带 `expected_revision/admin_password/reason`；临时密码设置额外带 `new_password`。返回更新后的用户状态，不返回密码或重置令牌。
+- `PATCH /api/admin/users/:id`：编辑必须带 `expected_revision`；允许名称、状态、角色、管理权限、备注、标签、邮箱和余额。未知字段拒绝。管理员改邮箱立即生效（不再要求管理员密码或邮箱验证码），清除该用户旧会话、验证/重置令牌及待验证邮箱；`reason` 为可选备注。站点管理员可用 `balance_minor` 设置 0～100000000 分的余额，同时必须提交读取到的 `expected_balance_minor`；若期间发生充值或扣款则返回 `balance_changed`，整次编辑不生效。余额差额以 `admin_adjustment` 追加到不可修改的流水，记录管理员、调整前后余额及审计，不能冒充支付入账；受限管理角色不能调整余额。同步核对的空 PATCH 不改变此编辑合同。
+- 管理员用户列表、详情和资料编辑结果包含 `user.wallet`（CNY 分），仅表示读取时的已确认余额。登录会话中的用户对象不包含该管理字段。
+- `POST /api/admin/users/:id/credentials`：`action` 为 `reset_password/email_reset/revoke_sessions`，必须带 `expected_revision`；无需二次输入管理员密码，`reason` 为可选备注。临时密码设置额外带 `new_password`，仍撤销旧会话并要求首次登录更改密码。返回更新后的用户状态，不返回密码或重置令牌。
 - `GET /api/admin/users`：支持 `limit/offset/q/status/role/tag/assignment/due`；`assignment` 为 `assigned/unassigned/sync_pending`，`due` 为 7 或 30。库存读取失败时不声称准确知道无账号客户集合。
 - `GET /api/admin/inventory`：返回本店 `account_code`、公开资源 `resource_name`、占用原因 `hold_reason` 及本地订单/批次关联。`details.name` 使用本店编号，不回显提供方账号名称。
 - `POST /api/admin/allocation-batches`：批次协调入口，携带 `id/action/items`。action 为 `preview/execute/reconcile/cancel`；新批次 items 为 1–100 个 `{user_id,resource_id,account_lease_id,expected_account_revision,expires_at}`。已保存批次可省略 items；提供时必须与原意图完全一致。返回 `{batch}`，每项状态必须单独读取，HTTP 成功不代表全部已分配。
@@ -101,6 +102,8 @@
 单条交付入口与批次协调共同使用同一交付实现，不另写一套分配规则；批次的持久化、逐项调度和只读核对是其独立职责。
 
 公开用户会话包含临时密码强制变更标志和管理权限配置；内部备注/标签只在管理接口返回。密码变更前除会话读取、改密、退出外的浏览器 API 返回 `password_change_required`。
+
+套餐管理中的名称可独立于有效期创建和修改，展示在在售套餐、结账及新订单中；已有订单保留原名称、价格和期限快照。管理界面不展示“版本”，内部 `revision/expected_revision` 仅用于并发冲突与购买价格校验，不需要管理员维护版本。
 
 ### 设备管理与用量筛选
 

@@ -10,7 +10,7 @@ test('fresh schema has the current ledger and local API tables, and reopen prese
  const data=await mkdtemp(join(tmpdir(),'ccb-schema-'));
  t.after(async()=>{const actual=await realpath(data),inside=relative(await realpath(tmpdir()),actual);if(inside.startsWith('..')||isAbsolute(inside)||!basename(actual).startsWith('ccb-schema-'))throw new Error('Unsafe fixture cleanup');await rm(actual,{recursive:true,force:true});});
  const config={dataDir:data,siteName:'Schema fixture'};let store=new Store(config);
- assert.equal(store.db.prepare('PRAGMA application_id').get().application_id,1128481357);assert.equal(store.db.prepare('PRAGMA user_version').get().user_version,6);
+ assert.equal(store.db.prepare('PRAGMA application_id').get().application_id,1128481357);assert.equal(store.db.prepare('PRAGMA user_version').get().user_version,7);
  const tables=store.db.prepare("SELECT name FROM sqlite_schema WHERE type='table'").all().map(v=>v.name);
  for(const name of ['users','ledger','rentals','plans','access_accounts','access_keys','access_grants','access_devices'])assert.ok(tables.includes(name),name);
  assert.ok(store.db.prepare('PRAGMA table_info(access_keys)').all().some(column=>column.name==='token'));
@@ -53,7 +53,7 @@ test('recognized version-2 preview data upgrades additively without changing use
  const db=new DatabaseSync(join(data,'merchant.sqlite'));
  let schema=await readFile(new URL('../../src/schema.sql',import.meta.url),'utf8');schema=schema.replace("  platform TEXT NOT NULL DEFAULT '',\n",'').replace(',payment_method,platform ON rentals',',payment_method ON rentals').replace('PRAGMA user_version=4','PRAGMA user_version=2');
  db.exec(schema);db.prepare("INSERT INTO audit(actor_id,action,subject_id,outcome,created_at) VALUES(NULL,'grant.update','legacy-grant','ok','2020-01-01T00:00:00Z')").run();db.prepare("INSERT INTO users(id,email,display_name,password_hash,role,status,created_at) VALUES('kept','kept@example.test','Kept','fixture','admin','active','2026-10-26')").run();db.prepare("INSERT INTO settings VALUES('setup_complete','true')").run();db.prepare("INSERT INTO orders(id,user_id,amount_minor,currency,status,created_at,updated_at) VALUES('payment','kept',100,'CNY','paid','2026-10-26','2026-10-26')").run();db.prepare("INSERT INTO ledger(id,user_id,order_id,amount_minor,currency,kind,reference,created_at) VALUES('entry','kept','payment',100,'CNY','stripe_credit','test','2026-10-26')").run();db.close();
- const store=new Store({dataDir:data,siteName:'Upgrade fixture'});assert.equal(store.wallet('kept').balance_minor,100);assert.equal(store.db.prepare('SELECT id FROM users').get().id,'kept');const historical=store.db.prepare("SELECT * FROM audit WHERE subject_id='legacy-grant'").get();assert.equal(historical.action,'grant.update');assert.equal(historical.customer_id,null);assert.equal(historical.subject_label,null);assert.equal(store.db.prepare('PRAGMA user_version').get().user_version,6);assert.ok(store.db.prepare('PRAGMA table_info(rentals)').all().some(c=>c.name==='account_lease_id'));store.db.close();
+ const store=new Store({dataDir:data,siteName:'Upgrade fixture'});assert.equal(store.wallet('kept').balance_minor,100);assert.equal(store.db.prepare('SELECT id FROM users').get().id,'kept');const historical=store.db.prepare("SELECT * FROM audit WHERE subject_id='legacy-grant'").get();assert.equal(historical.action,'grant.update');assert.equal(historical.customer_id,null);assert.equal(historical.subject_label,null);assert.equal(store.db.prepare('PRAGMA user_version').get().user_version,7);assert.ok(store.db.prepare('PRAGMA table_info(rentals)').all().some(c=>c.name==='account_lease_id'));store.db.close();
 });
 
 
@@ -91,5 +91,35 @@ test('custody migration preserves existing grants, devices, fulfillments and imm
  store.db.exec("INSERT INTO access_account_leases(id,account_id,origin_ref,upstream_id,resource_id) VALUES('lease-a','peer','','up-lease-a','resource'),('lease-b','peer','','up-lease-b','resource')");
  for(const n of ['a','b'])store.db.prepare("INSERT INTO access_grants(id,account_id,customer_id,resource_id,status,account_lease_id,updated_at) VALUES(?,'peer','buyer','resource','active',?,'2026-11-01')").run('concrete-'+n,'lease-'+n);
  assert.equal(store.db.prepare("SELECT count(*) n FROM access_grants WHERE customer_id='buyer'").get().n,3);
- assert.deepEqual(store.db.prepare('PRAGMA foreign_key_check').all(),[]);assert.equal(store.db.prepare('PRAGMA user_version').get().user_version,6);store.db.close();
+ assert.deepEqual(store.db.prepare('PRAGMA foreign_key_check').all(),[]);assert.equal(store.db.prepare('PRAGMA user_version').get().user_version,7);store.db.close();
+});
+
+
+test('v6 wallet upgrade preserves payment receipts, indexes and immutable triggers, with atomic validation and idempotent reopen',async t=>{
+ const data=await mkdtemp(join(tmpdir(),'ccb-schema-'));
+ t.after(async()=>{const actual=await realpath(data),inside=relative(await realpath(tmpdir()),actual);if(inside.startsWith('..')||isAbsolute(inside)||!basename(actual).startsWith('ccb-schema-'))throw new Error('Unsafe fixture cleanup');await rm(actual,{recursive:true,force:true});});
+ const config={dataDir:data,siteName:'Wallet upgrade'};let store=new Store(config);
+ const user=store.createUser({email:'balance-upgrade@example.test',display_name:'Preserved',password_hash:'fixture',role:'admin',status:'active'});
+ store.db.exec("INSERT INTO settings VALUES('setup_complete','true')");
+ store.db.prepare("INSERT INTO orders(id,user_id,amount_minor,currency,status,created_at,updated_at) VALUES('kept-payment',?,1234,'CNY','paid','2026-11-04','2026-11-04')").run(user.id);
+ store.db.prepare("INSERT INTO ledger(id,user_id,order_id,amount_minor,currency,kind,reference,created_at) VALUES('kept-receipt',?,'kept-payment',1234,'CNY','payment_credit','kept-reference','2026-11-04')").run(user.id);
+ const before={...store.db.prepare("SELECT * FROM ledger WHERE id='kept-receipt'").get()};
+ const schema=store.db.prepare("SELECT sql FROM sqlite_schema WHERE type='table' AND name='ledger'").get().sql;
+ const objects=store.db.prepare("SELECT sql FROM sqlite_schema WHERE tbl_name='ledger' AND type IN ('index','trigger') AND sql IS NOT NULL ORDER BY name").all().map(row=>row.sql);
+ // Reconstruct the exact pre-adjustment CHECK in this isolated database only.
+ const legacy=schema.replace(/CREATE TABLE ["`]?ledger["`]?/,'CREATE TABLE ledger_v6').replace(",'admin_adjustment'",'').replace(/\s+OR\s+\(kind='admin_adjustment'[^)]*\)/,'');
+ store.db.exec('PRAGMA foreign_keys=OFF; BEGIN IMMEDIATE;'+legacy+'; INSERT INTO ledger_v6 SELECT * FROM ledger; DROP TABLE ledger; ALTER TABLE ledger_v6 RENAME TO ledger;');
+ for(const sql of objects)store.db.exec(sql);
+ store.db.exec('PRAGMA user_version=6; COMMIT; PRAGMA foreign_keys=ON');store.db.close();
+ store=new Store(config);assert.equal(store.db.prepare('PRAGMA user_version').get().user_version,7);
+ assert.deepEqual({...store.db.prepare("SELECT * FROM ledger WHERE id='kept-receipt'").get()},before);
+ assert.deepEqual(store.db.prepare("SELECT sql FROM sqlite_schema WHERE tbl_name='ledger' AND type IN ('index','trigger') AND sql IS NOT NULL ORDER BY name").all().map(row=>row.sql),objects);
+ store.db.prepare("INSERT INTO ledger(id,user_id,amount_minor,currency,kind,reference,created_at) VALUES('correction',?,-234,'CNY','admin_adjustment','admin:correction','2026-11-04')").run(user.id);
+ assert.equal(store.wallet(user.id).balance_minor,1000);
+ assert.throws(()=>store.db.prepare("UPDATE ledger SET amount_minor=0 WHERE id='correction'").run(),/immutable_ledger/);
+ assert.throws(()=>store.db.prepare("DELETE FROM ledger WHERE id='kept-receipt'").run(),/immutable_ledger/);
+ assert.throws(()=>store.db.prepare("INSERT INTO ledger(id,user_id,amount_minor,currency,kind,reference,created_at) VALUES('empty',?,0,'CNY','admin_adjustment','admin:empty','2026-11-04')").run(user.id),/CHECK/);
+ assert.throws(()=>store.db.prepare("INSERT INTO ledger(id,user_id,order_id,amount_minor,currency,kind,reference,created_at) VALUES('fake',?,'kept-payment',100,'CNY','admin_adjustment','admin:fake','2026-11-04')").run(user.id));
+ assert.deepEqual(store.db.prepare('PRAGMA foreign_key_check').all(),[]);store.db.close();
+ store=new Store(config);assert.equal(store.wallet(user.id).balance_minor,1000);assert.equal(store.db.prepare('SELECT count(*) n FROM ledger').get().n,2);store.db.close();
 });
