@@ -20,7 +20,7 @@ export async function startFixture(options = {}) {
     public: {site:{name:'紫序工作台',description:'一个安静、高效的 Code 工作空间。',support_email:'support@example.test',currency:'CNY',logo_url:'https://untrusted.invalid/tracking.svg'},features:{registration:false,email_verification:false,password_reset:false,payment:false,token_billing:false,...options.features},setup_required:options.setupRequired || false},
     users:[{id:'admin-1',email:fixtureAccounts.admin.email,display_name:'测试管理员',role:'admin',status:'active',core_customer_id:'customer-admin',created_at:now},{id:'member-1',email:fixtureAccounts.member.email,display_name:options.displayName || '测试成员',role:'member',status:'active',core_customer_id:'customer-member',created_at:now}],
     connection:{configured:Boolean(options.connected),available:Boolean(options.connected),...(options.connected ? {user:{id:'merchant-fixture',name:'独立测试商户'},scopes:['resources.read','customers.read','customers.write','delegation.grants.read','delegation.grants.write','delegation.devices.read','delegation.devices.write','delegation.usage.read','runtime','delegation.keys.manage']} : {})},
-    pending:options.pending || [], accounts:options.accounts || [], resources:options.resources || [], grants:options.grants || [],devices:options.devices || [],orders:[],ledger:[],events:[],
+    pending:options.pending || [], accounts:options.accounts || [], resources:options.resources || [], grants:options.grants || [],devices:options.devices || [],orders:options.orders||[],ledger:options.ledger||[],plans:options.plans||[],rentals:options.rentals||[],events:[],
     checkoutUrl:options.checkoutUrl || 'https://checkout.stripe.com/c/pay/fixture-only', grantConflict:false,
   };
   state.public.payment={currency:'CNY',min_amount_minor:1,max_amount_minor:1000000,help_text:'',methods:state.public.features.payment?[{id:'stripe',title:'Stripe 收银台'}]:[]};
@@ -89,14 +89,19 @@ export async function startFixture(options = {}) {
       }
       if (path.startsWith('/api/me/devices/') && req.method === 'DELETE') { state.devices = state.devices.filter(d => d.id !== decodeURIComponent(path.split('/').pop())); return reply(200,{ok:true}); }
       if (path === '/api/me/usage') return reply(200,{usage:null,requests:[],total:0});
-      if (path === '/api/me/wallet') return reply(200,{wallet:{balance_minor:0,currency:'CNY'},ledger:state.ledger,orders:state.orders});
-      if (path === '/api/plans' || path === '/api/admin/plans') return reply(200,{plans:[]});
+      if (path === '/api/me/wallet') {const limit=Number(url.searchParams.get('limit')||50),offset=Number(url.searchParams.get('offset')||0);return reply(200,{wallet:{balance_minor:0,currency:'CNY'},ledger:state.ledger.slice(offset,offset+limit),total:state.ledger.length,limit,offset});}
+      if ((path === '/api/me/orders' || path === '/api/me/rentals') && !write) {
+        const rentals=path.endsWith('/rentals'),key=rentals?'rentals':'orders',limit=Number(url.searchParams.get('limit')||50),offset=Number(url.searchParams.get('offset')||0);
+        const rows=state[key].filter(row=>(!row.user_id||row.user_id===user.id)&&(!url.searchParams.get('id')||row.id===url.searchParams.get('id'))&&(!url.searchParams.get('request_id')||row.request_id===url.searchParams.get('request_id'))&&(url.searchParams.get('purpose')!=='recharge'||!row.rental_id));
+        return reply(200,{[key]:rows.slice(offset,offset+limit),total:rows.length,limit,offset});
+      }
+      if (path === '/api/plans' || path === '/api/admin/plans') return reply(200,{plans:state.plans});
       if (path === '/api/me/accounts') return reply(200,{accounts:state.accounts});
       if (path === '/api/me/payments' && req.method === 'POST') {
         if (!state.public.features.payment) return reply(503,'payment_disabled','Payments are not configured.');
-        const order = {id:`order-${state.orders.length+1}`,status:'pending',amount_minor:body.amount_minor,currency:'CNY',created_at:now}; state.orders.push(order); return reply(201,{order,checkout_url:state.checkoutUrl});
+        const order = {id:`order-${state.orders.length+1}`,status:'pending',amount_minor:body.amount_minor,currency:'CNY',created_at:now,provider:'stripe',payment_method:body.payment_method||'stripe'}; state.orders.push(order); return reply(201,{order,checkout_url:state.checkoutUrl});
       }
-      if (path.startsWith('/api/me/payments/') && !write) { const order = state.orders.find(o => o.id === decodeURIComponent(path.split('/').pop())); return order ? reply(200,{order}) : reply(404,'not_found','Order not found.'); }
+      if (path.startsWith('/api/me/payments/') && !write) { const order = state.orders.find(o => o.id === decodeURIComponent(path.split('/').pop())); return order ? reply(200,{order,checkout_url:state.checkoutUrl}) : reply(404,'not_found','Order not found.'); }
       if(path==='/api/admin/access-accounts'&&!write)return reply(200,{accounts:[]});
       if(path==='/api/admin/allocation-batches' && !write)return reply(200,{batches:[],total:0});
       if (path === '/api/admin/connection') return reply(200,state.connection);

@@ -32,7 +32,7 @@ test('Stripe Checkout uses immutable server prices and only signed server-confir
   const secondEvent=stripe.event(session.id);
   assert.equal((await f.request('POST','/api/webhooks/stripe',secondEvent.payload,{headers:{'Stripe-Signature':secondEvent.signature}})).status,200);
   const wallet=await f.request('GET','/api/me/wallet',undefined,admin);
-  assert.equal(wallet.data.wallet.balance_minor,12345);assert.equal(wallet.data.ledger.length,1);assert.equal(wallet.data.orders[0].status,'paid');
+  assert.equal(wallet.data.wallet.balance_minor,12345);assert.equal(wallet.data.ledger.length,1);assert.equal((await f.request('GET','/api/me/orders?purpose=recharge',undefined,admin)).data.orders[0].status,'paid');
   assert.throws(()=>f.store.db.prepare('UPDATE ledger SET amount_minor=1').run(),/immutable_ledger/);
   assert.throws(()=>f.store.db.prepare('DELETE FROM ledger').run(),/immutable_ledger/);
   assert.throws(()=>f.store.db.prepare('UPDATE orders SET amount_minor=1').run(),/immutable_order/);
@@ -74,7 +74,7 @@ test('unknown Checkout creation persists, never blindly retries, and a verified 
   const f=await fixture(t,{env,paymentTransport:stripe.transport}), admin=await f.request('POST','/api/setup',{...credentials,setup_token:f.setupToken});
   const created=await f.request('POST','/api/me/payments',{amount_minor:500},admin);
   assert.equal(created.status,503);assert.equal(created.data.error.code,'payment_outcome_unknown');assert.equal(stripe.calls.filter(call=>call.options.method==='POST').length,1);
-  assert.equal((await f.request('GET','/api/me/wallet',undefined,admin)).data.orders[0].status,'unknown');
+  assert.equal((await f.request('GET','/api/me/orders?purpose=recharge',undefined,admin)).data.orders[0].status,'unknown');
   await f.restart();assert.equal(stripe.calls.length,1);
   const session=[...stripe.sessions.values()][0];session.payment_status='paid';session.status='complete';
   const event=stripe.event(session.id);

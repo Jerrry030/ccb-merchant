@@ -1,6 +1,6 @@
 import { upstreamFetch,readUpstreamJSON } from './upstream-network.js';
 import { createHmac } from 'node:crypto';
-import { Readable } from 'node:stream';
+import { Readable, Transform } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import { HttpError, readBody, respond } from './security.js';
 import { project } from './upstream.js';
@@ -12,6 +12,7 @@ const routes = new Map([
   ['GET /bridge/v1/accounts','control'],['POST /bridge/v1/bindings','control'],
   ['POST /bridge/v1/messages','data'],['POST /bridge/v1/messages/count_tokens','data'],
   ['GET /bridge/v1/models','data'],['POST /bridge/v1/traffic','data'],
+  ['GET /bridge/v1/code','code-release'],['GET /bridge/v1/code/download','code-download'],
 ]);
 const runtimeHeaders = [
   'authorization','content-type','accept','anthropic-version','anthropic-beta','user-agent',
@@ -24,7 +25,7 @@ const deviceSchema = { id:'string', name:'string', platform:'string', state:'str
 const accountSchema = { account_lease_id:'string', plan:'string', state:'string', shared:'boolean', quota:{status:'string',updated_at:'string',windows:[{key:'string',label:'string',used_percent:'number',resets_at:'string',reset:'boolean'}]}, id:'string', grant_id:'string', name:'string', status:'string', expires_at:'string', available:'boolean', reason:'string', revision:'number', surfaces:['string'], selected:'boolean', usage:{ five_hour:{ utilization:'number', resets_at:'string' }, seven_day:{ utilization:'number', resets_at:'string' } } };
 const controlSchema = { ...deviceSchema, conditional_selection:'boolean', ok:'boolean', code:'string', interval:'number', verification_path:'string', device:deviceSchema, account:accountSchema, accounts:[accountSchema], binding:'string', device_id:'string', os:'string', arch:'string', subscription_type:'string', rate_limit_tier:'string', traffic:{ version:'number', timezone:'string', region:'string', domains:['string'] } };
 
-export async function proxyRuntime(req, res, integration, store, url, access) {
+export async function proxyRuntime(req, res, integration, store, url, access, devices) {
   const config={...integration.config};
   if (url.pathname.startsWith('/bridge/v1/desktop')) throw new HttpError(404,'desktop_disabled','Desktop is disabled in this Code-only release.');
   if (url.searchParams.get('surface') === 'desktop') throw new HttpError(400,'desktop_disabled','Desktop is disabled in this Code-only release.');
@@ -37,9 +38,19 @@ export async function proxyRuntime(req, res, integration, store, url, access) {
   } else if (!/^Bearer [A-Za-z0-9._~-]{16,512}$/i.test(req.headers.authorization || '')) {
     throw new HttpError(401,'device_bearer_required','Original device bearer is required.');
   }
-  const queryRules = url.pathname === '/bridge/v1/accounts' || url.pathname.endsWith('/device/account') ? ['surface'] : url.pathname.includes('/messages') ? ['beta'] : url.pathname === '/bridge/v1/models' ? ['limit','before_id','after_id'] : [];
+  const packageRequest = kind === 'code-release' || kind === 'code-download';
+  const controlRequest = kind === 'control' || kind === 'code-release';
+  const queryRules = packageRequest ? (kind === 'code-download' ? ['os','arch','version'] : ['os','arch']) : url.pathname === '/bridge/v1/accounts' || url.pathname.endsWith('/device/account') ? ['surface'] : url.pathname.includes('/messages') ? ['beta'] : url.pathname === '/bridge/v1/models' ? ['limit','before_id','after_id'] : [];
   for (const [key,value] of url.searchParams) {
     if (!queryRules.includes(key) || url.searchParams.getAll(key).length !== 1 || value.length > 512 || !value || (key === 'surface' && value !== 'code') || (key === 'beta' && value !== 'true')) throw new HttpError(400,'invalid_query','Unsupported runtime query.');
+  }
+  if (packageRequest) {
+    const os=url.searchParams.get('os'), arch=url.searchParams.get('arch');
+    if (!((os==='windows'||os==='linux')&&arch==='amd64'||os==='darwin'&&['amd64','arm64'].includes(arch))) throw new HttpError(400,'invalid_query','Unsupported Code platform.');
+    if(kind==='code-download'&&!/^[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?$/.test(url.searchParams.get('version')||'')) throw new HttpError(400,'invalid_query','Invalid Code version.');
+    if((url.searchParams.get('version')||'').length>80) throw new HttpError(400,'invalid_query','Invalid Code version.');
+    const range=req.headers.range;
+    if(range && (kind!=='code-download'||typeof range!=='string'||range.length>80||!/^bytes=(?:[0-9]+-[0-9]*|-[0-9]+)$/.test(range))) throw new HttpError(400,'invalid_range','Only a single byte range is supported.');
   }
   if (url.pathname === '/bridge/v1/traffic') {
     let target;
@@ -51,13 +62,14 @@ export async function proxyRuntime(req, res, integration, store, url, access) {
   const abort = () => { controller.abort(); if (!req.complete) req.destroy(); };
   const onClose = () => { if (!res.writableEnded) abort(); };
   req.once('aborted',abort); res.once('close',onClose);
-  let timedOut=false, guard;
+  let timedOut=false, guard, downloadTimer;
   // Data requests are bounded until headers arrive, not while the provider
   // streams. Control replies remain bounded through their complete JSON body.
-  const timer = setTimeout(()=>{timedOut=true;abort();}, kind==='control' ? config.upstreamTimeoutMs : config.runtimeHeaderTimeoutMs); timer.unref();
+  const timer = setTimeout(()=>{timedOut=true;abort();}, controlRequest ? config.upstreamTimeoutMs : config.runtimeHeaderTimeoutMs); timer.unref();
   try {
     const headers = { 'x-ccb-access-key':config.upstreamKey, 'accept-encoding':'identity' };
     for (const key of runtimeHeaders) if (typeof req.headers[key] === 'string') headers[key] = req.headers[key];
+    if(kind==='code-download'&&req.headers.range) headers.range=req.headers.range;
     // Wire order may contain credential/header names; only advertise headers actually forwarded.
     if (req.headers['x-ccb-wire-order']) headers['x-ccb-wire-order'] = req.headers['x-ccb-wire-order'].split(',').map(s=>s.trim()).filter(s=>runtimeHeaders.includes(s.toLowerCase())).join(',');
     let body = ['POST','DELETE'].includes(req.method) ? await readBody(req, kind === 'control' ? 8192 : config.runtimeBodyLimit, false) : undefined;
@@ -93,17 +105,42 @@ export async function proxyRuntime(req, res, integration, store, url, access) {
         respond(res,upstream.status,{type:'error',error:{type:code==='grant_usage_limit_exceeded'?'rate_limit_error':code,code,message:safe[code][1]}});
         return;
       }
-      const status = [400,401,403,404,409,413,415,429].includes(upstream.status) ? upstream.status : 503;
+      const status = [400,401,403,404,409,413,415,416,429].includes(upstream.status) ? upstream.status : 503;
       respond(res,status,{type:'error',error:{type:'gateway_error',code:'runtime_rejected',message:'Core rejected the runtime request. It was not retried.'}});
       return;
     }
-    if (kind === 'data') clearTimeout(timer);
-    if (kind === 'control') {
+    if (kind === 'data' || kind === 'code-download') clearTimeout(timer);
+    if (kind === 'code-release') {
+      const value=await readUpstreamJSON(upstream,4096);
+      if(!value || typeof value.version!=='string'||value.version.length>80||!/^[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?$/.test(value.version)||value.os!==url.searchParams.get('os')||value.arch!==url.searchParams.get('arch')||!Number.isSafeInteger(value.size)||value.size<=0||value.size>512*1024*1024||typeof value.sha256!=='string'||!/^[a-fA-F0-9]{64}$/.test(value.sha256)) throw new Error('Invalid Code release');
+      respond(res,200,{version:value.version,os:value.os,arch:value.arch,size:value.size,sha256:value.sha256.toLowerCase()});
+    } else if(kind === 'code-download') {
+      if(![200,206].includes(upstream.status)||(upstream.headers.get('content-type')||'').split(';')[0].trim()!=='application/zip') throw new Error('Invalid Code download');
+      const max=512*1024*1024, rawLength=upstream.headers.get('content-length');
+      const length=rawLength===null?null:Number(rawLength);
+      if(length!==null&&(!/^[0-9]+$/.test(rawLength)||!Number.isSafeInteger(length)||length<=0||length>max)) throw new Error('Invalid Code length');
+      const headers={'Content-Type':'application/zip','Cache-Control':'no-store','X-Accel-Buffering':'no','Accept-Ranges':'bytes'};
+      if(length!==null)headers['Content-Length']=String(length);
+      if(upstream.status===206){
+        const range=upstream.headers.get('content-range')||'', m=/^bytes ([0-9]+)-([0-9]+)\/([0-9]+)$/.exec(range);
+        if(!req.headers.range||!m||Number(m[1])>Number(m[2])||Number(m[2])>=Number(m[3])||Number(m[3])>max||length!==null&&Number(m[2])-Number(m[1])+1!==length)throw new Error('Invalid Code range');
+        headers['Content-Range']=range;
+      }
+      downloadTimer=setTimeout(()=>{timedOut=true;abort();},15*60*1000);downloadTimer.unref();
+      let received=0;
+      const bounded=new Transform({transform(chunk,encoding,callback){received+=chunk.length;callback(received>max||length!==null&&received>length?new Error('Code download too large'):null,chunk);},flush(callback){callback(length!==null&&received!==length?new Error('Truncated Code download'):null);}});
+      res.writeHead(upstream.status,headers);res.flushHeaders();
+      await pipeline(Readable.fromWeb(upstream.body),bounded,res,{signal:controller.signal});
+    } else if (kind === 'control') {
       const chunks=[]; let size=0;
       for await (const chunk of upstream.body) { size+=chunk.length; if(size>1024*1024) throw new Error('Control response too large'); chunks.push(chunk); }
       let filtered=project(JSON.parse(Buffer.concat(chunks).toString('utf8')),controlSchema);
       if (!filtered) throw new Error('Invalid control response');
       filtered=access.runtimeControl(boundary,filtered,url,req.method);
+      if(!boundary.peer&&req.method==='GET'&&url.pathname==='/bridge/v1/device/status'){
+        const username=await devices.runtimeUsername(filtered,config,controller.signal);
+        if(username)filtered.owner_username=username;
+      }
       const salt=store.db.prepare("SELECT value FROM settings WHERE key='runtime_salt'").get().value;
       // CCB requires a stable owner across status and binding; expose a merchant-local pseudonym, never a core user ID.
       for (const object of [filtered,filtered.device]) if (object?.owner_user_id) object.owner_user_id=`merchant_${createHmac('sha256',salt).update(object.owner_user_id).digest('hex')}`;
@@ -127,7 +164,7 @@ export async function proxyRuntime(req, res, integration, store, url, access) {
     if (error instanceof HttpError) throw error;
     const code=timedOut ? (kind==='control' ? 'runtime_timeout' : 'runtime_header_timeout') : 'runtime_unavailable';
     throw new HttpError(503,code,'Runtime connection ended or timed out. No automatic replay was attempted.');
-  } finally { clearTimeout(timer); clearInterval(guard); req.removeListener('aborted',abort); res.removeListener('close',onClose); }
+  } finally { clearTimeout(timer); clearTimeout(downloadTimer); clearInterval(guard); req.removeListener('aborted',abort); res.removeListener('close',onClose); }
 }
 
 

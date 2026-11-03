@@ -23,12 +23,12 @@ test('actual multi-channel storefront renders local QR codes, confirms payment a
  assert.equal(await page.getByText('此渠道尚未接入收款',{exact:true}).count(),0);assert.equal(await page.getByText('未接入收款',{exact:true}).count(),0);
  await page.locator('summary').filter({hasText:'支付宝官方'}).click();await page.getByLabel('支付宝官方 App ID',{exact:true}).waitFor();
  const artifacts=resolve(project,'tests/browser/artifacts');await mkdir(artifacts,{recursive:true});await page.screenshot({path:resolve(artifacts,'payment-alipay-implemented.png'),fullPage:true});
- await page.goto(f.config.publicOrigin+'/wallet');
+ await page.goto(f.config.publicOrigin+'/checkout?recharge=1');
  await page.getByLabel('支付方式',{exact:true}).waitFor();
  const choices=await page.getByLabel('支付方式',{exact:true}).locator('option').allTextContents();assert.deepEqual(new Set(choices),new Set(['支付宝','微信支付','Airwallex']));
  for(const method of ['alipay','wxpay','airwallex']) {
    await page.getByLabel('支付方式',{exact:true}).selectOption(method);await page.getByLabel('充值金额（人民币元）',{exact:true}).fill('12.34');
-   await page.getByRole('button',{name:'创建支付订单',exact:true}).click();await page.getByRole('dialog').getByRole('button',{name:'创建订单',exact:true}).click();
+   await page.getByRole('button',{name:'前往支付',exact:true}).click();await page.getByRole('dialog').getByRole('button',{name:'创建订单',exact:true}).click();
    await page.getByText('支付订单已创建，尚不代表已付款',{exact:true}).waitFor();
    const row=f.store.db.prepare('SELECT * FROM orders WHERE payment_method=? ORDER BY created_at DESC LIMIT 1').get(method);assert.ok(row);
    if(method!=='airwallex') {
@@ -48,7 +48,9 @@ test('actual multi-channel storefront renders local QR codes, confirms payment a
    remote.orders.get(row.id).paid=true;await page.getByRole('button',{name:'查询支付状态',exact:true}).click();await page.getByText('支付已确认',{exact:true}).waitFor();
    assert.equal(await page.getByAltText('支付二维码',{exact:true}).count(),0);
    const expected=1234*(['alipay','wxpay','airwallex'].indexOf(method)+1);
-   await page.waitForFunction(amount=>document.querySelector('.balance-card .amount')?.textContent.includes((amount/100).toFixed(2)),expected);
+   await page.getByRole('link',{name:'查看钱包',exact:true}).click();
+   await page.waitForFunction(amount=>document.querySelector('.wallet-summary .amount')?.textContent.includes((amount/100).toFixed(2)),expected);
+   if(method!=='airwallex')await page.getByRole('link',{name:'充值',exact:true}).click();
  }
  assert.equal(f.store.wallet(admin.data.user.id).balance_minor,3702);assert.equal(f.store.db.prepare('SELECT count(*) AS n FROM ledger').get().n,3);
 });

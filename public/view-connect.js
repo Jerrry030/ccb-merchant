@@ -125,9 +125,9 @@ export async function connectView() {
     place(true);
   }
   const steps = el('ol',{class:'connection-steps'},
-    el('li',{},el('h2',{text:'安装客户端'}),el('p',{text:'下载上方对应系统的客户端并安装或解压，然后用内置 CCB 准备运行时，无需安装旧版 npm CLI。'}),commandBlock('初始化命令','ccb update'),el('p',{class:'instruction-note',text:'该命令下载并校验 Claude Code 运行时，不发起模型请求。客户端内置 CCB 随客户端一起更新，不覆盖系统中其他 CLI。'})),
-    el('li',{},el('h2',{text:'登录这台电脑'}),el('p',{text:'在需要接入的电脑上运行登录命令，浏览器会打开本页让你确认设备。'}),commandBlock('登录命令',loginCommand(selected?.id)),el('p',{class:'instruction-note',text:'浏览器没有自动打开时，在本页“确认终端连接码”中输入终端显示的连接码。登录命令使用本站公开地址。'})),
-    el('li',{},el('h2',{text:'选择账号，开始项目'}),el('p',{text:'首次选择可用账号后，打开客户端并选择项目文件夹；不需要另外保持一个终端会话运行。'}),commandBlock('选择账号命令','ccb account'),el('p',{class:'instruction-note',text:'指定账号的登录命令会在确认设备后完成选择。后续请使用客户端账号菜单切号；存在其他活动会话或未知进程时，会保守暂停。'})));
+    el('li',{},el('h2',{text:'安装客户端'}),commandBlock('初始化命令','ccb update')),
+    el('li',{},el('h2',{text:'登录这台电脑'}),commandBlock('登录命令',loginCommand(selected?.id))),
+    el('li',{},el('h2',{text:'选择账号，开始项目'}),commandBlock('选择账号命令','ccb account')));
   const reference = el('dl',{class:'connection-reference','aria-label':'常用命令'});
   const references=[['检查连接','status'],['设备续期','login --renew'],['更新 Claude Code','update']];
   for (const [name,args] of references)reference.append(el('div',{},el('dt',{text:name}),el('dd',{},el('code',{text:'ccb '+args}))));
