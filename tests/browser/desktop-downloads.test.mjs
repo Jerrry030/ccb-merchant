@@ -35,6 +35,9 @@ test('connect page exposes all ACCB downloads, keeps CLI guidance, and fails clo
   assert.equal(await panel.locator('a[href$="-win-x64.zip"]').count(), 0);
   assert.equal(await panel.getByRole('heading', { name: '客户端', exact: true }).count(), 1);
   assert.equal(await panel.getByRole('heading', { name: 'ACCB 桌面客户端', exact: true }).count(), 0);
+  assert.equal(await panel.locator('.accb-download-status').count(), 0);
+  assert.equal(await panel.getByRole('link', { name: '文件校验信息', exact: true }).count(), 0);
+  assert.equal(await panel.getByText(/自动切号需要 Windows|Windows 包未做发行商签名/).count(), 0);
   await page.getByRole('heading', { name: '等待分配账号', exact: true }).waitFor();
   for (const target of desktopTargets) {
     const [download] = await Promise.all([page.waitForEvent('download'), panel.getByRole('link', { name: '下载 ACCB ' + target.label, exact: true }).click()]);
@@ -46,6 +49,11 @@ test('connect page exposes all ACCB downloads, keeps CLI guidance, and fails clo
   const assigned = await f.request('POST', '/api/admin/grants', { user_id: created.data.user.id, resource_id: 'resource-1', account_lease_id: 'owned-1', expected_account_revision: 1, expires_at: new Date(Date.now() + 86400000).toISOString() }, admin);
   assert.equal(assigned.status, 201, assigned.raw);
   await page.reload(); await page.getByRole('heading', { name: '安装客户端', exact: true }).waitFor();
+  assert.equal(await panel.locator('.accb-download-status').count(), 0);
+  assert.equal(await page.locator('.client-command-controls span').count(), 0);
+  assert.equal(await page.getByText(/使用客户端内置 CCB。Windows 按默认安装目录/).count(), 0);
+  await page.getByLabel('电脑系统',{exact:true}).selectOption('mac');
+  assert.equal(await page.getByText('"/Applications/Anthropic-ccb.app/Contents/Resources/bin/ccb" update',{exact:true}).count(),2);
   await page.getByLabel('电脑系统',{exact:true}).selectOption('linux');
   assert.equal(await page.getByText('./resources/bin/ccb update',{exact:true}).count(),2);
   await page.getByLabel('电脑系统',{exact:true}).selectOption('windows');
@@ -55,6 +63,10 @@ test('connect page exposes all ACCB downloads, keeps CLI guidance, and fails clo
   await page.setViewportSize({ width: 390, height: 844 });
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), true);
   await page.screenshot({ path: resolve(artifacts, 'accb-downloads-mobile.png'), fullPage: true });
+  responseCatalog = { product: 'ACCB', version: null, files: [] };
+  await page.reload(); await panel.getByRole('status').waitFor();
+  assert.equal(await panel.getByRole('status').innerText(), '安装包尚未发布。');
+  assert.equal(await panel.getByRole('link', { name: /^下载 ACCB/ }).count(), 0);
   responseCatalog = { ...catalog, files: [{ target: 'win-x64', name: 'Anthropic-ccb-0.1.1-win-x64.zip', size: 1234, sha256: 'b'.repeat(64) }] };
   await page.reload(); await panel.getByText('暂时无法读取安装包，请稍后刷新。下方命令行连接方式仍可使用。').waitFor();
   assert.equal(await panel.getByRole('link', { name: /^下载 ACCB/ }).count(), 0);

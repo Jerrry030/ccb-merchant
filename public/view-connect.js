@@ -30,7 +30,7 @@ export async function connectView() {
   let executable = executables[operatingSystem];
   const platformSelect = el('select',{id:'client-command-system','aria-label':'电脑系统',value:operatingSystem},el('option',{value:'windows',text:'Windows · PowerShell'}),el('option',{value:'mac',text:'macOS · 终端'}),el('option',{value:'linux',text:'Linux · 终端'}));
   platformSelect.value=operatingSystem;
-  const platformControl=el('div',{class:'client-command-controls'},el('label',{for:'client-command-system',text:'电脑系统'}),platformSelect,el('span',{text:'使用客户端内置 CCB。Windows 按默认安装目录；macOS 请先移到“应用程序”；Linux 请先进入解压目录。自定义路径需相应替换。'}));
+  const platformControl=el('div',{class:'client-command-controls'},el('label',{for:'client-command-system',text:'电脑系统'}),platformSelect);
   const approver = state.user?.display_name || state.user?.email || '—';
   const approval = el('section',{class:'card approval-card','aria-label':'设备登录确认'});
   const layout = el('div',{class:'connect-layout'});
@@ -189,7 +189,7 @@ async function desktopDownloadPanel() {
   const status = el('p',{class:'accb-download-status',role:'status'});
   const actions = el('div',{class:'accb-download-actions'});
   const content = el('section',{class:'card accb-download-bar','aria-label':'ACCB 客户端下载'},
-    el('div',{class:'accb-download-heading'},icon('monitor'),el('div',{},el('h2',{text:'客户端'}),el('p',{text:'选择适合你电脑的版本，下载安装后按下方步骤完成登录。'}))),actions,status);
+    el('div',{class:'accb-download-heading'},icon('monitor'),el('div',{},el('h2',{text:'客户端'}),el('p',{text:'选择适合你电脑的版本，下载安装后按下方步骤完成登录。'}))),actions);
   try {
     const response = await fetch('/accb-releases.json',{cache:'no-cache',signal:AbortSignal.timeout(8000)});
     if (!response.ok || !(response.headers.get('content-type') || '').includes('application/json')) throw new Error('Catalog unavailable');
@@ -200,10 +200,10 @@ async function desktopDownloadPanel() {
       const size = (file.size / 1048576).toFixed(1) + ' MB';
       actions.append(el('a',{class:'btn accb-download-link',href:file.href,download:file.name,'aria-label':'下载 ACCB ' + target.label,title:'SHA-256: ' + file.sha256},el('strong',{text:target.label}),el('span',{text:target.detail + ' · ' + size})));
     }
-    status.append(catalog.version ? '版本 ' + catalog.version + ' · ' : '安装包尚未发布。');
-    if (catalog.version) status.append('自动切号需要 Windows 配套客户端与新网关。Windows 包未做发行商签名；macOS 包仅 ad-hoc 签名、未公证。macOS / Linux 为未完成真机验收的预览包。 ',el('a',{href:'/accb-releases.json',text:'文件校验信息'}));
+    if (!catalog.version) status.textContent = '安装包尚未发布。';
   } catch {
     status.textContent = '暂时无法读取安装包，请稍后刷新。下方命令行连接方式仍可使用。';
   }
+  if (status.textContent) content.append(status);
   return content;
 }
