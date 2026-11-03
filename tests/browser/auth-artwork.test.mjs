@@ -81,7 +81,7 @@ test('approved A artwork remains light, local and readable across auth pages and
     await page.getByRole('heading',{name:title,exact:true}).waitFor();
     assert.equal(await page.locator('.auth-art-copy p').innerText(),'一键获取独享账号 · 畅用 Claude');
     assert.equal(await page.locator('.auth-terminal').evaluate(element=>getComputedStyle(element).backgroundColor),'rgb(250, 251, 248)');
-    await page.getByRole('link',{name:'← 返回登录',exact:true}).click();
+    await page.getByRole('link',{name:path==='/register'?'登录':'← 返回登录',exact:true}).click();
     await page.getByRole('heading',{name:'欢迎回来',exact:true}).waitFor();
   }
   assert.equal(fixture.state.requests.some(request=>request.method==='POST' && request.path.startsWith('/api/auth/')),false,'decorative account and device rows never make auth writes');
