@@ -17,6 +17,7 @@ export function accountCard(account, inventory = false) {
     limited ? el('p',{class:'quota-empty',text:'\u989d\u5ea6\u6682\u65f6\u7528\u5b8c\uff0c\u7a97\u53e3\u91cd\u7f6e\u540e\u81ea\u52a8\u6062\u590d\u3002'}) : null,
     el('p',{class:'inline-info',text:`${account.platform||'平台未提供'} · 有效期至 ${date(account.expires_at)} · 设备上限 1 台`}),
     inventory ? null : el('div',{class:'button-row'},['available','limited'].includes(account.state)?el('a',{class:'btn primary small',href:'/connect?account_id='+encodeURIComponent(account.id),text:'开始使用'}):el('span',{class:'badge',text:account.state==='expired'?'已到期，请联系管理员':'暂不可用，请联系管理员'}),account.device_name?el('a',{class:'btn small',href:'/devices?account_id='+encodeURIComponent(account.id),text:'更换设备'}):null),
+    !inventory&&account.renew_grant_id?el('a',{class:'btn small',href:'/plans?renew_grant_id='+encodeURIComponent(account.renew_grant_id),text:'续期套餐'}):null,
     el('div',{class:'account-foot',text:account.device_name ? `${account.device_name} \u5728\u7528` : '\u6ca1\u6709\u8bbe\u5907\u5728\u7528'}));
 }
 export function quotaSummary(quota) {

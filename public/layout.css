@@ -862,3 +862,21 @@
     margin-bottom: 18px;
   }
 }
+
+/* Keep three independent billing destinations; collapse only their navigation on small screens. */
+.commerce-nav, .commerce-nav-links { display:contents; }
+.commerce-nav-toggle { display:none; border:0; background:transparent; font:inherit; }
+@media (max-width:1350px) {
+ .site-nav { position:relative; }
+ .commerce-nav { display:block; min-width:0; }
+ .site-nav .commerce-nav-toggle { display:flex; width:100%; justify-content:center; align-items:center; }
+ .commerce-nav-toggle.active { background:var(--primary); color:var(--on-primary); }
+ .commerce-nav-links { display:none; position:absolute; top:calc(100% + 12px); right:0; z-index:40; width:min(420px,calc(100vw - 32px)); padding:8px; gap:5px; border:1px solid var(--line); border-radius:18px; background:var(--panel); box-shadow:var(--shadow-overlay); }
+ .commerce-nav.open .commerce-nav-links { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); }
+ .site-nav .commerce-nav-links .nav-link { justify-content:center; white-space:normal; text-align:center; }
+}
+@media (max-width:1000px) {
+ .site-nav { position:fixed; grid-auto-columns:minmax(0,1fr); overflow:visible; }
+ .site-nav .commerce-nav-toggle { display:grid; padding:7px 0 6px; }
+ .commerce-nav-links { top:auto; bottom:calc(100% + 12px); right:0; left:0; width:auto; }
+}

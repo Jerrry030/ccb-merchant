@@ -130,10 +130,10 @@ export class PaymentProvider {
     return result.value.token;
   }
   async create(order,{subject,clientIp,expiresAt}) {
-    const c=this.c,id=order.id,amount=(order.amount_minor/100).toFixed(2),notify=this.origin+'/api/webhooks/'+this.id+'/'+id,returnUrl=this.origin+'/wallet?order='+id;
+    const c=this.c,id=order.id,amount=(order.amount_minor/100).toFixed(2),notify=this.origin+'/api/webhooks/'+this.id+'/'+id,returnUrl=this.origin+'/checkout?order='+encodeURIComponent(id);
     switch(this.id){
       case 'stripe':{
-        const body=new URLSearchParams({mode:'payment',client_reference_id:id,'metadata[order_id]':id,'metadata[user_id]':order.user_id,'line_items[0][price_data][currency]':'cny','line_items[0][price_data][product_data][name]':subject,'line_items[0][price_data][unit_amount]':String(order.amount_minor),'line_items[0][quantity]':'1',success_url:this.origin+'/'+(order.rental_id?'orders':'wallet')+'?order='+id,cancel_url:this.origin+'/'+(order.rental_id?'orders':'wallet')+'?order='+id,expires_at:String(expiresAt)});
+        const body=new URLSearchParams({mode:'payment',client_reference_id:id,'metadata[order_id]':id,'metadata[user_id]':order.user_id,'line_items[0][price_data][currency]':'cny','line_items[0][price_data][product_data][name]':subject,'line_items[0][price_data][unit_amount]':String(order.amount_minor),'line_items[0][quantity]':'1',success_url:returnUrl,cancel_url:returnUrl,expires_at:String(expiresAt)});
         if(order.rental_id)body.set('payment_method_types[0]','card');
         const {value}=await this.request('POST','https://api.stripe.com/v1/checkout/sessions',{body:body.toString(),headers:{Authorization:'Bearer '+c.secret_key,'Content-Type':'application/x-www-form-urlencoded','Idempotency-Key':'merchant-order-'+id}});
         if(!/^cs_[A-Za-z0-9_]+$/.test(value.id||''))mismatch();

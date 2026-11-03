@@ -1,9 +1,29 @@
 import { el } from './dom.js';
 import { api, collection } from './api.js';
 import { money } from './format.js';
-import { badge, panel, table } from './ui.js';
+import { badge, panel, table, emptyState, notice } from './ui.js';
 import { CANCEL, field, confirmAction, bindForm, editorDialog } from './ui-form.js';
 import { render } from './app.js';
+
+export async function plansView() {
+ const renewal=new URLSearchParams(location.search).get('renew_grant_id')||'';
+ const query=new URLSearchParams(renewal?{renew_grant_id:renewal}:{});
+ const plans=collection(await api('/api/plans'+(renewal?'?'+query:'')),'plans');
+ const cards=plans.map(plan=>{
+  const platforms=Array.isArray(plan.platforms)?plan.platforms:[],available=platforms.some(item=>item.available>0);
+  const target=new URLSearchParams({plan:plan.id});if(renewal)target.set('renew_grant_id',renewal);
+  return el('article',{class:'plan-card'},
+   el('div',{class:'plan-top'},el('span',{class:'eyebrow',text:renewal?'账号续期':'订阅套餐'}),el('span',{class:'badge '+(available?'good':'warn'),text:available?'有货':'无货'})),
+   el('h2',{text:plan.name||'未命名套餐'}),plan.description?el('p',{class:'plan-copy',text:plan.description}):null,
+   el('p',{class:'plan-price',text:money(plan.amount_minor,plan.currency)}),
+   el('p',{class:'plan-meta',text:plan.duration_days+' 天 · '+(plan.device_limit||1)+' 台设备 · 不自动续费'}),
+   el('div',{class:'plan-platforms'},platforms.length?platforms.map(item=>el('span',{class:'chip',text:(item.label||item.platform)+' · '+(item.available>0?'有货':'无货')})):el('span',{class:'muted',text:'暂无可选平台'})),
+   available?el('a',{class:'btn primary',href:'/checkout?'+target,text:renewal?'选择续期套餐':'选择套餐'}):el('button',{class:'btn',type:'button',disabled:true,text:'暂时无货'}));
+ });
+ return el('div',{class:'page-content storefront-page'},
+  renewal?notice('为当前账号续期','只展示与该账号匹配的套餐；不会替换成其他账号。'):null,
+  plans.length?el('div',{class:'plan-grid'},cards):panel('在售套餐','',emptyState(renewal?'暂无可用续期套餐':'暂无在售套餐',renewal?'当前供给不足或期限不匹配，请稍后核对或联系商户。':'套餐上架后会显示在这里。','layers')));
+}
 function planEditor(plan,resources) {
  const choices=resources.filter(resource=>resource.kind==='subscription'&&resource.status==='active'&&resource.available!==false);
  const form=el('form',{},field('\u8ba2\u9605\u5206\u7ec4','resource_id',{type:'select',choices:(choices.length?choices:resources).map(resource=>({value:resource.id,label:resource.name})),value:plan?.resource_id||choices[0]?.id,disabled:Boolean(plan)||!choices.length}),

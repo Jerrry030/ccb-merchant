@@ -31,13 +31,13 @@ test('actual storefront UI creates a plan, buys, renews, filters and exports imm
  await page.getByRole('link',{name:'待办',exact:true}).click();await page.getByText('客户同步待办',{exact:true}).waitFor();
  await page.getByRole('button',{name:'退出登录',exact:true}).click();await page.getByRole('dialog').getByRole('button',{name:'退出登录',exact:true}).click();
  await page.getByLabel('电子邮箱',{exact:true}).fill('member@example.test');await page.getByLabel('密码',{exact:true}).fill(password);await page.getByRole('button',{name:'登录',exact:true}).click();
- await page.getByRole('link',{name:'我的账号',exact:true}).waitFor();await page.goto(f.config.publicOrigin+'/wallet');assert.equal(await page.getByRole('link',{name:'套餐管理',exact:true}).count(),0);
+ await page.getByRole('link',{name:'我的账号',exact:true}).waitFor();await page.goto(f.config.publicOrigin+'/plans');assert.equal(await page.getByRole('link',{name:'套餐管理',exact:true}).count(),0);
  await page.getByRole('heading',{name:'7 天',exact:true}).waitFor();await page.screenshot({path:resolve(artifacts,'rental-member-plans.png'),fullPage:true});
  for(let i=0;i<2;i++){
-  await page.getByRole('button',{name:'购买',exact:true}).click();await page.getByRole('dialog').filter({hasText:'确认购买订阅'}).getByRole('button',{name:'确认购买',exact:true}).click();
-  await page.getByRole('dialog').getByText('已交付',{exact:true}).waitFor();await page.getByRole('dialog').getByRole('link',{name:'查看订单',exact:true}).click();
+  await page.getByRole('link',{name:i===0?'选择套餐':'选择续期套餐',exact:true}).click();await page.getByRole('button',{name:i===0?'确认购买':'确认续期',exact:true}).click();await page.getByRole('dialog').getByRole('button',{name:'确认下单',exact:true}).click();
+  await page.locator('.rental-detail').getByText('已交付',{exact:true}).waitFor();await page.getByRole('link',{name:'返回套餐订单',exact:true}).click();
   await page.getByRole('heading',{name:'我的订单',exact:true}).waitFor();await page.getByRole('row').filter({hasText:'7 天'}).first().waitFor();assert.equal(await page.getByRole('row').filter({hasText:'7 天'}).count(),i+1);
-  if(i===0){await page.goto(f.config.publicOrigin+'/wallet?renew_grant_id='+encodeURIComponent(f.state.grants[0].id));}
+  if(i===0){await page.goto(f.config.publicOrigin+'/accounts');await page.getByRole('link',{name:'续期套餐',exact:true}).click();}
  }
  const rows=f.store.db.prepare('SELECT * FROM rentals ORDER BY created_at').all();assert.equal(rows.length,2);assert.equal(Date.parse(rows[1].expires_at)-Date.parse(rows[0].expires_at),7*86400000);
  assert.equal(f.store.wallet(member.data.user.id).balance_minor,7532);

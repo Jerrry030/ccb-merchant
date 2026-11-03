@@ -51,8 +51,10 @@ test('personal device cards and global staff devices expose navigation, truthful
  for(const [width,theme] of [[1440,'light'],[1440,'dark'],[1100,'dark'],[1001,'light'],[900,'light'],[390,'light'],[320,'dark']]){
   await member.setViewportSize({width,height:1000});await member.evaluate(theme=>document.documentElement.dataset.theme=theme,theme);
   assert.equal(await member.evaluate(()=>document.documentElement.scrollWidth>innerWidth+1),false);
-  const links=await member.getByRole('navigation',{name:'主导航'}).locator('a').evaluateAll(items=>items.map(item=>({top:item.getBoundingClientRect().top,bottom:item.getBoundingClientRect().bottom})));
-  assert.equal(links.length,7);if(width<=1000)assert.ok(Math.max(...links.map(l=>l.top))-Math.min(...links.map(l=>l.top))<1,'mobile navigation stays on a single horizontally scrollable row');
+  const nav=member.getByRole('navigation',{name:'主导航'});
+  assert.equal(await nav.locator('a').count(),9,'all destinations have one canonical link');
+  const links=await nav.locator('.nav-link').evaluateAll(items=>items.filter(item=>item.getClientRects().length).map(item=>({top:item.getBoundingClientRect().top,bottom:item.getBoundingClientRect().bottom})));
+  assert.equal(links.length,width>1350?9:7);if(width<=1000)assert.ok(Math.max(...links.map(l=>l.top))-Math.min(...links.map(l=>l.top))<1,'mobile navigation keeps one row and groups commerce destinations');
   await member.screenshot({path:resolve(artifacts,`personal-devices-${width}-${theme}.png`),fullPage:true});
  }
  await member.setViewportSize({width:1440,height:1000});await own.getByRole('button',{name:'管理绑定'}).click();const ownDialog=member.getByRole('dialog',{name:'设备绑定管理'});await ownDialog.getByLabel('设备名称',{exact:true}).fill('甲的新电脑名');await ownDialog.getByRole('button',{name:'保存名称'}).click();await ownDialog.getByText('已保存',{exact:true}).waitFor();assert.equal(deviceSets.get(users[0].core)[0].name,'甲的新电脑名');await member.keyboard.press('Escape');

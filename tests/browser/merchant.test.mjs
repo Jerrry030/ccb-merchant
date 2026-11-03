@@ -57,7 +57,7 @@ test('member empty and unavailable views have honest states; payment stays disab
     await h.page.goto(h.fixture.origin+path); await h.page.getByText(text,{exact:true}).waitFor();
   }
   assert.equal(await h.page.getByRole('button',{name:'在线支付未启用',exact:true}).isDisabled(),true);
-  assert.equal(await h.page.getByLabel('充值金额（人民币元）').isDisabled(),true);
+  assert.equal(await h.page.getByLabel('充值金额（人民币元）').count(),0,'wallet has no recharge form');
   assert.equal(h.fixture.state.requests.filter(r => r.path === '/api/me/payments').length,0);
   await h.page.getByRole('link',{name:'个人设置',exact:true}).click(); await h.page.getByRole('heading',{name:'登录安全',exact:true}).waitFor();
 });
@@ -103,7 +103,7 @@ test('enabled registration, verification and password reset are explicit and scr
   await page.getByRole('heading',{name:'创建一个账户',exact:true}).waitFor();
   await page.getByLabel('显示名称',{exact:true}).fill('新测试成员'); await page.getByLabel('电子邮箱（验证必需）',{exact:true}).fill('new@example.test');
   await page.getByLabel('密码',{exact:true}).fill('fixture-new-password-123'); await page.getByLabel('确认密码',{exact:true}).fill('fixture-new-password-123');
-  await page.getByRole('button',{name:'发送验证码',exact:true}).click(); await page.getByText('请查看邮箱。新注册或尚未验证的账户会收到 15 分钟内有效的 6 位验证码，并使用你刚刚填写的密码。已经可以登录的账户不会被修改，请用原密码登录或找回密码。',{exact:true}).waitFor();
+  await page.getByRole('button',{name:'发送验证码',exact:true}).click(); await page.getByRole('button',{name:'重新发送验证码',exact:true}).waitFor();
   assert.equal(fixture.state.requests.filter(r => r.path === '/api/auth/register').length,1);
   assert.equal(fixture.state.requests.filter(r => r.path === '/api/auth/verify').length,0);
   await page.getByLabel('验证码',{exact:true}).fill('123456');
@@ -174,24 +174,24 @@ test('last-admin error is actionable and never locally changes the current role'
 
 
 test('ambiguous write is not retried or reported successful',async t => {
-  const h = await harness(t,{features:{payment:true}}); await login(h); await h.page.goto(h.fixture.origin+'/wallet');
+  const h = await harness(t,{features:{payment:true}}); await login(h); await h.page.goto(h.fixture.origin+'/checkout?recharge=1');
   h.fixture.state.disconnected.add('/api/me/payments'); await h.page.getByLabel('充值金额（人民币元）').fill('12.34');
-  await h.page.getByRole('button',{name:'创建支付订单',exact:true}).click(); await h.page.getByRole('button',{name:'创建订单',exact:true}).click();
-  await h.page.getByText('操作结果尚未确认',{exact:true}).waitFor(); assert.equal(await h.page.getByRole('button',{name:'创建支付订单',exact:true}).isDisabled(),true);
+  await h.page.getByRole('button',{name:'前往支付',exact:true}).click(); await h.page.getByRole('button',{name:'创建订单',exact:true}).click();
+  await h.page.getByText('操作结果尚未确认',{exact:true}).waitFor(); assert.equal(await h.page.getByRole('button',{name:'前往支付',exact:true}).isDisabled(),true);
   assert.equal(h.fixture.state.requests.filter(r => r.path === '/api/me/payments').length,1); assert.equal(h.fixture.state.orders.length,0);
 });
 
 test('unsafe checkout URL is inert and amount is sent as integer minor units',async t => {
-  const h = await harness(t,{features:{payment:true},checkoutUrl:'javascript:globalThis.checkoutLeak=true'}); await login(h); await h.page.goto(h.fixture.origin+'/wallet');
-  await h.page.getByLabel('充值金额（人民币元）').fill('12.34'); await h.page.getByRole('button',{name:'创建支付订单',exact:true}).click(); await h.page.getByRole('button',{name:'创建订单',exact:true}).click();
+  const h = await harness(t,{features:{payment:true},checkoutUrl:'javascript:globalThis.checkoutLeak=true'}); await login(h); await h.page.goto(h.fixture.origin+'/checkout?recharge=1');
+  await h.page.getByLabel('充值金额（人民币元）').fill('12.34'); await h.page.getByRole('button',{name:'前往支付',exact:true}).click(); await h.page.getByRole('button',{name:'创建订单',exact:true}).click();
   await h.page.getByText('订单已记录，但支付链接不可安全使用',{exact:true}).waitFor(); assert.equal(await h.page.locator('a[href^="javascript:"]').count(),0);
   assert.equal(h.fixture.state.requests.find(r => r.path === '/api/me/payments').body.amount_minor,1234); assert.equal(await h.page.evaluate(() => globalThis.checkoutLeak),undefined);
-  await h.page.goto(h.fixture.origin+'/wallet?order=order-1&success=true'); await h.page.getByRole('heading',{name:'返回后的订单核对',exact:true}).waitFor(); assert.equal(await h.page.getByText('已支付',{exact:true}).count(),0); assert.equal(h.fixture.state.orders[0].status,'pending');
+  await h.page.goto(h.fixture.origin+'/wallet?order=order-1&success=true'); await h.page.getByRole('heading',{name:'收银台',exact:true}).waitFor(); assert.equal(await h.page.getByText('已支付',{exact:true}).count(),0); assert.equal(h.fixture.state.orders[0].status,'pending');
 });
 
 test('valid checkout is an explicit external link, never an automatic redirect or charge',async t => {
-  const h = await harness(t,{features:{payment:true}}); await login(h); await h.page.goto(h.fixture.origin+'/wallet');
-  await h.page.getByLabel('充值金额（人民币元）').fill('20.00'); await h.page.getByRole('button',{name:'创建支付订单',exact:true}).click(); await h.page.getByRole('button',{name:'创建订单',exact:true}).click();
+  const h = await harness(t,{features:{payment:true}}); await login(h); await h.page.goto(h.fixture.origin+'/checkout?recharge=1');
+  await h.page.getByLabel('充值金额（人民币元）').fill('20.00'); await h.page.getByRole('button',{name:'前往支付',exact:true}).click(); await h.page.getByRole('button',{name:'创建订单',exact:true}).click();
   const link = h.page.getByRole('link',{name:'前往支付收银台 ↗',exact:true}); await link.waitFor(); assert.equal(await link.getAttribute('target'),'_blank'); assert.equal(await link.getAttribute('rel'),'noopener noreferrer'); assert.equal(new URL(h.page.url()).origin,h.fixture.origin);
 });
 
@@ -263,12 +263,12 @@ test('loading is visible and expired sessions explicitly request fresh login',as
 
 test('unsafe return targets and non-Stripe HTTPS checkout origins are never navigated',async t => {
   const h = await harness(t,{features:{payment:true},checkoutUrl:'https://untrusted.invalid/checkout'}); await login(h,'member','/login?next=https%3A%2F%2Funtrusted.invalid%2Fsteal');
-  assert.equal(new URL(h.page.url()).pathname,'/'); await h.page.goto(h.fixture.origin+'/wallet'); await h.page.getByLabel('充值金额（人民币元）').fill('20.00');
-  await h.page.getByRole('button',{name:'创建支付订单',exact:true}).click(); await h.page.getByRole('button',{name:'创建订单',exact:true}).click(); await h.page.getByText('订单已记录，但支付链接不可安全使用',{exact:true}).waitFor();
+  assert.equal(new URL(h.page.url()).pathname,'/'); await h.page.goto(h.fixture.origin+'/checkout?recharge=1'); await h.page.getByLabel('充值金额（人民币元）').fill('20.00');
+  await h.page.getByRole('button',{name:'前往支付',exact:true}).click(); await h.page.getByRole('button',{name:'创建订单',exact:true}).click(); await h.page.getByText('订单已记录，但支付链接不可安全使用',{exact:true}).waitFor();
   assert.equal(await h.page.getByRole('link',{name:'前往支付收银台 ↗',exact:true}).count(),0);
 });
 
-test('connection instructions align headings, command panels and notes without mobile gaps',async t=>{
+test('connection instructions only show headings and commands without desktop or mobile gaps',async t=>{
  const accountId='account-'+ '1'.repeat(64),h=await harness(t,{connected:true,accounts:[{id:accountId,name:'布局测试账号',state:'available',plan:'Claude',surfaces:['code']}]});
  await login(h,'member','/connect');await mkdir(captureRoot,{recursive:true});
  for(const selected of [false,true]){
@@ -276,6 +276,8 @@ test('connection instructions align headings, command panels and notes without m
   await h.page.goto(h.fixture.origin+'/connect'+(selected?'?account_id='+accountId:''));
   const steps=h.page.locator('.connection-steps');await steps.getByRole('heading',{name:'安装 ccb',exact:true}).waitFor();
   assert.equal(await steps.getByRole('button',{name:/^复制(安装|登录|启动)命令$/}).count(),3);
+  assert.equal(await steps.locator('p, .instruction-note').count(),0,'step descriptions and notes are removed, not hidden');
+  assert.deepEqual(await steps.locator(':scope > li').evaluateAll(items=>items.map(item=>item.children.length)),[2,2,2],'each step only contains its heading and command panel');
   assert.equal(await steps.locator('.command-line pre').nth(0).innerText(),'npm install -g @rimuruchan/ccb');
   assert.equal(await steps.locator('.command-line pre').nth(1).innerText(),'ccb login --gateway '+h.fixture.state.public.site.public_origin+(selected?' --account '+accountId+' --surface code':''));
   assert.equal(await steps.locator('.command-line pre').nth(2).innerText(),'ccb');
@@ -283,17 +285,19 @@ test('connection instructions align headings, command panels and notes without m
    await h.page.setViewportSize({width,height:1050});await h.page.evaluate(theme=>document.documentElement.dataset.theme=theme,theme);await h.page.evaluate(()=>document.fonts.ready);
    const rows=await steps.locator(':scope > li').evaluateAll(items=>items.map(item=>{
     const rect=element=>{const r=element.getBoundingClientRect();return {top:r.top,bottom:r.bottom,left:r.left,width:r.width,height:r.height};};
-    return {card:rect(item),title:rect(item.querySelector('h2')),description:rect(item.querySelector('p')),command:rect(item.querySelector('.command-block')),code:rect(item.querySelector('.command-line pre')),note:item.querySelector('.instruction-note')?rect(item.querySelector('.instruction-note')):null};
+    return {card:rect(item),title:rect(item.querySelector('h2')),command:rect(item.querySelector('.command-block')),code:rect(item.querySelector('.command-line pre'))};
    }));
    assert.equal(rows.length,3);
+   for(const row of rows){
+    assert.ok(row.command.top-row.title.bottom>=0&&row.command.top-row.title.bottom<=20,'commands follow headings without reserving removed description space');
+    assert.ok(row.card.bottom-row.command.bottom>0&&row.card.bottom-row.command.bottom<=26,'cards end after the command without reserving removed note space');
+   }
    if(width>1100){
-    for(const part of ['card','title','description','command','code'])assert.ok(Math.max(...rows.map(row=>row[part].top))-Math.min(...rows.map(row=>row[part].top))<1,`${part} must share its top edge at ${width}px (selected=${selected})`);
+    for(const part of ['card','title','command','code'])assert.ok(Math.max(...rows.map(row=>row[part].top))-Math.min(...rows.map(row=>row[part].top))<1,`${part} must share its top edge at ${width}px (selected=${selected})`);
     assert.ok(Math.max(...rows.map(row=>row.command.bottom))-Math.min(...rows.map(row=>row.command.bottom))<1,'command panels share their bottom edge');
-    assert.ok(rows.every(row=>row.note),'every step has its explanation after the command');
-    assert.ok(Math.max(...rows.map(row=>row.note.top))-Math.min(...rows.map(row=>row.note.top))<1,'notes share their top edge');
    }else{
     for(let i=0;i<rows.length;i++){
-     const row=rows[i];assert.ok(row.command.top-row.description.bottom>=0&&row.command.top-row.description.bottom<=20,'stacked cards must not reserve desktop description space');
+     const row=rows[i];
      if(i)assert.ok(row.card.top>=rows[i-1].card.bottom,'mobile steps remain in order without overlap');
     }
    }

@@ -12,13 +12,22 @@ function pageQuery(params, allowed) {
 }
 
 export function readOrderPage(store, params, {rentals = false, ownerId = null} = {}) {
-  const {limit,offset} = pageQuery(params,['q','status',...(ownerId ? [] : ['user_id'])]);
+  const {limit,offset} = pageQuery(params,['q','status','id',rentals?'request_id':'purpose',...(ownerId ? [] : ['user_id'])]);
   const status = params.get('status') || '', q = params.get('q') || '', userId = ownerId || params.get('user_id');
   const allowed = rentals ? ['awaiting_payment','queued','review','fulfilled','refund_pending','refunded','cancelled'] : ['creating','pending','unknown','paid','expired','failed'];
   if (status && status !== 'needs_review' && !allowed.includes(status)) throw new HttpError(400,'invalid_query','Unknown order status.');
   const statuses = status === 'needs_review' ? (rentals ? deliveryReviewStatuses : paymentReviewStatuses) : status ? [status] : [];
   const where = [], args = [];
   if (userId) { where.push('o.user_id=?'); args.push(userId); }
+  if (params.get('id')) { opaqueId(params.get('id')); where.push('o.id=?'); args.push(params.get('id')); }
+  if (rentals && params.get('request_id')) {
+    if (!/^[A-Za-z0-9_-]{16,100}$/.test(params.get('request_id'))) throw new HttpError(400,'invalid_query','Invalid purchase request identity.');
+    where.push('o.request_id=?'); args.push(params.get('request_id'));
+  }
+  if (!rentals && params.has('purpose')) {
+    if (!['recharge','subscription'].includes(params.get('purpose'))) throw new HttpError(400,'invalid_query','Unknown payment purpose.');
+    where.push(params.get('purpose')==='recharge'?'o.rental_id IS NULL':'o.rental_id IS NOT NULL');
+  }
   if (statuses.length) { where.push('o.status IN ('+statuses.map(()=>'?').join(',')+')'); args.push(...statuses); }
   if (q) {
     where.push('(o.id LIKE ? OR u.email LIKE ? OR u.display_name LIKE ?'+(rentals ? ' OR o.name LIKE ?' : '')+')');
@@ -32,11 +41,21 @@ export function readOrderPage(store, params, {rentals = false, ownerId = null} =
     const result = {...(rentals ? publicRental(row) : publicOrder(row)),user_id:row.user_id,...(!ownerId ? {customer_name:row.customer_name,customer_email:row.customer_email} : {})};
     if (rentals) {
       const payment = store.db.prepare('SELECT id,status FROM orders WHERE rental_id=?').get(row.id);
-      result.payment_order_id=payment?.id || null; result.payment_status=payment?.status || null;
+      const debit=store.db.prepare("SELECT 1 FROM ledger WHERE rental_id=? AND user_id=? AND amount_minor=? AND currency=? AND kind='rental_debit'").get(row.id,row.user_id,-row.amount_minor,row.currency);
+      result.payment_order_id=payment?.id || null; result.payment_status=payment?.status || (debit?'paid':null);
+    } else {
+      result.credited=Boolean(store.db.prepare("SELECT 1 FROM ledger WHERE order_id=? AND user_id=? AND amount_minor=? AND currency=? AND kind IN ('stripe_credit','payment_credit')").get(row.id,row.user_id,row.amount_minor,row.currency));
     }
     return result;
   });
   return {[rentals ? 'rentals' : 'orders']:items,total,limit,offset};
+}
+
+export function readWalletPage(store, params, ownerId) {
+  const {limit,offset}=pageQuery(params,[]);
+  const total=store.db.prepare('SELECT count(*) n FROM ledger WHERE user_id=?').get(ownerId).n;
+  const ledger=store.db.prepare('SELECT l.id,l.order_id,l.rental_id,l.amount_minor,l.currency,l.kind,l.created_at,o.rental_id payment_rental_id FROM ledger l LEFT JOIN orders o ON o.id=l.order_id AND o.user_id=l.user_id WHERE l.user_id=? ORDER BY l.created_at DESC,l.id DESC LIMIT ? OFFSET ?').all(ownerId,limit,offset);
+  return {wallet:store.wallet(ownerId),ledger,total,limit,offset};
 }
 
 export function readAuditPage(store, params) {

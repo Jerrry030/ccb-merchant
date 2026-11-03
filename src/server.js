@@ -2,7 +2,7 @@ import { Custody } from './custody.js';
 import { managementProfiles } from '../public/management-policy.js';
 import { Inventory } from './inventory.js';
 import { Devices } from './devices.js';
-import { readOrderPage, readAuditPage } from './admin-queries.js';
+import { readOrderPage, readAuditPage, readWalletPage } from './admin-queries.js';
 import { deliveryReviewStatuses, paymentReviewStatuses } from '../public/admin-workflow.js';
 import { Access } from './access.js';
 import { Customers } from './customers.js';
@@ -11,7 +11,7 @@ import { Reconciler } from './reconciler.js';
 import { createServer } from 'node:http';
 import { readFile, realpath, stat } from 'node:fs/promises';
 import { resolve, relative, extname, isAbsolute, basename } from 'node:path';
-import { Store, publicUser, publicOrder, publicRental } from './store.js';
+import { Store, publicUser, publicRental } from './store.js';
 import { Auth } from './auth.js';
 import { Upstream, project, schemas, scopes } from './upstream.js';
 import { Payments } from './payments.js';
@@ -68,7 +68,7 @@ export function createMerchant(config, options={}) {
   const reconciler=new Reconciler(store,customers,payments,commerce,options.reconcileIntervalMs??config.reconcileIntervalMs);
   const lockedUsers=customers.locks;
   const inventory=new Inventory(store,core,customers);
-  let runtimeInFlight=0;
+  let runtimeInFlight=0, codeDownloads=0;
   const settings=()=>{
     const payment=describePayment(config,store);
     const value=publicSettings(readSite(store),effectiveMail(config,store),payment,config.upstreamUrl);
@@ -135,9 +135,15 @@ export function createMerchant(config, options={}) {
       if(path.startsWith('/bridge/')) {
         // Fail closed for ALL new runtime admissions if a local suspension has not been confirmed at core.
         if(store.db.prepare("SELECT 1 FROM users WHERE status='disabled' AND core_pending IS NOT NULL LIMIT 1").get()) throw new HttpError(503,'suspension_sync_pending','Runtime is paused until pending customer suspension is reconciled.');
-        if(runtimeInFlight>=config.runtimeMaxInFlight) throw new HttpError(503,'runtime_busy','Runtime concurrency limit reached. No request was forwarded.');
-        runtimeInFlight++;
-        try { await proxyRuntime(req,res,core,store,url,access); } finally { runtimeInFlight--; }
+        const packageDownload=req.method==='GET'&&path==='/bridge/v1/code/download';
+        if(packageDownload){
+          if(codeDownloads>=4){res.setHeader('Retry-After','1');throw new HttpError(429,'download_busy','Code download concurrency limit reached.');}
+          codeDownloads++;
+        } else {
+          if(runtimeInFlight>=config.runtimeMaxInFlight)throw new HttpError(503,'runtime_busy','Runtime concurrency limit reached. No request was forwarded.');
+          runtimeInFlight++;
+        }
+        try { await proxyRuntime(req,res,core,store,url,access,devices); } finally { if(packageDownload)codeDownloads--;else runtimeInFlight--; }
         return;
       }
       const hook=path.match(/^\/api\/webhooks\/(stripe|alipay|wxpay|easypay|suixingpay|airwallex)(?:\/([A-Za-z0-9_-]{1,100}))?$/);
@@ -272,7 +278,13 @@ export function createMerchant(config, options={}) {
           if(!memberPrefix) {respond(res,200,{accounts:[]});return;}
           customerReady();
           const data=await core.customerEntitlements(user.core_customer_id,{includeAccounts:true});
-          respond(res,200,{accounts:store.labelAccounts(data.accounts)}); return;
+          const renewableGrants=new Set(store.db.prepare("SELECT grant_id FROM rentals WHERE user_id=? AND status='fulfilled' AND grant_id IS NOT NULL").all(user.id).map(row=>row.grant_id));
+          const accounts=store.labelAccounts(data.accounts).map(account=>{
+            const grantId=account.grant_id||account.id;
+            const renewable=Number.isFinite(Date.parse(account.expires_at))&&renewableGrants.has(grantId);
+            return {...account,renew_grant_id:renewable?grantId:''};
+          });
+          respond(res,200,{accounts}); return;
         }
         case 'POST /api/me/devices/preview':
         case 'POST /api/me/devices/approve': {
@@ -283,10 +295,9 @@ export function createMerchant(config, options={}) {
           else { if(data.ok!==true) throw new HttpError(503,'core_outcome_unknown','Device approval has not been confirmed.'); store.audit(user.id,'device.approve',user.id); respond(res,200,{ok:true}); } return;
         }
         case 'GET /api/me/wallet': {
-          const ledger=store.db.prepare('SELECT id,order_id,rental_id,amount_minor,currency,kind,created_at FROM ledger WHERE user_id=? ORDER BY created_at DESC LIMIT 200').all(user.id);
-          const orders=store.db.prepare('SELECT * FROM orders WHERE user_id=? ORDER BY created_at DESC LIMIT 200').all(user.id).map(publicOrder);
-          respond(res,200,{wallet:store.wallet(user.id),ledger,orders}); return;
+          respond(res,200,readWalletPage(store,url.searchParams,user.id)); return;
         }
+        case 'GET /api/me/orders': respond(res,200,readOrderPage(store,url.searchParams,{ownerId:user.id})); return;
         case 'POST /api/me/payments': {
           fields(body,['amount_minor','payment_method'],['amount_minor']); store.throttle(`checkout:${user.id}`,10,60000);
           respond(res,201,await payments.create(user.id,body.amount_minor,{method:body.payment_method,clientIp:(req.socket.remoteAddress||'').replace('::ffff:','')})); return;

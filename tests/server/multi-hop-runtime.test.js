@@ -19,14 +19,18 @@ async function multiHop(t, { streaming = false, limits = false } = {}) {
     onCore: ({ req, res, url, body, json, state }) => {
       if (!url.pathname.startsWith('/bridge/v1/')) return false;
       assert.equal(req.headers['x-ccb-access-key'], upstreamKey);
-      if (url.pathname === '/bridge/v1/device/start') {
+      if(url.pathname==='/bridge/v1/code') {
+        json({version:'0.1.0-bridge.1',os:'windows',arch:'amd64',size:12,sha256:createHash('sha256').update('PK-MULTIHOP!').digest('hex'),private_path:'/provider/private'});
+      } else if(url.pathname==='/bridge/v1/code/download') {
+        res.writeHead(200,{'Content-Type':'application/zip','Content-Length':'12'});res.end('PK-MULTIHOP!');
+      } else if (url.pathname === '/bridge/v1/device/start') {
         json({ code: 'MULTIHOP123', verification_path: '/connect', expires_at: expiry, interval: 3 }, 201);
       } else if (url.pathname === '/bridge/v1/device/account') {
         assert.ok(state.grants.some(grant => grant.id === body.grant_id));
         selected = body.grant_id;
         json({ current_grant_id: selected, selection_version: 1 });
       } else if (url.pathname === '/bridge/v1/device/status') {
-        json({ id: 'provider-device', state: 'approved', current_grant_id: selected, selection_version: 1, expires_at: expiry });
+        json({ id: 'provider-device', state: 'approved', owner_user_id: 'PRIVATE_PROVIDER_OWNER', owner_username: 'PRIVATE_PROVIDER_LOGIN', owner_display_name: 'PRIVATE_PROVIDER_DISPLAY', current_grant_id: selected, selection_version: 1, expires_at: expiry });
       } else if (url.pathname === '/bridge/v1/accounts') {
         json({ accounts: state.grants.map(grant => ({ id: grant.id, grant_id: grant.id, name: 'PRIVATE_PROVIDER_ACCOUNT', account_lease_id: 'PRIVATE_PROVIDER_LEASE', state: 'available', expires_at: expiry })), current_grant_id: selected, selection_version: 1 });
       } else if (url.pathname === '/bridge/v1/messages') {
@@ -96,6 +100,9 @@ test('runtime traverses C, B and A with per-hop keys and mapped identities, with
   const { first, leaf, nodes, native, token, grant } = chain;
   const status = await leaf.f.request('GET', '/bridge/v1/device/status', undefined, native);
   assert.equal(status.status, 200, status.raw);
+  assert.equal(Object.hasOwn(status.data, 'owner_username'), false, 'a downstream service receives no provider or intermediate login name');
+  assert.equal(Object.hasOwn(status.data, 'owner_display_name'), false);
+  assert.equal(status.raw.includes('PRIVATE_PROVIDER'), false);
   const list = await leaf.f.request('GET', '/bridge/v1/accounts', undefined, native);
   assert.equal(list.status, 200, list.raw);
   assert.deepEqual(list.data.accounts.map(account => account.id), [grant.id]);
@@ -238,4 +245,13 @@ test('quota errors and retry controls survive three Merchant privacy boundaries 
   for(const node of nodes)assert.equal(node.received.filter(row=>row.path==='/bridge/v1/messages').length,attempts);
   assert.equal(first.state.requests.filter(row=>row.path==='/bridge/v1/messages').length,attempts);
  }
+});
+
+
+test('Code packages cross three real Merchant boundaries without JSON rewriting of bytes',async t=>{
+ const {leaf,native}=await multiHop(t);
+ const metadata=await leaf.f.request('GET','/bridge/v1/code?os=windows&arch=amd64',undefined,native);
+ assert.equal(metadata.status,200);assert.equal(metadata.data.version,'0.1.0-bridge.1');assert.equal(metadata.raw.includes('private'),false);
+ const downloaded=await fetch(leaf.f.config.publicOrigin+'/bridge/v1/code/download?os=windows&arch=amd64&version=0.1.0-bridge.1',{headers:native.headers});
+ assert.equal(downloaded.status,200);const bytes=Buffer.from(await downloaded.arrayBuffer());assert.equal(bytes.toString(),'PK-MULTIHOP!');assert.equal(createHash('sha256').update(bytes).digest('hex'),metadata.data.sha256);
 });

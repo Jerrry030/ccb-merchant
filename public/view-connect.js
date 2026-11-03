@@ -2,6 +2,7 @@ import { el, icon } from './dom.js';
 import { state } from './state.js';
 import { api, collection } from './api.js';
 import { connectGuides } from './router.js';
+import { desktopTargets, parseDesktopRelease } from './desktop-releases.js';
 import { notice, emptyState, panel, errorNotice, supportContact } from './ui.js';
 import { field, bindForm } from './ui-form.js';
 export async function connectView() {
@@ -9,12 +10,15 @@ export async function connectView() {
   if (query.has('code')) { state.code = query.get('code').slice(0,128); history.replaceState({},'','/connect'); }
   const ticket = state.view;
   const accountId = query.get('account_id');
-  const accounts = collection(await api('/api/me/accounts'),'accounts');
+  const downloads = await desktopDownloadPanel();
+  let accounts;
+  try { accounts = collection(await api('/api/me/accounts'),'accounts'); }
+  catch (error) { if (ticket !== state.view) return; return el('div',{class:'connect-page'},downloads,errorNotice(error)); }
   if (ticket !== state.view) return;
   if (!accounts.length) {
     const lead = document.getElementById('connect-lead');
     if (lead) lead.textContent = '分配到账号之后，再安装并确认设备。';
-    return panel('等待分配账号','没有账号时不能连接设备。',emptyState('请先等待账号分配','管理员分配账号后，再回到这里安装 ccb 并确认设备。在此之前不需要运行安装命令。'+supportContact(),'layers',el('a',{class:'btn',href:'/accounts',text:'返回我的账号'})));
+    return el('div',{class:'connect-page'},downloads,panel('等待分配账号','没有账号时不能连接设备。',emptyState('请先等待账号分配','管理员分配账号后，再回到这里安装 ccb 并确认设备。在此之前不需要运行安装命令。'+supportContact(),'layers',el('a',{class:'btn',href:'/accounts',text:'返回我的账号'}))));
   }
   let selected = null;
   if (accountId) {
@@ -121,15 +125,15 @@ export async function connectView() {
     place(true);
   }
   const steps = el('ol',{class:'connection-steps'},
-    el('li',{},el('h2',{text:'安装 ccb'}),el('p',{text:'需要 Node.js 18 或更新版本。Windows、macOS 和 Linux 使用同一条命令。'}),commandBlock('安装命令','npm install -g @rimuruchan/ccb'),el('p',{class:'instruction-note'},'首次启动时 ccb 会下载官方 Claude Code；电脑上已有 ',el('code',{text:'claude'}),' 时直接使用。以后用同一条命令更新。')),
-    el('li',{},el('h2',{text:'登录这台电脑'}),el('p',{text:'在需要接入的电脑上运行登录命令，浏览器会打开本页让你确认设备。'}),commandBlock('登录命令',loginCommand(selected?.id)),el('p',{class:'instruction-note',text:'浏览器没有自动打开时，在本页「确认终端连接码」中输入终端显示的连接码。登录命令使用本站公开地址；其他电脑需要能访问它。'})),
-    el('li',{},el('h2',{text:'选择账号，开始项目'}),el('p',{text:'回到项目目录，运行启动命令，开始你的项目。'}),commandBlock('启动命令','ccb'),el('p',{class:'instruction-note'},'指定账号的登录命令会在确认设备后完成选择；未指定时会列出可用账号。之后用 ',el('code',{text:'ccb account'}),' 切换。')));
+    el('li',{},el('h2',{text:'安装 ccb'}),commandBlock('安装命令','npm install -g @rimuruchan/ccb')),
+    el('li',{},el('h2',{text:'登录这台电脑'}),commandBlock('登录命令',loginCommand(selected?.id))),
+    el('li',{},el('h2',{text:'选择账号，开始项目'}),commandBlock('启动命令','ccb')));
   const reference = el('dl',{class:'connection-reference','aria-label':'常用命令'});
   for (const [name, command] of [['继续上次会话','ccb -c'],['切换账号','ccb account'],['检查连接','ccb status'],['设备续期','ccb login --renew'],['更新 Claude Code','ccb update']]) reference.append(el('div',{},el('dt',{text:name}),el('dd',{},el('code',{text:command}))));
   const guide = el('section',{class:'connection-instructions','aria-label':'安装与登录指南'},steps,reference);
   renderIdle();
   const account = selected ? el('section',{class:'card account-context'},el('div',{class:'card-body'},el('h2',{text:selected.name || '当前账号'}),el('p',{text:'设备确认后，终端将选择此账号；这不会抢占其他设备。本站当前提供 Code。'}),el('a',{href:'/accounts',text:'返回我的账号'}))) : null;
-  return el('div',{class:'connect-page'},account,layout);
+  return el('div',{class:'connect-page'},downloads,account,layout);
 }
 export function loginCommand(accountId) {
   try {
@@ -164,4 +168,27 @@ export function commandBlock(label, command) {
     timer = setTimeout(() => { button.textContent = '复制'; status.textContent = ''; }, 1800);
   });
   return block;
+}
+
+async function desktopDownloadPanel() {
+  const status = el('p',{class:'accb-download-status',role:'status'});
+  const actions = el('div',{class:'accb-download-actions'});
+  const content = el('section',{class:'card accb-download-bar','aria-label':'ACCB 客户端下载'},
+    el('div',{class:'accb-download-heading'},icon('monitor'),el('div',{},el('h2',{text:'客户端'}),el('p',{text:'选择适合你电脑的版本，下载安装后按下方步骤完成登录。'}))),actions,status);
+  try {
+    const response = await fetch('/accb-releases.json',{cache:'no-cache',signal:AbortSignal.timeout(8000)});
+    if (!response.ok || !(response.headers.get('content-type') || '').includes('application/json')) throw new Error('Catalog unavailable');
+    const catalog = parseDesktopRelease(await response.json());
+    for (const target of desktopTargets) {
+      const file = catalog.files.find(file => file.id === target.id);
+      if (!file) { actions.append(el('span',{class:'accb-download-unavailable','aria-disabled':'true',text:target.label + ' · 暂未发布'})); continue; }
+      const size = (file.size / 1048576).toFixed(1) + ' MB';
+      actions.append(el('a',{class:'btn accb-download-link',href:file.href,download:file.name,'aria-label':'下载 ACCB ' + target.label,title:'SHA-256: ' + file.sha256},el('strong',{text:target.label}),el('span',{text:target.detail + ' · ' + size})));
+    }
+    status.append(catalog.version ? '版本 ' + catalog.version + ' · ' : '安装包尚未发布。');
+    if (catalog.version) status.append('Windows 包未做发行商签名；macOS 包仅 ad-hoc 签名、未公证。macOS / Linux 尚未完成真机验收。 ',el('a',{href:'/accb-releases.json',text:'文件校验信息'}));
+  } catch {
+    status.textContent = '暂时无法读取安装包，请稍后刷新。下方命令行连接方式仍可使用。';
+  }
+  return content;
 }

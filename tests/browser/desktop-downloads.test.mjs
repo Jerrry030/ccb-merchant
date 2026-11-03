@@ -1,0 +1,56 @@
+import { chromium } from 'playwright';
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { resolve, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { mkdir } from 'node:fs/promises';
+import { fixture, password } from '../server/fixtures.js';
+import { desktopTargets } from '../../public/desktop-releases.js';
+const root = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
+test('connect page exposes all ACCB downloads, keeps CLI guidance, and fails closed on bad catalogs', async t => {
+  const f = await fixture(t, { publicDir: resolve(root, 'public') });
+  const admin = await f.request('POST', '/api/setup', { setup_token: f.setupToken, email: 'admin@example.test', password, display_name: '测试管理员' });
+  const created = await f.request('POST', '/api/admin/users', { email: 'download@example.test', password, display_name: '下载测试', role: 'member' }, admin);
+  await f.request('POST', '/api/admin/users/' + created.data.user.id + '/provision', undefined, admin);
+  const browser = await chromium.launch({ headless: true }); t.after(() => browser.close());
+  const context = await browser.newContext({ viewport: { width: 1440, height: 1000 }, reducedMotion: 'reduce', acceptDownloads: true });
+  const page = await context.newPage(), faults = []; page.on('pageerror', error => faults.push(error.message));
+  page.setDefaultTimeout(15000);
+  let invalid = false;
+  const catalog = { product: 'ACCB', version: '0.1.1', source_commit: 'a'.repeat(40), files: desktopTargets.map(target => ({ target: target.id, name: 'Anthropic-ccb-0.1.1-' + target.suffix, size: 1234, sha256: 'b'.repeat(64) })) };
+  await context.route('**/*', route => {
+    const url = new URL(route.request().url());
+    if (url.origin !== f.config.publicOrigin) return route.abort();
+    if (url.pathname === '/accb-releases.json') return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(invalid ? { product: 'ACCB', files: [] } : catalog) });
+    if (url.pathname.startsWith('/downloads/accb/')) return route.fulfill({ status: 200, headers: { 'content-type': 'application/octet-stream', 'content-disposition': 'attachment; filename="' + url.pathname.split('/').at(-1) + '"' }, body: Buffer.from('inert synthetic package') });
+    return route.continue();
+  });
+  await page.goto(f.config.publicOrigin + '/login');
+  await page.getByLabel('电子邮箱', { exact: true }).fill('download@example.test'); await page.getByLabel('密码', { exact: true }).fill(password); await page.getByRole('button', { name: '登录', exact: true }).click();
+  await page.getByRole('link', { name: '开始使用', exact: true }).click();
+  const panel = page.getByRole('region', { name: 'ACCB 客户端下载' });
+  await panel.getByRole('link', { name: '下载 ACCB Windows x64', exact: true }).waitFor();
+  assert.equal(await panel.getByRole('link', { name: /^下载 ACCB/ }).count(), 5);
+  assert.equal(await panel.getByRole('heading', { name: '客户端', exact: true }).count(), 1);
+  assert.equal(await panel.getByRole('heading', { name: 'ACCB 桌面客户端', exact: true }).count(), 0);
+  await page.getByRole('heading', { name: '等待分配账号', exact: true }).waitFor();
+  for (const target of desktopTargets) {
+    const [download] = await Promise.all([page.waitForEvent('download'), panel.getByRole('link', { name: '下载 ACCB ' + target.label, exact: true }).click()]);
+    assert.equal(download.suggestedFilename(), 'Anthropic-ccb-0.1.1-' + target.suffix);
+    assert.equal(new URL(download.url()).pathname, '/downloads/accb/0.1.1/' + download.suggestedFilename());
+    // This is an inert intercepted response, not a real installer acceptance test.
+    await download.cancel();
+  }
+  const assigned = await f.request('POST', '/api/admin/grants', { user_id: created.data.user.id, resource_id: 'resource-1', account_lease_id: 'owned-1', expected_account_revision: 1, expires_at: new Date(Date.now() + 86400000).toISOString() }, admin);
+  assert.equal(assigned.status, 201, assigned.raw);
+  await page.reload(); await page.getByRole('heading', { name: '安装 ccb', exact: true }).waitFor();
+  const artifacts = resolve(root, 'tests/browser/artifacts'); await mkdir(artifacts, { recursive: true });
+  await page.screenshot({ path: resolve(artifacts, 'accb-downloads-desktop.png'), fullPage: true });
+  await page.setViewportSize({ width: 390, height: 844 });
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), true);
+  await page.screenshot({ path: resolve(artifacts, 'accb-downloads-mobile.png'), fullPage: true });
+  invalid = true; await page.reload(); await panel.getByText('暂时无法读取安装包，请稍后刷新。下方命令行连接方式仍可使用。').waitFor();
+  assert.equal(await panel.getByRole('link', { name: /^下载 ACCB/ }).count(), 0);
+  await page.getByRole('heading', { name: '安装 ccb', exact: true }).waitFor();
+  assert.deepEqual(faults, []);
+});

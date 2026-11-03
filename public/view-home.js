@@ -66,7 +66,7 @@ export async function overviewView() {
   const walletTile = el('section',{class:'card wallet-card','aria-label':'钱包余额'},
     el('div',{class:'wallet-card-top'},el('span',{class:'k',text:'钱包余额'}),el('span',{class:'wallet-currency',text:wallet?.currency || 'CNY'})),
     metricValue(money(wallet?.balance_minor,wallet?.currency)),
-    el('div',{class:'wallet-card-foot'},el('span',{class:'s',text:'人民币余额，不按参考 USD 扣费'}),el('a',{class:'chip',href:'/wallet',text:'充值'})));
+    el('div',{class:'wallet-card-foot'},el('span',{class:'s',text:'人民币余额，不按参考 USD 扣费'}),el('a',{class:'chip',href:'/checkout?recharge=1',text:'充值'})));
   const costTile = el('a',{class:'card metric-tile cost-tile',href:'/usage?range=today'},el('span',{class:'k',text:'今日参考费用 · USD'}),metricValue(today ? formatUSD(today.cost_usd) : null),
     el('span',{class:'s'},'累计 ',inline(cumulativeCost),' · 不从钱包扣费'));
   const requestTile = el('a',{class:'card metric-tile request-tile',href:'/usage?range=1d'},el('span',{class:'k',text:'近 24 小时请求'}),metricValue(recent ? number(recent.requests) : null),

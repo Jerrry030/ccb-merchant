@@ -161,3 +161,11 @@ Invoke-RestMethod -Uri 'https://merchant.example.com/api/public'
 在管理页面核对提供方身份、状态、实际权限和获分配资源。未知、未配置和不可达不能解释为无库存或接入成功。真实兼容范围见[接口契约](API-CONTRACT.md)，上线放行见[发布检查清单](RELEASE-CHECKLIST.md)。
 
 支付渠道与前台支付方式的配置入口在站点设置；各渠道资格、币种、通知地址和真实查单分别核验。不要使用用户真实支付来替代开发测试，也不要把配置保存成功写成收款验收。
+
+## ACCB 桌面客户端下载
+
+“开始使用”页读取同源静态清单 `/accb-releases.json`，包文件由 Caddy 的 `/downloads/accb/VERSION/FILE` 直接流式提供，不占用 Merchant 模型代理的并发额度。清单不携带外部下载 URL、账号凭据或上游地址。Windows x64 安装器/ZIP、macOS Apple Silicon/Intel ZIP、Linux x64 ZIP 分开列出；缺包或清单损坏时不生成可点击链接。
+
+发布顺序：先从固定 ACCB 源码构建并验证五个文件，使用 `node scripts/prepare-desktop-release.mjs ARTIFACT_DIRECTORY VERSION SOURCE_COMMIT` 计算实际大小和 SHA-256，再把同一组文件放入 Caddy 只读分发根的版本子目录。确认 HTTPS 下载和摘要后，才上线包含该清单的 Merchant 源码。示例根目录为 `/srv/ccb-downloads/accb`，生产目录根据实际 Caddy 配置核对。未公开源码、构建缓存、用户数据及凭据不得放入此目录。
+
+新版本使用新的目录，不原地覆盖正在下载的包。保留旧镜像、旧清单和旧目录便于回退；Caddy 校验通过后平滑 reload。文件下载支持 HEAD/Range，上线验证包括实际响应字节、Content-Length、范围响应及最终 SHA-256，不只检查链接颜色或状态码。包的签名与真机测试状态必须如实显示；安装包可下载不代表已经替用户安装或完成真实模型调用验收。

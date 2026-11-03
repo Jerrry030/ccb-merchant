@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { HttpError, opaqueId } from './security.js';
 import { project, schemas } from './upstream.js';
 import { deviceStatus } from '../public/device-status.js';
@@ -5,7 +6,63 @@ import { deviceStatus } from '../public/device-status.js';
 // Scoped and global reads share the same projection and customer snapshot
 // checks. Writes remain exclusively on the existing customer-scoped routes.
 export class Devices {
- constructor(store,core){this.store=store;this.core=core;}
+ constructor(store,core){this.store=store;this.core=core;this.runtimeOwners=new Map();this.runtimeLookups=new Map();}
+ // Only an authenticated native status can seed this lookup. Provider usernames
+ // stay filtered; a unique customer-scoped device membership proves the local user.
+ // Cache proof, not the email: local identity changes are read again on every hit.
+ async runtimeUsername(device, config, signal) {
+  const db=this.store.db, currentProvider=()=>this.core.config.upstreamUrl===config.upstreamUrl&&this.core.config.upstreamKey===config.upstreamKey;
+  if(signal?.aborted||!currentProvider()||device?.state!=='approved'||!(Date.parse(device.expires_at)>Date.now()))return;
+  if(![device.id,device.owner_user_id].every(value=>typeof value==='string'&&/^[A-Za-z0-9_-]{1,150}$/.test(value)))return;
+  const statement=db.prepare('SELECT id,core_customer_id,status,core_pending FROM users WHERE core_customer_id IS NOT NULL ORDER BY id LIMIT 501');
+  const targets=statement.all();
+  if(!targets.length||targets.length>500||targets.some(user=>user.core_pending))return;
+  const signature=JSON.stringify(targets);
+  const key=createHash('sha256').update(JSON.stringify([config.upstreamUrl,config.upstreamKey,device.id,device.owner_user_id,signature])).digest('hex');
+  let proof=this.runtimeOwners.get(key);
+  if(!proof||proof.until<=Date.now()){
+   let pending=this.runtimeLookups.get(key);
+   if(!pending){
+    if(this.runtimeLookups.size>=2)return;
+    pending=(async()=>{
+     const controller=new AbortController();
+     const budget=AbortSignal.timeout(Math.max(1,Math.min(1500,Math.floor(config.upstreamTimeoutMs/2))));
+     const bounded=AbortSignal.any([controller.signal,budget,...(signal?[signal]:[])]);
+     const matches=[];let cursor=0,observed=0,verified=false;
+     const workers=Array.from({length:Math.min(4,targets.length)},async()=>{
+      while(cursor<targets.length){
+       if(bounded.aborted||!currentProvider())throw new Error('Identity lookup cancelled');
+       const user=targets[cursor++];
+       const data=await this.core.request('GET','/access/v1/customers/'+opaqueId(user.core_customer_id)+'/devices',undefined,bounded);
+       if(!Array.isArray(data.devices)||data.next_cursor!==''||(observed+=data.devices.length)>10000||Number.isSafeInteger(data.total)&&data.total!==data.devices.length)throw new Error('Incomplete device membership');
+       const seen=new Set();
+       for(const row of data.devices){
+        if(typeof row?.id!=='string'||!/^[A-Za-z0-9_-]{1,150}$/.test(row.id)||seen.has(row.id))throw new Error('Ambiguous device membership');
+        seen.add(row.id);
+        if(row.id===device.id){
+         // Even an inactive duplicate makes the customer association ambiguous.
+         if(row.state!=='approved'||!(Date.parse(row.expires_at)>Date.now()))throw new Error('Device membership is not active');
+         matches.push({id:user.id,core_customer_id:user.core_customer_id,expires:Date.parse(row.expires_at)});
+        }
+       }
+      }
+     });
+     try {await Promise.all(workers);verified=true;}
+     catch {controller.abort();await Promise.allSettled(workers);}
+     const owner=verified&&matches.length===1&&currentProvider()&&signature===JSON.stringify(statement.all())?matches[0]:null;
+     const result={owner,until:owner?Math.min(Date.now()+60000,owner.expires):Date.now()+5000};
+     if(this.runtimeOwners.size>=256)this.runtimeOwners.delete(this.runtimeOwners.keys().next().value);
+     this.runtimeOwners.set(key,result);return result;
+    })();
+    this.runtimeLookups.set(key,pending);
+    void pending.finally(()=>this.runtimeLookups.delete(key)).catch(()=>undefined);
+   }
+   proof=await pending;
+  }
+  if(!proof.owner||proof.until<=Date.now()||signal?.aborted||!currentProvider()||signature!==JSON.stringify(statement.all()))return;
+  const user=db.prepare('SELECT email,status,core_customer_id,core_pending FROM users WHERE id=?').get(proof.owner.id);
+  if(user?.status==='active'&&!user.core_pending&&user.core_customer_id===proof.owner.core_customer_id)return user.email;
+ }
  async read({userId=null,q='',status='',limit=50,offset=0}={},authorize) {
   const global=userId===null,db=this.store.db;
   const targets=global?db.prepare('SELECT * FROM users WHERE core_customer_id IS NOT NULL OR core_pending IS NOT NULL ORDER BY id LIMIT 501').all():[db.prepare('SELECT * FROM users WHERE id=?').get(userId)];

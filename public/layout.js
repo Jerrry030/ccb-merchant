@@ -45,19 +45,14 @@ function routeTabs(route) {
     ]));
     return el('div',{class:'section-tab-groups'}, groups);
   }
-  if (route.nav === 'commerce') return sectionTabs('订单分区', [
-    ['/admin/plans', '套餐', path === '/admin/plans'],
-    ['/admin/rentals', '交付', path === '/admin/rentals'],
-    ['/admin/orders', '支付', path === '/admin/orders'],
-  ]);
   if (route.nav === 'customers' && (path === '/admin/customers' || path === '/admin/access')) return sectionTabs('客户类型', [
     ['/admin/customers', '站点客户', path === '/admin/customers'],
     ['/admin/access', 'API 客户', path === '/admin/access'],
   ]);
-  if (route.nav === 'billing') return sectionTabs('我的订单', [
-    ['/orders', '订单', path === '/orders'],
-    ['/wallet', '余额', path === '/wallet'],
-  ]);
+  if (path === '/orders') {
+    const recharge = new URLSearchParams(location.search).get('type') === 'recharge';
+    return sectionTabs('订单类型', [['/orders','套餐订单',!recharge],['/orders?type=recharge','充值订单',recharge]]);
+  }
   return null;
 }
 function pageBreadcrumb(route) {
@@ -90,11 +85,27 @@ export function shell(route) {
   const root = el('div',{class:admin ? 'shell' : 'shell site-shell'});
   const nav = el('nav',{class:admin ? null : 'site-nav','aria-label':'主导航'});
   const groups = [];
-  if (admin) groups.push(['商户管理', navigation.filter(v => v.admin && !v.hidden && managementAllows(state.user,'GET',v.path.replace('/admin/','/api/admin/')))]);
-  groups.push(['我的账户', navigation.filter(v => !v.admin && !v.hidden)]);
+  const commercePaths = new Set(['/plans','/orders','/wallet']);
+  if (admin) {
+    const allowed = navigation.filter(v => v.admin && !v.hidden && managementAllows(state.user,'GET',v.path.replace('/admin/','/api/admin/')));
+    groups.push(['商户管理',allowed.filter(v=>!['plans-admin','rentals-admin','payments-admin'].includes(v.nav))]);
+    groups.push(['交易管理',allowed.filter(v=>['plans-admin','rentals-admin','payments-admin'].includes(v.nav))]);
+  }
+  groups.push(['我的账户',navigation.filter(v=>!v.admin&&!v.hidden&&!commercePaths.has(v.path))]);
+  groups.push(['购买与账单',navigation.filter(v=>commercePaths.has(v.path))]);
   for (const [name, items] of groups) {
     if (admin) nav.append(el('div',{class:'nav-group',text:name}));
-    for (const item of items) nav.append(el('a',{class:'nav-link',href:item.path,'aria-current':route.nav === item.nav ? 'page' : null},icon(item.icon),el('span',{text:item.title})));
+    const links = items.map(item=>el('a',{class:'nav-link',href:item.path,'aria-current':route.nav===item.nav?'page':null},icon(item.icon),el('span',{text:item.title})));
+    if (!admin && name === '购买与账单') {
+      const menu = el('div',{class:'commerce-nav'});
+      const toggle = el('button',{class:'nav-link commerce-nav-toggle'+(items.some(item=>item.nav===route.nav)?' active':''),type:'button','aria-label':'购买与账单','aria-expanded':'false','aria-controls':'commerce-nav-links',onclick:()=>{
+        const open=menu.classList.toggle('open'); toggle.setAttribute('aria-expanded',String(open));
+      }},icon('receipt'),el('span',{text:'交易'}));
+      menu.append(toggle,el('div',{id:'commerce-nav-links',class:'commerce-nav-links'},links));
+      root.addEventListener('click',event=>{if(!menu.contains(event.target)){menu.classList.remove('open');toggle.setAttribute('aria-expanded','false');}});
+      root.addEventListener('keydown',event=>{if(event.key==='Escape'&&menu.classList.contains('open')){menu.classList.remove('open');toggle.setAttribute('aria-expanded','false');toggle.focus();}});
+      nav.append(menu);
+    } else nav.append(...links);
   }
   const logout = el('button',{class:'icon-button',type:'button','aria-label':'退出登录',onclick:async () => {
     if (!await confirmAction('退出登录','确定退出当前登录吗？','退出登录')) return;
