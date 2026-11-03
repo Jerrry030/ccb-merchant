@@ -13,6 +13,8 @@ public/**
 !public/*.js
 !public/*.css
 !public/*.svg
+# The reviewed public release catalog only; other JSON stays excluded.
+!public/accb-releases.json
 # Approved sign-in artwork only; unrelated raster files remain excluded.
 !public/auth-mist-lake.webp
 # Source inputs are flat; a directory named like a source file must not reopen its children.
