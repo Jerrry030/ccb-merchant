@@ -164,10 +164,12 @@ Invoke-RestMethod -Uri 'https://merchant.example.com/api/public'
 
 ## ACCB 桌面客户端下载
 
-“开始使用”页读取同源静态清单 `/accb-releases.json`，包文件由 Caddy 的 `/downloads/accb/VERSION/FILE` 直接流式提供，不占用 Merchant 模型代理的并发额度。清单不携带外部下载 URL、账号凭据或上游地址。Windows x64 安装器/ZIP、macOS Apple Silicon/Intel ZIP、Linux x64 ZIP 分开列出；缺包或清单损坏时不生成可点击链接。
+“开始使用”页读取同源静态清单 `/accb-releases.json`，包文件由 Caddy 的 `/downloads/accb/VERSION/FILE` 直接流式提供，不占用 Merchant 模型代理的并发额度。清单不携带外部下载 URL、账号凭据或上游地址。Windows x64 安装器、macOS Apple Silicon/Intel ZIP、Linux x64 ZIP 分开列出；Windows 便携 ZIP 不在发布目标中；缺包或清单损坏时不生成可点击链接。
 
-发布顺序：先从固定 ACCB 源码构建并验证五个文件，使用 `node scripts/prepare-desktop-release.mjs ARTIFACT_DIRECTORY VERSION SOURCE_COMMIT` 计算实际大小和 SHA-256，再把同一组文件放入 Caddy 只读分发根的版本子目录。确认 HTTPS 下载和摘要后，才上线包含该清单的 Merchant 源码。示例根目录为 `/srv/ccb-downloads/accb`，生产目录根据实际 Caddy 配置核对。未公开源码、构建缓存、用户数据及凭据不得放入此目录。
+发布顺序：先从固定 ACCB 源码构建并验证四个受支持的文件，使用 `node scripts/prepare-desktop-release.mjs ARTIFACT_DIRECTORY VERSION SOURCE_COMMIT` 计算实际大小和 SHA-256，再把同一组文件放入 Caddy 只读分发根的版本子目录。确认 HTTPS 下载和摘要后，才上线包含该清单的 Merchant 源码。示例根目录为 `/srv/ccb-downloads/accb`，生产目录根据实际 Caddy 配置核对。未公开源码、构建缓存、用户数据及凭据不得放入此目录。
 
-新版本使用新的目录，不原地覆盖正在下载的包。保留旧镜像、旧清单和旧目录便于回退；Caddy 校验通过后平滑 reload。文件下载支持 HEAD/Range，上线验证包括实际响应字节、Content-Length、范围响应及最终 SHA-256，不只检查链接颜色或状态码。包的签名与真机测试状态必须如实显示；安装包可下载不代表已经替用户安装或完成真实模型调用验收。
+新版本使用新的目录，不原地覆盖正在下载的包。保留旧镜像、旧清单和旧目录便于回退；Caddy 校验通过后平滑 reload。撤销发布时，同时从固定发布目标和公开清单移除该目标，并将精确匹配的包文件移出 Caddy 分发根、放入非公开归档；不能只隐藏入口。验证原直链返回 404 或 410，其余包的下载与摘要不变，不删除用户已下载文件或私有构建证据。
+
+文件下载支持 HEAD/Range，上线验证包括实际响应字节、Content-Length、范围响应及最终 SHA-256，不只检查链接颜色或状态码。包的签名与真机测试状态必须如实显示；安装包可下载不代表已经替用户安装或完成真实模型调用验收。
 
 条件切号要求配套的客户端与 CLI。开始使用页直接给出包内 CCB 的初始化、登录和账号选择命令，不将旧 npm CLI 当成本次升级入口；Windows 自定义安装路径、macOS 应用位置和 Linux 解压目录需按页面提示核对。自动切号目前要求 Windows 进程树证明；其他平台不静默降级。

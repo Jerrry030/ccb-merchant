@@ -257,7 +257,7 @@ Accept: application/json
 
 ## ACCB 公共下载清单
 
-同源静态 `GET /accb-releases.json` 返回 `product: "ACCB"`、版本、来源提交和文件列表；每项只包含固定 target、精确文件名、字节大小和 SHA-256。前端只构造 `/downloads/accb/{version}/{name}` 同源地址，不接受远端 URL。空清单不产生下载链接；坏版本、非法文件名、重复 target 和无效校验值整份拒绝。此分发没有账号/API Key 副作用，不属于 `/bridge/v1/*` 运行时协议；包文件由 Caddy 提供，不经过模型代理。
+同源静态 `GET /accb-releases.json` 返回 `product: "ACCB"`、版本、来源提交和文件列表；每项只包含固定 target、精确文件名、字节大小和 SHA-256。当前 target 仅为 `windows-x64-setup`、`mac-arm64`、`mac-x64`、`linux-x64`；已撤销的 Windows 便携目标 `win-x64` 不被接受。前端只构造 `/downloads/accb/{version}/{name}` 同源地址，不接受远端 URL。空清单不产生下载链接；坏版本、非法文件名、重复 target 和无效校验值整份拒绝。此分发没有账号/API Key 副作用，不属于 `/bridge/v1/*` 运行时协议；包文件由 Caddy 提供，不经过模型代理。
 
 ## 条件切号能力与逐级转发
 

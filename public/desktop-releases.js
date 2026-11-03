@@ -4,7 +4,6 @@ export const desktopTargets = [
   { id: 'mac-arm64', label: 'macOS Apple Silicon', detail: 'M 系列芯片 · ZIP', suffix: 'mac-arm64.zip' },
   { id: 'mac-x64', label: 'macOS Intel', detail: 'Intel 芯片 · ZIP', suffix: 'mac-x64.zip' },
   { id: 'linux-x64', label: 'Linux x64', detail: 'ZIP', suffix: 'linux-x64.zip' },
-  { id: 'win-x64', label: 'Windows 便携版', detail: 'ZIP', suffix: 'win-x64.zip' },
 ];
 export function parseDesktopRelease(value) {
   if (!value || value.product !== 'ACCB' || !Array.isArray(value.files) || value.files.length > desktopTargets.length) throw new Error('Invalid ACCB catalog');

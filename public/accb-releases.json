@@ -26,12 +26,6 @@
       "name": "Anthropic-ccb-0.1.2-linux-x64.zip",
       "size": 189361811,
       "sha256": "e1a0585abb6809130f52fb97d22f6888ec6c1cb71dfb98247e2020e0dcfd1094"
-    },
-    {
-      "target": "win-x64",
-      "name": "Anthropic-ccb-0.1.2-win-x64.zip",
-      "size": 212685936,
-      "sha256": "5680eb9a9cb24f83a346b7dbbbb3135aac8fedf8245e385ab19a5732d32ee67b"
     }
   ]
 }

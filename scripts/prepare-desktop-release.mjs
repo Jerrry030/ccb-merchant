@@ -1,4 +1,4 @@
-// Publish metadata only after all five local release files have been verified.
+// Publish metadata only after all supported local release files have been verified.
 import { createHash } from 'node:crypto';
 import { createReadStream } from 'node:fs';
 import { lstat, writeFile } from 'node:fs/promises';

@@ -16,12 +16,12 @@ test('connect page exposes all ACCB downloads, keeps CLI guidance, and fails clo
   const context = await browser.newContext({ viewport: { width: 1440, height: 1000 }, reducedMotion: 'reduce', acceptDownloads: true });
   const page = await context.newPage(), faults = []; page.on('pageerror', error => faults.push(error.message));
   page.setDefaultTimeout(15000);
-  let invalid = false;
   const catalog = { product: 'ACCB', version: '0.1.1', source_commit: 'a'.repeat(40), files: desktopTargets.map(target => ({ target: target.id, name: 'Anthropic-ccb-0.1.1-' + target.suffix, size: 1234, sha256: 'b'.repeat(64) })) };
+  let responseCatalog = catalog;
   await context.route('**/*', route => {
     const url = new URL(route.request().url());
     if (url.origin !== f.config.publicOrigin) return route.abort();
-    if (url.pathname === '/accb-releases.json') return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(invalid ? { product: 'ACCB', files: [] } : catalog) });
+    if (url.pathname === '/accb-releases.json') return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(responseCatalog) });
     if (url.pathname.startsWith('/downloads/accb/')) return route.fulfill({ status: 200, headers: { 'content-type': 'application/octet-stream', 'content-disposition': 'attachment; filename="' + url.pathname.split('/').at(-1) + '"' }, body: Buffer.from('inert synthetic package') });
     return route.continue();
   });
@@ -30,7 +30,9 @@ test('connect page exposes all ACCB downloads, keeps CLI guidance, and fails clo
   await page.getByRole('link', { name: '开始使用', exact: true }).click();
   const panel = page.getByRole('region', { name: 'ACCB 客户端下载' });
   await panel.getByRole('link', { name: '下载 ACCB Windows x64', exact: true }).waitFor();
-  assert.equal(await panel.getByRole('link', { name: /^下载 ACCB/ }).count(), 5);
+  assert.equal(await panel.getByRole('link', { name: /^下载 ACCB/ }).count(), 4);
+  assert.equal(await panel.getByText('Windows 便携版', { exact: true }).count(), 0);
+  assert.equal(await panel.locator('a[href$="-win-x64.zip"]').count(), 0);
   assert.equal(await panel.getByRole('heading', { name: '客户端', exact: true }).count(), 1);
   assert.equal(await panel.getByRole('heading', { name: 'ACCB 桌面客户端', exact: true }).count(), 0);
   await page.getByRole('heading', { name: '等待分配账号', exact: true }).waitFor();
@@ -53,7 +55,10 @@ test('connect page exposes all ACCB downloads, keeps CLI guidance, and fails clo
   await page.setViewportSize({ width: 390, height: 844 });
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), true);
   await page.screenshot({ path: resolve(artifacts, 'accb-downloads-mobile.png'), fullPage: true });
-  invalid = true; await page.reload(); await panel.getByText('暂时无法读取安装包，请稍后刷新。下方命令行连接方式仍可使用。').waitFor();
+  responseCatalog = { ...catalog, files: [{ target: 'win-x64', name: 'Anthropic-ccb-0.1.1-win-x64.zip', size: 1234, sha256: 'b'.repeat(64) }] };
+  await page.reload(); await panel.getByText('暂时无法读取安装包，请稍后刷新。下方命令行连接方式仍可使用。').waitFor();
+  assert.equal(await panel.getByRole('link', { name: /^下载 ACCB/ }).count(), 0);
+  responseCatalog = { product: 'ACCB', files: [] }; await page.reload(); await panel.getByText('暂时无法读取安装包，请稍后刷新。下方命令行连接方式仍可使用。').waitFor();
   assert.equal(await panel.getByRole('link', { name: /^下载 ACCB/ }).count(), 0);
   await page.getByRole('heading', { name: '安装客户端', exact: true }).waitFor();
   assert.deepEqual(faults, []);
