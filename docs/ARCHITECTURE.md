@@ -66,11 +66,11 @@
 - `ui*.js`：共享表格、表单、对话框、弹出说明和用量图表；`view-*.js` 对应业务页面。
 - `admin-workflow.js`、`payment-catalog.js`、`registration-policy.js`、`inventory-status.js`、`usage-detail.js`、`management-policy.js` 等包含前后端共享规则，修改时同时检查 Node 导入方。
 
-样式按 `fonts.css → base.css → layout.css → components.css → pages.css` 加载。`base.css` 定义主题变量；同一媒体条件下不重复定义同一选择器，响应式规则放在所属分区末尾。
+样式按 `base.css → layout.css → components.css → pages.css` 加载。`base.css` 定义主题变量；同一媒体条件下不重复定义同一选择器，响应式规则放在所属分区末尾。
 
 浅色「瓷」、深色「石墨」共用语义变量。颜色用于状态，按钮、选中态和图表使用墨色；品牌主色 `--brand` 只用于品牌标志。标题和大数字用衬线体，界面使用无衬线体，命令使用等宽字体。
 
-字体自托管：Source Serif 4、思源宋体 Noto Serif SC、Instrument Sans 和 JetBrains Mono。`@font-face` 使用 `font-display: optional`。页面在露出标题前等待本次文字所需的字体；若未能及时就绪，则保持系统回退字体，避免加载过程中再切换字形。版权与 SIL Open Font License 1.1 全文在 [`fonts.css`](../public/fonts.css) 头部；它不替代整个项目的授权说明。只打包所需拉丁/中文子集，更新字体时同步样式和版权声明。
+页面只使用操作系统已安装的字体：界面使用系统无衬线体，中文标题使用系统宋体（Windows 优先 SimSun、macOS 优先 Songti SC），英文标题及大数字使用 Georgia 等系统衬线体，命令使用系统等宽字体。字体变量统一定义在 `base.css`，登录页、用户端、管理端和独立收银台共用；不加载 WebFont，也不等待字体预热。不同系统的字形可以有差异，但同一页面不能随字体下载、数据返回或路由重绘发生切换；不能仅用 `font-display: optional` 和超时等待来保证这一点。
 
 ## 构建边界
 
@@ -78,6 +78,6 @@
 
 - 根级构建清单；`src/` 顶层 JS、SQL。
 - `public/` 顶层 HTML、JS、CSS、SVG；单独批准的 `auth-mist-lake.webp`。
-- `public/fonts/` 的 WOFF2 字体，其他子目录不自动纳入。
+- `public/` 子目录不纳入构建，不再打包字体文件。
 
 支付页面需要的 Airwallex 模块由服务端从已安装依赖提供，不是放开任意静态子目录。增加文件类型或目录时同时审查白名单、安全测试和部署产物；不把真实配置、预览数据、日志或备份加入镜像。

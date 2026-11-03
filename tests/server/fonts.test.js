@@ -1,15 +1,23 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 
-test('webfonts stay optional so a late Chinese subset cannot repaint headings', () => {
-  const css = readFileSync(new URL('../../public/fonts.css', import.meta.url), 'utf8');
-  const faces = css.match(/@font-face\s*\{/g) || [];
-  assert.ok(faces.length >= 4);
-  assert.equal(css.includes('font-display: swap'), false);
-  assert.equal((css.match(/font-display:\s*optional/g) || []).length, faces.length);
-  const app = readFileSync(new URL('../../public/app.js', import.meta.url), 'utf8');
-  assert.match(app, /settleFonts\(\);/);
-  assert.match(app, /await settleFonts\([\s\S]*?renderAuth\(path\);/);
-  assert.match(app, /await settleFonts\([\s\S]*?content = shell\(route\);/);
+const publicRoot = new URL('../../public/',import.meta.url);
+
+test('all page typography uses installed fonts, never asynchronous webfont faces', () => {
+  const base = readFileSync(new URL('base.css',publicRoot),'utf8');
+  assert.match(base,/--font-sans:\s*system-ui,/);
+  assert.match(base,/--font-serif:[^;]*"Songti SC"[^;]*"SimSun"/);
+  assert.match(base,/--font-mono:\s*ui-monospace,/);
+  for (const file of readdirSync(publicRoot).filter(name=>name.endsWith('.css'))) {
+    const css = readFileSync(new URL(file,publicRoot),'utf8');
+    assert.doesNotMatch(css,/@font-face|\.woff2?\b|Source Serif 4|Noto Serif SC|Instrument Sans|JetBrains Mono/,file+' must not introduce downloadable faces');
+  }
+});
+
+test('SPA and standalone checkout do not request font stylesheets or block rendering on font preheating', () => {
+  for (const file of readdirSync(publicRoot).filter(name=>/\.(html|js)$/.test(name))) {
+    const source = readFileSync(new URL(file,publicRoot),'utf8');
+    assert.doesNotMatch(source,/fonts\.css|as=["']font["']|document\.fonts\.(?:load|ready)|\bFontFace\b/,file+' must render with the shared system font stack');
+  }
 });

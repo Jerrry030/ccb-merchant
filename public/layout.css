@@ -294,7 +294,8 @@
 }
 
 .site-header .brand {
-  flex: none;
+  /* System font metrics and longer site names must not push account actions off screen. */
+  flex: 0 1 auto;
 }
 
 .site-nav {

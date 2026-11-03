@@ -1,4 +1,4 @@
-/* Tokens, element defaults and utilities. Fonts are self-hosted (fonts.css); an optional operator-configured HTTPS logo may be loaded. */
+/* Tokens, element defaults and utilities. Typography uses installed system fonts; an optional operator-configured HTTPS logo may be loaded. */
 
 /* Tokens */
 
@@ -6,9 +6,10 @@
    --brand is the operator's accent from site settings; it only colours the brand mark. */
 :root {
   color-scheme: light;
-  --font-sans: "Instrument Sans", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Noto Sans SC", sans-serif;
-  --font-serif: "Source Serif 4", "Noto Serif SC", "Songti SC", "STSong", serif;
-  --font-mono: "JetBrains Mono", ui-monospace, "SF Mono", "Cascadia Mono", Menlo, Consolas, monospace;
+  /* No downloadable faces: cold loads, late data and SPA navigation use the same glyphs. */
+  --font-sans: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+  --font-serif: Georgia, "Songti SC", "SimSun", "STSong", "Times New Roman", serif;
+  --font-mono: ui-monospace, "SF Mono", "Cascadia Mono", Menlo, Consolas, monospace;
   font-family: var(--font-sans);
   font-synthesis: none;
   line-height: 1.6;

@@ -3,7 +3,7 @@ import { managementAllows } from './management-policy.js';
 import { el } from './dom.js';
 import { app, state, adoptSession } from './state.js';
 import { api } from './api.js';
-import { authRoutes, customerSections, navigation, safeRoute, navigate, presentedRoute } from './router.js';
+import { authRoutes, customerSections, safeRoute, navigate, presentedRoute } from './router.js';
 import { brand, shell } from './layout.js';
 import { notice, emptyState, errorNotice } from './ui.js';
 import { closeMetricPopover } from './ui-popover.js';
@@ -24,22 +24,7 @@ import { inventoryView } from './view-inventory.js';
 import { planAdminView, plansView } from './view-plans.js';
 import { auditView } from './view-audit.js';
 import { settingsView } from './view-settings.js';
-const fontProbe = navigation.map(item => `${item.title}${item.description || ''}`).join('') + '独家防封，用着不烧心。一键获取独享账号 · 畅用 Claude';
-async function settleFonts(extra = '') {
-  if (!document.fonts?.load) return;
-  const sample = fontProbe + extra;
-  const loads = [
-    ['500 32px "Noto Serif SC"', sample],
-    ['600 44px "Source Serif 4"', sample],
-    ['500 16px "Instrument Sans"', 'CCB'],
-    ['400 14px "JetBrains Mono"', 'CCB0123456789'],
-  ].map(([face, text]) => document.fonts.load(face, text).catch(() => []));
-  let timer;
-  await Promise.race([Promise.all(loads), new Promise(resolve => { timer = setTimeout(resolve, 2500); })]);
-  clearTimeout(timer);
-}
 export async function bootstrap() {
-  settleFonts(); // Download while the session request runs; render waits before painting.
   app.replaceChildren(el('main',{id:'main',class:'boot'},el('div',{class:'spinner','aria-hidden':'true'}),el('p',{role:'status',text:'正在连接…'})));
   const query = new URLSearchParams(location.search);
   if (location.pathname === '/connect' && query.has('code')) { state.code = query.get('code').slice(0,128); history.replaceState({},'','/connect'); }
@@ -70,8 +55,6 @@ export async function render() {
   if (!state.public) return;
   if (!state.user) {
     if (!authRoutes.has(path)) { state.returnTo = safeRoute(path + location.search); navigate(state.public.setup_required ? '/setup' : '/login',true); return; }
-    await settleFonts(state.public.site?.name || '');
-    if (ticket !== state.view) return;
     renderAuth(path); return;
   }
   if(state.user.must_change_password && path!=='/profile'){navigate('/profile',true);return;}
@@ -89,8 +72,6 @@ export async function render() {
     }
     const route = presentedRoute(path, customer);
     document.title = `${route.customer ? route.section + ' · ' : ''}${route.title} · ${state.public.site.name}`;
-    await settleFonts(`${route.title}${route.eyebrow || ''}${route.section || ''}${route.customer?.display_name || ''}${state.public.site.name || ''}`);
-    if (ticket !== state.view) return;
     content = shell(route);
     let result;
     if (route.admin && !managementAllows(state.user,'GET',path.replace('/admin/','/api/admin/'))) result = emptyState('没有管理权限','此页面仅供服务端确认的商户管理员访问。','shield',el('a',{class:'btn primary',href:'/',text:'返回首页'}));
@@ -105,11 +86,7 @@ export async function render() {
     if (anchor) document.getElementById(anchor)?.scrollIntoView({block:'start'});
   } catch (error) {
     if (ticket !== state.view) return;
-    if (!content) {
-      await settleFonts(state.public?.site?.name || '');
-      if (ticket !== state.view) return;
-      content = shell(presentedRoute(path, null));
-    }
+    if (!content) content = shell(presentedRoute(path, null));
     content.removeAttribute('aria-busy'); content.replaceChildren(errorNotice(error),emptyState('数据暂不可用','当前未显示缓存或示例数据。请稍后重试，或联系管理员检查连接。','link',el('button',{class:'btn',type:'button',onclick:() => render(),text:'重试读取'})));
   }
 }
