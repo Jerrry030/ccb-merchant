@@ -1,31 +1,31 @@
 {
   "product": "ACCB",
-  "version": "0.1.2",
-  "source_commit": "ed89cbe286a9e6df76f3e31c5183e8fa61a15fe7",
+  "version": "0.1.4",
+  "source_commit": "4f1e0d6629f25986279b19e376ab86ddbf7bc978",
   "files": [
     {
       "target": "windows-x64-setup",
-      "name": "Anthropic-ccb-0.1.2-windows-x64-setup.exe",
-      "size": 170460232,
-      "sha256": "dca574290550375f06029cec1de7f59ea24d6e28d4cf9a355113251bcbbb8ec9"
+      "name": "Anthropic-ccb-0.1.4-windows-x64-setup.exe",
+      "size": 171216271,
+      "sha256": "2e29bac6956429e61b654e8b05ca6a4923c02ba9661a2247f32b3335c539394c"
     },
     {
       "target": "mac-arm64",
-      "name": "Anthropic-ccb-0.1.2-mac-arm64.zip",
-      "size": 188851120,
-      "sha256": "8c22be97c33dee3fb88ed77aa4cdf562e35812ce7e6c37efd47e60c4e691bcbc"
+      "name": "Anthropic-ccb-0.1.4-mac-arm64.zip",
+      "size": 188925538,
+      "sha256": "a6f1050e170208b1cfda655f0dcbe8ad164e0bb975f0f24097c9348286b1414a"
     },
     {
       "target": "mac-x64",
-      "name": "Anthropic-ccb-0.1.2-mac-x64.zip",
-      "size": 196053189,
-      "sha256": "6b89138e6728244dec8e463d1db71dea4c2016e5545467070b60607221a857e4"
+      "name": "Anthropic-ccb-0.1.4-mac-x64.zip",
+      "size": 196135090,
+      "sha256": "01de17bd4f8fb7c6415d05ef87e9e2bdcb706d6be4d5be3b6ea93f822c9772ee"
     },
     {
       "target": "linux-x64",
-      "name": "Anthropic-ccb-0.1.2-linux-x64.zip",
-      "size": 189361811,
-      "sha256": "e1a0585abb6809130f52fb97d22f6888ec6c1cb71dfb98247e2020e0dcfd1094"
+      "name": "Anthropic-ccb-0.1.4-linux-x64.zip",
+      "size": 189443720,
+      "sha256": "6facc4fd4e1638eca1088cddd9f2976c43f0a5f2405b516aaa62920aaf7b8591"
     }
   ]
 }
