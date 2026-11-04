@@ -57,9 +57,9 @@
 .metric-tile .v,
 .wallet-card .v {
   margin: 16px 0 4px;
-  font: 350 44px/1.1 var(--font-serif);
+  font: 350 44px/1.1 var(--font-figure);
   letter-spacing: -.025em;
-  font-variant-numeric: tabular-nums;
+  font-variant-numeric: lining-nums tabular-nums;
 }
 
 .metric-tile .s {
@@ -342,7 +342,7 @@
 .tok-read,
 .tok-write {
   font-weight: 500;
-  font-variant-numeric: tabular-nums;
+  font-variant-numeric: lining-nums tabular-nums;
 }
 
 .tok-in { color: var(--record-input); }
@@ -389,8 +389,8 @@
 }
 
 .cost-value {
-  font: 400 15px var(--font-serif);
-  font-variant-numeric: tabular-nums;
+  font: 400 15px var(--font-figure);
+  font-variant-numeric: lining-nums tabular-nums;
 }
 
 .cost-note {
@@ -1045,9 +1045,9 @@
 /* Wallet and checkout */
 
 .amount {
-  font: 350 44px/1.1 var(--font-serif);
+  font: 350 44px/1.1 var(--font-figure);
   letter-spacing: -.025em;
-  font-variant-numeric: tabular-nums;
+  font-variant-numeric: lining-nums tabular-nums;
 }
 
 .checkout-link {
@@ -1120,9 +1120,9 @@
 
 .plan-price {
   margin-top: 6px;
-  font: 350 32px/1.2 var(--font-serif);
+  font: 350 32px/1.2 var(--font-figure);
   letter-spacing: -.02em;
-  font-variant-numeric: tabular-nums;
+  font-variant-numeric: lining-nums tabular-nums;
 }
 
 .plan-meta,
@@ -1227,7 +1227,7 @@
   background: var(--well);
   box-shadow: inset 0 0 0 1px var(--line);
   font-size: 12px;
-  font-variant-numeric: tabular-nums;
+  font-variant-numeric: lining-nums tabular-nums;
 }
 
 .inventory-page [role=tabpanel][hidden] {
@@ -1677,7 +1677,7 @@
 .quota-summary-window, .quota-summary-error { display: grid; gap: 4px; }
 .quota-summary-error .badge { justify-self: start; }
 .quota-summary-label { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
-.quota-summary-label strong { white-space: nowrap; font-variant-numeric: tabular-nums; font-size: 13px; }
+.quota-summary-label strong { white-space: nowrap; font-variant-numeric: lining-nums tabular-nums; font-size: 13px; }
 .quota-summary-window.near-limit strong { color: var(--amber); }
 .quota-summary-window.near-limit .quota-track span { background: var(--amber); }
 .quota-summary-window.full strong { color: var(--red); }

@@ -1,6 +1,6 @@
 import { el } from './dom.js';
 import { api, collection } from './api.js';
-import { number, finite, formatTokens, formatUSD, formatDuration, tokenParts, shown } from './format.js';
+import { number, finite, formatTokens, formatUSD, formatDuration, formatHit, tokenParts, shown } from './format.js';
 import { field } from './ui-form.js';
 import { render } from './app.js';
 export function metricPair(label, value) {
@@ -27,6 +27,7 @@ export function recordStats(usage, label) {
     el('div',{class:'stat-cell'},el('span',{class:'k',text:'费用'}),metricValue(known ? formatUSD(usage.cost_usd) : null),el('span',{class:'s',text:`${label ? label + ' · ' : ''}按价格表估算，不从钱包扣费`})),
     el('div',{class:'stat-cell'},el('span',{class:'k',text:'请求'}),metricValue(known ? number(usage.requests) : null),el('span',{class:errors ? 's warn' : 's',text:`失败 ${errors === null ? '—' : number(errors)} 次`})),
     el('div',{class:'stat-cell'},el('span',{class:'k',text:'Token'}),metricValue(parts.total === null ? null : formatTokens(parts.total)),tokenBar(known ? usage : null),tokenLegend(known ? usage : null),finite(usage?.unknown_usage) ? el('span',{class:'s',text:`${number(usage.unknown_usage)} 次用量未知，未计入 Token`}) : null),
+    el('div',{class:'stat-cell'},el('span',{class:'k',text:'缓存命中率'}),metricValue(known ? formatHit(usage) : null),el('span',{class:'s',text:'缓存读 /（输入 + 缓存读 + 缓存写），不含输出'})),
     el('div',{class:'stat-cell'},el('span',{class:'k',text:'平均耗时'}),metricValue(known ? formatDuration(usage.average_duration_ms) : null),el('span',{class:'s',text:`首 Token ${known && finite(usage.average_first_token_ms) !== null ? formatDuration(usage.average_first_token_ms) : '未记录'}`})));
 }
 const chartState = {range:'1d', metric:'requests', gran:'hour', mode:'bar', model:'', from:'', to:'', loaded:null};

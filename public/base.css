@@ -9,6 +9,8 @@
   /* No downloadable faces: cold loads, late data and SPA navigation use the same glyphs. */
   --font-sans: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
   --font-serif: Georgia, "Songti SC", "SimSun", "STSong", "Times New Roman", serif;
+  /* Text serif digits are calligraphic. Figures use the UI sans so 1, 4 and 6 keep lining shapes. */
+  --font-figure: var(--font-sans);
   --font-mono: ui-monospace, "SF Mono", "Cascadia Mono", Menlo, Consolas, monospace;
   font-family: var(--font-sans);
   font-synthesis: none;

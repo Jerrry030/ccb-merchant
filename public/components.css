@@ -234,9 +234,9 @@
 
 .stat-value {
   margin: 14px 0 4px;
-  font: 350 36px/1.15 var(--font-serif);
+  font: 350 36px/1.15 var(--font-figure);
   letter-spacing: -.02em;
-  font-variant-numeric: tabular-nums;
+  font-variant-numeric: lining-nums tabular-nums;
 }
 
 .stat-note {
@@ -247,7 +247,7 @@
 /* A row of figures inside one tile, separated by hairlines. */
 .stat-strip {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   overflow: hidden;
   border: 1px solid var(--tile-border);
   border-radius: var(--radius);
@@ -280,9 +280,9 @@ a.stat-cell:hover {
 
 .stat-cell .v {
   margin: 6px 0 2px;
-  font: 350 36px/1.15 var(--font-serif);
+  font: 350 36px/1.15 var(--font-figure);
   letter-spacing: -.02em;
-  font-variant-numeric: tabular-nums;
+  font-variant-numeric: lining-nums tabular-nums;
 }
 
 .stat-cell .s {
@@ -325,9 +325,9 @@ a.stat-cell:hover {
 
 .figures dd {
   margin: 2px 0 0;
-  font: 400 22px/1.3 var(--font-serif);
+  font: 400 22px/1.3 var(--font-figure);
   letter-spacing: -.01em;
-  font-variant-numeric: tabular-nums;
+  font-variant-numeric: lining-nums tabular-nums;
 }
 
 .facts {
@@ -346,9 +346,9 @@ a.stat-cell:hover {
 
 .facts dd {
   margin: 2px 0 0;
-  font: 400 24px/1.3 var(--font-serif);
+  font: 400 24px/1.3 var(--font-figure);
   letter-spacing: -.01em;
-  font-variant-numeric: tabular-nums;
+  font-variant-numeric: lining-nums tabular-nums;
 }
 
 @media (max-width: 1180px) {
@@ -368,6 +368,20 @@ a.stat-cell:hover {
   .figures > div:nth-child(4) {
     padding-left: 0;
     border-left: 0;
+  }
+}
+
+@media (max-width: 1280px) and (min-width: 981px) {
+  .stat-strip {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .stat-cell:nth-child(3n + 1) {
+    border-left: 0;
+  }
+
+  .stat-cell:nth-child(n + 4) {
+    border-top: 1px solid var(--line);
   }
 }
 
@@ -584,7 +598,7 @@ table {
   width: 100%;
   border-collapse: collapse;
   font-size: 13.5px;
-  font-variant-numeric: tabular-nums;
+  font-variant-numeric: lining-nums tabular-nums;
   text-align: left;
 }
 
@@ -1177,7 +1191,7 @@ tbody tr:hover > td {
 
 .metric-popover-row strong {
   font-weight: 600;
-  font-variant-numeric: tabular-nums;
+  font-variant-numeric: lining-nums tabular-nums;
 }
 
 .metric-popover-row.total {
