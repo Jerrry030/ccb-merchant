@@ -49,6 +49,103 @@ test('runtime injects only service merchant key, preserves device bearer and pro
   assert.equal(accounts.data.accounts[0].state,'available');assert.equal(accounts.data.accounts[0].quota.windows[0].used_percent,20);assert.equal(accounts.raw.includes('LEAK'),false);
 });
 
+test('Claude Code native metadata and wire order reach Core through the finite Merchant allowlist',async t=>{
+ const routes=['/bridge/v1/messages','/bridge/v1/messages/count_tokens','/bridge/v1/traffic'];
+ const f=await fixture(t,{onCore:({url,json})=>{
+  if(!routes.includes(url.pathname))return;
+  json({type:'message',content:[]});return true;
+ }});
+ const environment='v=1, yw=jm, hg=wm, yl=qi, ob="2.1.321", sk="wj", wl=ki, tt=(lr), jy="fixture.invalid/repository"';
+ for(const route of routes){
+  for(const tools of ['[]','[{"name":"mcp__echo__ping","mcp":true},{"name":"ToolSearch"}]']){
+   const headers={...native.headers,'User-Agent':'claude-cli/2.1.321 (external, cli)',
+    'X-Claude-Code-Sandy-Plover':tools,'X-Claude-Code-Wiggly-Dove':environment,
+    'X-Claude-Code-Unknown':'PRIVATE_UNKNOWN','X-Claude-Code-Ide-Authorization':'PRIVATE_IDE',
+    'X-Api-Key':'PRIVATE_API_KEY',Cookie:'session=PRIVATE_COOKIE','X-CCB-Relay-Keys':'PRIVATE_CHAIN',
+    'X-CCB-Wire-Order':'User-Agent, X-Claude-Code-Sandy-Plover, X-Api-Key, x-claude-code-wiggly-dove, X-Claude-Code-Unknown, Cookie, X-Claude-Code-Ide-Authorization, X-CCB-Relay-Keys, Content-Type',
+    ...(route.endsWith('/traffic')?{'X-CCB-Target':'https://api.anthropic.com/v1/messages','X-CCB-Method':'POST'}:{}),
+   };
+   const body={model:'synthetic',messages:[],stream:false};
+   const result=await f.request('POST',route,body,{native:true,headers});
+   assert.equal(result.status,200,result.raw);
+   const sent=f.state.requests.at(-1);
+   assert.equal(sent.path,route);assert.deepEqual(sent.body,body);
+   assert.equal(sent.headers['user-agent'],headers['User-Agent']);
+   assert.equal(sent.headers['x-claude-code-sandy-plover'],tools);
+   assert.equal(sent.headers['x-claude-code-wiggly-dove'],environment);
+   assert.equal(sent.headers['x-ccb-wire-order'],'User-Agent,X-Claude-Code-Sandy-Plover,x-claude-code-wiggly-dove,Content-Type');
+   assert.equal(sent.headers.authorization,bearer);assert.equal(sent.headers['x-ccb-access-key'],upstreamKey);
+   for(const name of ['x-claude-code-unknown','x-claude-code-ide-authorization','x-api-key','cookie','x-ccb-relay-keys'])assert.equal(sent.headers[name],undefined,name);
+  }
+  assert.equal(f.state.requests.filter(row=>row.path===route).length,2,'one upstream attempt per call');
+ }
+ const result=await f.request('POST','/bridge/v1/messages',{}, {native:true,headers:{...native.headers,'X-CCB-Wire-Order':'X-Claude-Code-Sandy-Plover,X-Claude-Code-Wiggly-Dove,Content-Type'}});
+ assert.equal(result.status,200);
+ const sent=f.state.requests.at(-1).headers;
+ assert.equal(sent['x-claude-code-sandy-plover'],undefined);assert.equal(sent['x-claude-code-wiggly-dove'],undefined);
+ assert.equal(sent['x-ccb-wire-order'],'Content-Type','absent optional metadata is neither manufactured nor advertised');
+});
+
+for(const version of ['2.1.321','2.2.7'])test('Claude Code version mismatch keeps the required version and upgrade guidance: '+version,async t=>{
+ const message='This gateway serves Claude Code '+version+'; update ccb (with ACCB, update ACCB), then quit Claude Code and start it again';
+ const f=await fixture(t,{onCore:({url,res,json})=>{
+  if(!['/bridge/v1/messages','/bridge/v1/messages/count_tokens','/bridge/v1/traffic'].includes(url.pathname))return;
+  res.setHeader('X-Should-Retry','false');res.setHeader('X-Core-Secret','PRIVATE_PROVIDER');
+  json({type:'error',error:{type:'claude_code_version_mismatch',code:'claude_code_version_mismatch',message,details:{account:'PRIVATE_ACCOUNT'}},request_id:'PRIVATE_REQUEST'},409);return true;
+ }});
+ for(const route of ['/bridge/v1/messages','/bridge/v1/messages/count_tokens','/bridge/v1/traffic']){
+  const headers={...native.headers,...(route.endsWith('/traffic')?{'X-CCB-Target':'https://api.anthropic.com/api/oauth/profile','X-CCB-Method':'GET'}:{})};
+  const result=await f.request('POST',route,{}, {native:true,headers});
+  assert.equal(result.status,409);
+  assert.deepEqual(result.data,{type:'error',error:{type:'claude_code_version_mismatch',code:'claude_code_version_mismatch',message}});
+  assert.equal(result.headers.get('x-should-retry'),'false');assert.equal(result.headers.get('x-core-secret'),null);
+  assert.equal(result.raw.includes('PRIVATE'),false);
+  assert.equal(f.state.requests.filter(row=>row.path===route).length,1);
+ }
+});
+
+test('version mismatch rebuilds safe guidance for malformed diagnostics and never asks the client to retry',async t=>{
+ let message,retry;
+ const f=await fixture(t,{onCore:({url,res,json})=>{
+  if(url.pathname!=='/bridge/v1/messages')return;
+  if(retry!==undefined)res.setHeader('X-Should-Retry',retry);
+  json({error:{code:'claude_code_version_mismatch',message,details:{token:'PRIVATE_TOKEN'}}},409);return true;
+ }});
+ const guidance='update ccb (with ACCB, update ACCB), then quit Claude Code and start it again';
+ const messages=[undefined,null,17,{private:'PRIVATE_DIAGNOSTIC'},'PRIVATE_DIAGNOSTIC',
+  'This gateway serves Claude Code 2.1.321; '+guidance+' PRIVATE_DIAGNOSTIC',
+  'This gateway serves Claude Code 2.1.321; '+guidance+'\nPRIVATE_DIAGNOSTIC',
+  'This gateway serves Claude Code 2.1.321-private; '+guidance,
+  'This gateway serves Claude Code 9999999.1.321; '+guidance,
+  'This gateway serves Claude Code 02.1.321; '+guidance,
+ ];
+ let attempts=0;
+ for(message of messages){
+  retry=[undefined,'true','PRIVATE_RETRY'][attempts%3];
+  const result=await f.request('POST','/bridge/v1/messages',{},native);
+  assert.equal(result.status,409);
+  assert.deepEqual(result.data,{type:'error',error:{type:'claude_code_version_mismatch',code:'claude_code_version_mismatch',message:'The Claude Code version does not match this gateway; '+guidance}});
+  assert.equal(result.headers.get('x-should-retry'),'false');assert.equal(result.raw.includes('PRIVATE'),false);
+  assert.equal(f.state.requests.filter(row=>row.path==='/bridge/v1/messages').length,++attempts);
+ }
+});
+
+test('version mismatch code is only admitted with its contracted HTTP 409 status',async t=>{
+ let status;
+ const f=await fixture(t,{onCore:({url,json})=>{
+  if(url.pathname!=='/bridge/v1/messages')return;
+  json({error:{code:'claude_code_version_mismatch',message:'PRIVATE_DIAGNOSTIC'}},status);return true;
+ }});
+ let attempts=0;
+ for(status of [400,401,403,404,429,500]){
+  const result=await f.request('POST','/bridge/v1/messages',{},native);
+  assert.equal(result.status,status===500?503:status);
+  assert.equal(result.data.error.code,'runtime_rejected');assert.equal(result.raw.includes('PRIVATE'),false);
+  assert.equal(result.headers.get('x-should-retry'),null);
+  assert.equal(f.state.requests.filter(row=>row.path==='/bridge/v1/messages').length,++attempts);
+ }
+});
+
 test('SSE is streamed before completion, unwanted upstream headers are stripped and disconnect cancels upstream',async t=>{
   let emitted=false;
   const f=await fixture(t,{onCore:async({url,res,state})=>{

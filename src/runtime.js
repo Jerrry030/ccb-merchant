@@ -20,6 +20,8 @@ const runtimeHeaders = [
   'x-stainless-os','x-stainless-arch','x-stainless-lang','x-stainless-package-version','x-stainless-runtime',
   'x-stainless-runtime-version','x-stainless-retry-count','x-stainless-timeout','x-app',
   'x-claude-code-session-id','x-claude-code-parent-session-id',
+  // Core owns native metadata sanitization; only these explicit fields reach it.
+  'x-claude-code-sandy-plover','x-claude-code-wiggly-dove',
 ];
 const deviceSchema = { id:'string', name:'string', platform:'string', state:'string', expires_at:'string', owner_user_id:'string', service_name:'string', current_grant_id:'string', account_name:'string', selection_version:'number', pairing_pending:'boolean' };
 const accountSchema = { account_lease_id:'string', plan:'string', state:'string', shared:'boolean', quota:{status:'string',updated_at:'string',windows:[{key:'string',label:'string',used_percent:'number',resets_at:'string',reset:'boolean'}]}, id:'string', grant_id:'string', name:'string', status:'string', expires_at:'string', available:'boolean', reason:'string', revision:'number', surfaces:['string'], selected:'boolean', usage:{ five_hour:{ utilization:'number', resets_at:'string' }, seven_day:{ utilization:'number', resets_at:'string' } } };
@@ -71,7 +73,7 @@ export async function proxyRuntime(req, res, integration, store, url, access, de
     for (const key of runtimeHeaders) if (typeof req.headers[key] === 'string') headers[key] = req.headers[key];
     if(kind==='code-download'&&req.headers.range) headers.range=req.headers.range;
     // Wire order may contain credential/header names; only advertise headers actually forwarded.
-    if (req.headers['x-ccb-wire-order']) headers['x-ccb-wire-order'] = req.headers['x-ccb-wire-order'].split(',').map(s=>s.trim()).filter(s=>runtimeHeaders.includes(s.toLowerCase())).join(',');
+    if (req.headers['x-ccb-wire-order']) headers['x-ccb-wire-order'] = req.headers['x-ccb-wire-order'].split(',').map(s=>s.trim()).filter(s=>runtimeHeaders.includes(s.toLowerCase())&&Object.hasOwn(headers,s.toLowerCase())).join(',');
     let body = ['POST','DELETE'].includes(req.method) ? await readBody(req, kind === 'control' ? 8192 : config.runtimeBodyLimit, false) : undefined;
     if (controller.signal.aborted) return;
     const boundary=await access.prepareRuntime(req,url,body);
@@ -90,18 +92,26 @@ export async function proxyRuntime(req, res, integration, store, url, access, de
       const errorTimer=setTimeout(()=>controller.abort(),Math.min(config.upstreamTimeoutMs,5000));errorTimer.unref();
       let failure;try{failure=await readUpstreamJSON(upstream,64*1024);}catch{}finally{clearTimeout(errorTimer);}
       const code=failure?.code??failure?.error?.code??failure?.error?.type;
+      const versionMismatch=code==='claude_code_version_mismatch'&&upstream.status===409;
+      // The current Core contract carries the required release in this fixed safe
+      // sentence, not a structured version field. Extract only its bounded numeric
+      // version; never echo provider diagnostics or pin Merchant to a CLI release.
+      const requiredVersion=versionMismatch&&typeof failure?.error?.message==='string'
+        ? /^This gateway serves Claude Code ((?:0|[1-9][0-9]{0,5})\.(?:0|[1-9][0-9]{0,5})\.(?:0|[1-9][0-9]{0,5})); update ccb \(with ACCB, update ACCB\), then quit Claude Code and start it again$/.exec(failure.error.message)?.[1] : undefined;
       const safe={
         account_device_limit:[409,'每个账号最多绑定 1 台设备，请先撤销旧设备。'],
         account_selection_changed:[409,'账号已变化，请重新启动客户端。'],
         device_stale:[409,'设备选择已变化，请刷新后再选择。'],
         account_unavailable:[409,'此账号暂时无法用于当前设备。'],
         grant_stale:[409,'授权已变化，请刷新后再选择。'],
+        claude_code_version_mismatch:[409,(requiredVersion?'This gateway serves Claude Code '+requiredVersion:'The Claude Code version does not match this gateway')+'; update ccb (with ACCB, update ACCB), then quit Claude Code and start it again'],
         rate_limited:[429,'请求过于频繁，请按返回的重试信息稍后重试。'],
         concurrency_limited:[429,'当前并发请求过多，请稍后重试。'],
         rate_limit_error:[429,'Upstream request rate or usage limit reached; follow the returned limit and retry information.'],
         grant_usage_limit_exceeded:[429,'CCB authorization usage limit reached; wait for the usage window to reset or choose another authorized account.'],
       };
       if(Object.hasOwn(safe,code)&&safe[code][0]===upstream.status){
+        if(versionMismatch)res.setHeader('X-Should-Retry','false');
         respond(res,upstream.status,{type:'error',error:{type:code==='grant_usage_limit_exceeded'?'rate_limit_error':code,code,message:safe[code][1]}});
         return;
       }

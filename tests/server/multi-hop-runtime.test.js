@@ -14,13 +14,16 @@ async function multiHop(t, { streaming = false, limits = false, conditional = tr
   const streamClosed = new Promise(resolve => { rootClosed = resolve; });
   let selected = null;
   let revision = 0;
-  const provider = { conditional, selectionError: null };
+  const provider = { conditional, selectionError: null, runtimeError: null };
   const expiry = new Date(Date.now() + 3600000).toISOString();
   const first = await fixture(t, {
     env: { UPSTREAM_TIMEOUT_MS: '5000', RUNTIME_HEADER_TIMEOUT_MS: '5000' },
     onCore: ({ req, res, url, body, json, state }) => {
       if (!url.pathname.startsWith('/bridge/v1/')) return false;
       assert.equal(req.headers['x-ccb-access-key'], upstreamKey);
+      if(provider.runtimeError&&['/bridge/v1/messages','/bridge/v1/messages/count_tokens','/bridge/v1/traffic'].includes(url.pathname)){
+        res.setHeader('X-Should-Retry','false');json(provider.runtimeError,409);return true;
+      }
       if(url.pathname==='/bridge/v1/code') {
         json({version:'0.1.0-bridge.1',os:'windows',arch:'amd64',size:12,sha256:createHash('sha256').update('PK-MULTIHOP!').digest('hex'),private_path:'/provider/private'});
       } else if(url.pathname==='/bridge/v1/code/download') {
@@ -251,6 +254,33 @@ test('quota errors and retry controls survive three Merchant privacy boundaries 
   attempts++;
   for(const node of nodes)assert.equal(node.received.filter(row=>row.path==='/bridge/v1/messages').length,attempts);
   assert.equal(first.state.requests.filter(row=>row.path==='/bridge/v1/messages').length,attempts);
+ }
+});
+
+test('native metadata and version upgrade guidance survive all three Merchant hops without replay', { timeout:20000 },async t=>{
+ const {first,leaf,nodes,native,provider}=await multiHop(t);
+ const message='This gateway serves Claude Code 2.1.321; update ccb (with ACCB, update ACCB), then quit Claude Code and start it again';
+ provider.runtimeError={type:'error',error:{type:'claude_code_version_mismatch',code:'claude_code_version_mismatch',message,details:{account:'PRIVATE_PROVIDER_ACCOUNT'}}};
+ const tools='[{"name":"mcp__echo__ping","mcp":true}]',environment='v=1, ob="2.1.321", bf=vt, vd=yq, zx=fz';
+ for(const route of ['/bridge/v1/messages','/bridge/v1/messages/count_tokens','/bridge/v1/traffic']){
+  const result=await leaf.f.request('POST',route,{}, {native:true,headers:{...native.headers,
+   'User-Agent':'claude-cli/2.1.321 (external, cli)',
+   'X-Claude-Code-Sandy-Plover':tools,'X-Claude-Code-Wiggly-Dove':environment,
+   'X-Claude-Code-Unknown':'PRIVATE_UNKNOWN','X-Api-Key':'PRIVATE_API_KEY',
+   'X-CCB-Wire-Order':'User-Agent,X-Claude-Code-Sandy-Plover,X-Api-Key,X-Claude-Code-Wiggly-Dove,X-Claude-Code-Unknown,Content-Type',
+   ...(route.endsWith('/traffic')?{'X-CCB-Target':'https://api.anthropic.com/api/oauth/profile','X-CCB-Method':'GET'}:{}),
+  }});
+  assert.equal(result.status,409,result.raw);
+  assert.deepEqual(result.data,{type:'error',error:{type:'claude_code_version_mismatch',code:'claude_code_version_mismatch',message}});
+  assert.equal(result.headers.get('x-should-retry'),'false');assert.equal(result.raw.includes('PRIVATE'),false);
+  for(const node of nodes)assert.equal(node.received.filter(row=>row.path===route).length,1,'one request per Merchant hop');
+  const requests=first.state.requests.filter(row=>row.path===route);assert.equal(requests.length,1,'one provider attempt');
+  for(const request of [...nodes.filter(node=>node!==leaf).map(node=>node.received.find(row=>row.path===route)),requests[0]]){
+   assert.equal(request.headers['x-claude-code-sandy-plover'],tools);
+   assert.equal(request.headers['x-claude-code-wiggly-dove'],environment);
+   assert.equal(request.headers['x-ccb-wire-order'],'User-Agent,X-Claude-Code-Sandy-Plover,X-Claude-Code-Wiggly-Dove,Content-Type');
+   assert.equal(request.headers['x-claude-code-unknown'],undefined);assert.equal(request.headers['x-api-key'],undefined);
+  }
  }
 });
 
